@@ -1,18 +1,20 @@
 name: PR lint
 
 # TogetherWeOwn GitHub standard, one-click template for new repos.
-# Always an error: Conventional Commits title, and a commit on main that is not one.
+# Always an error: Conventional Commits title, and a commit on the default branch that is not one.
 # PR_STANDARDS_MODE ("warn" or "error") sets the level for the rest: an empty body and the
 # PR template sections (Thinking Path, What Changed, Verification, Risks, Model Used, and
 # Linked Issues or Issue Description for feat/fix/perf/refactor/security). Land it in "warn",
 # clear the open PRs, then flip to "error".
 # Private repos: set REQUIRE_CARD_REF to "true" so every PR links its tracking card.
+# Set INTERNAL_ID_PREFIXES to a comma- or pipe-separated list (e.g. "ABC,XYZ") to flag
+# org-specific ticket ids; empty means a generic ticket-like pattern.
 
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review]
   push:
-    branches: [main]
+    branches: [ $default-branch ]
 
 permissions:
   contents: read
@@ -24,6 +26,7 @@ concurrency:
 env:
   REQUIRE_CARD_REF: "false"
   INTERNAL_ID_LEVEL: "warning" # or "error" to fail a PR that carries an internal ticket id
+  INTERNAL_ID_PREFIXES: "" # e.g. "ABC,XYZ"; empty means a generic ticket-like pattern
   PR_STANDARDS_MODE: "warn"
 
 jobs:
@@ -45,7 +48,14 @@ jobs:
 
           TYPES = "feat|fix|perf|refactor|test|docs|build|ci|chore|revert|style|security"
           HEADER = re.compile(rf"^({TYPES})(\([A-Za-z0-9._/,-]+\))?!?: \S.*$")
-          INTERNAL_ID = re.compile(r"\b(TOG|PAP)-\d+\b")
+          def build_internal_id():
+              raw = (os.environ.get("INTERNAL_ID_PREFIXES") or "").strip()
+              if raw:
+                  parts = [p.strip() for p in re.split(r"[,\s|]+", raw) if p.strip()]
+                  if parts:
+                      return re.compile(r"\b(" + "|".join(re.escape(p) for p in parts) + r")-\d+\b")
+              return re.compile(r"\b[A-Z]{2,10}-\d+\b")
+          INTERNAL_ID = build_internal_id()
           HELP = ("Expected a Conventional Commits header, e.g. 'fix(auth): refuse expired sudo "
                   "sessions'. Allowed types: " + TYPES.replace("|", ", ") + ".")
 
@@ -137,7 +147,7 @@ jobs:
                             f"is missing or has fewer than {minimum} real item(s). Follow the PR template.")
               if os.environ.get("REQUIRE_CARD_REF") == "true" and not INTERNAL_ID.search(body):
                   failed = True
-                  print("::error title=Card reference::Add 'Refs: TOG-1234' to the PR body.")
+                  print("::error title=Card reference::Add 'Refs: <card-id>' to the PR body.")
               failed = internal_id_notes(title, "the title") or failed
               if internal_id_notes(body, "the body"):
                   failed = True
@@ -149,7 +159,7 @@ jobs:
                   errs = header_errors(subject)
                   if errs:
                       failed = True
-                      print(f"::error title=Commit on main::{c.get('id', '')[:10]} '{subject}': "
+                      print(f"::error title=Commit on default branch::{c.get('id', '')[:10]} '{subject}': "
                             f"{'; '.join(errs)}. Merge PRs with squash and the PR title as the "
                             "commit title.")
           if failed:
