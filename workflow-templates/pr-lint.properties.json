@@ -1,0 +1,5 @@
+{
+  "name": "PR lint",
+  "description": "Enforce Conventional Commits titles and check the PR template sections (TogetherWeOwn GitHub standard).",
+  "iconName": "octicon git-pull-request"
+}
