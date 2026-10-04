@@ -1,0 +1,58 @@
+name: PR lint
+
+# TogetherWeOwn GitHub standard, one-click template for new repos.
+# Always an error: Conventional Commits title, and a commit on the default branch that is not one.
+# PR_STANDARDS_MODE ("warn" or "error") sets the level for the rest: an empty body and the
+# PR template sections (Thinking Path, What Changed, Verification, Risks, Model Used, and
+# Linked Issues or Issue Description for feat/fix/perf/refactor/security). Land it in "warn",
+# clear the open PRs, then flip to "error".
+# Private repos: set REQUIRE_CARD_REF to "true" so every PR links its tracking card.
+# Set INTERNAL_ID_PREFIXES to a comma- or pipe-separated list (e.g. "ABC,XYZ") to flag
+# org-specific ticket ids; empty means a generic ticket-like pattern.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  push:
+    branches: [ $default-branch ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-lint-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  REQUIRE_CARD_REF: "false"
+  INTERNAL_ID_LEVEL: "warning" # or "error" to fail a PR that carries an internal ticket id
+  INTERNAL_ID_PREFIXES: "" # e.g. "ABC,XYZ"; empty means a generic ticket-like pattern
+  PR_STANDARDS_MODE: "warn"
+
+jobs:
+  pr-lint:
+    name: pr-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check title, body and commits
+        env:
+          EVENT: ${{ github.event_name }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          COMMITS: ${{ toJSON(github.event.commits) }}
+        run: |-
+          python3 - <<'PYEOF'
+          import json, os, re, sys
+
+          TYPES = "feat|fix|perf|refactor|test|docs|build|ci|chore|revert|style|security"
+          HEADER = re.compile(rf"^({TYPES})(\([A-Za-z0-9._/,-]+\))?!?: \S.*$")
+          def build_internal_id():
+              raw = (os.environ.get("INTERNAL_ID_PREFIXES") or "").strip()
+              if raw:
+                  parts = [p.strip() for p in re.split(r"[,\s|]+", raw) if p.strip()]
+                  if parts:
+                      return re.compile(r"\b(" + "|".join(re.escape(p) for p in parts) + r")-\d+\b")
+              return re.compile(r"\b[A-Z]{2,10}-\d+\b")
+          INTERNAL_ID = build_internal_id()
