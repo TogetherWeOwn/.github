@@ -1,9 +1,12 @@
 name: PR lint
 
 # TogetherWeOwn GitHub standard, one-click template for new repos.
+# Always an error: Conventional Commits title, and a commit on main that is not one.
+# PR_STANDARDS_MODE ("warn" or "error") sets the level for the rest: an empty body and the
+# PR template sections (Thinking Path, What Changed, Verification, Risks, Model Used, and
+# Linked Issues or Issue Description for feat/fix/perf/refactor/security). Land it in "warn",
+# clear the open PRs, then flip to "error".
 # Private repos: set REQUIRE_CARD_REF to "true" so every PR links its tracking card.
-# Repos with open PRs still migrating to the template: set PR_STANDARDS_MODE to
-# "warn" first, then flip to "error" once they are clean.
 
 on:
   pull_request:
@@ -20,7 +23,7 @@ concurrency:
 
 env:
   REQUIRE_CARD_REF: "false"
-  INTERNAL_ID_LEVEL: "warn"
+  INTERNAL_ID_LEVEL: "warning" # or "error" to fail a PR that carries an internal ticket id
   PR_STANDARDS_MODE: "warn"
 
 jobs:
@@ -46,6 +49,40 @@ jobs:
           HELP = ("Expected a Conventional Commits header, e.g. 'fix(auth): refuse expired sudo "
                   "sessions'. Allowed types: " + TYPES.replace("|", ", ") + ".")
 
+          LIGHT = {"docs", "chore", "build", "ci", "style", "test", "revert"}
+          # (heading, minimum real items, skipped for LIGHT types)
+          SECTIONS = [
+              ("Thinking Path", 3, False),
+              ("Linked Issues or Issue Description", 1, True),
+              ("What Changed", 1, False),
+              ("Verification", 1, False),
+              ("Risks", 1, False),
+              ("Model Used", 1, False),
+          ]
+
+          def parse_sections(text):
+              out, cur, buf = {}, None, []
+              for line in text.splitlines():
+                  m = re.match(r"^##\s+(.+?)\s*#*\s*$", line)
+                  if m:
+                      if cur is not None:
+                          out[cur] = "\n".join(buf)
+                      cur, buf = m.group(1).strip().lower(), []
+                  elif cur is not None:
+                      buf.append(line)
+              if cur is not None:
+                  out[cur] = "\n".join(buf)
+              return out
+
+          def real_items(content):
+              n = 0
+              for raw in content.splitlines():
+                  line = re.sub(r"^\s*(?:>\s*)*(?:[-*]\s+|\d+[.)]\s+)?", "", raw).strip()
+                  if len(line) < 6 or re.fullmatch(r"\[[^\]]*\]", line) or line.endswith((" ...", " …")):
+                      continue
+                  n += 1
+              return n
+
           def header_errors(text):
               errs = []
               if not HEADER.match(text):
@@ -58,7 +95,7 @@ jobs:
 
           def internal_id_notes(text, where):
               if INTERNAL_ID.search(text or ""):
-                  level = os.environ.get("INTERNAL_ID_LEVEL", "warn")
+                  level = "error" if os.environ.get("INTERNAL_ID_LEVEL") == "error" else "warning"
                   print(f"::{level} title=Internal id in {where}::" +
                         "Keep internal ticket ids out of public PR text.")
                   return level == "error"
@@ -87,6 +124,17 @@ jobs:
                             "why, and how it was tested.")
                   else:
                       print("::warning title=PR body::The description looks empty.")
+              kind = re.match(rf"^({TYPES})", title)
+              light = bool(kind) and kind.group(1) in LIGHT
+              sections = parse_sections(text)
+              for name, minimum, skip_light in SECTIONS:
+                  if skip_light and light:
+                      continue
+                  if real_items(sections.get(name.lower(), "")) < minimum:
+                      if strict:
+                          failed = True
+                      print(f"::{'error' if strict else 'warning'} title=PR body::Section '## {name}' "
+                            f"is missing or has fewer than {minimum} real item(s). Follow the PR template.")
               if os.environ.get("REQUIRE_CARD_REF") == "true" and not INTERNAL_ID.search(body):
                   failed = True
                   print("::error title=Card reference::Add 'Refs: TOG-1234' to the PR body.")

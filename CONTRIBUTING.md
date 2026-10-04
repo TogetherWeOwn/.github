@@ -9,7 +9,9 @@ where they differ, the repo file wins.
 - PR titles are Conventional Commits headers (`type(scope): summary`, max 100 chars,
   no trailing period). Types: feat, fix, perf, refactor, test, docs, build, ci, chore,
   revert, style, security.
-- Fill in every section of the PR template. The `pr-lint` check reads them.
+- Fill in every section of the PR template. The `pr-lint` check reads them: a missing
+  or empty section is a warning by default and an error once a repo sets
+  `PR_STANDARDS_MODE: error`.
 - Done means merged. Never leave an orphan PR open: merge it, or close it with a
   comment naming what replaced it.
 
