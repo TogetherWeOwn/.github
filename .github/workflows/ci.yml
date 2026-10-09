@@ -10,6 +10,8 @@
 #   * Job-level `if:` gating: heavy jobs run only when their area changed
 #     or when `full_run` is true. NEVER add workflow-level `on: pull_request:
 #     paths:` to this file: it would suppress the required `ci-ok` check.
+#   * `tier-0` job (same-repo reusable workflow): the Tier-0 deterministic
+#     quality gate dogfooding this repo report-only, fed into `ci-ok`.
 #   * One required aggregator `ci-ok` (`if: always()` over every gated job).
 #     Branch protection requires only `ci-ok` (plus pr-lint, secret scan).
 #   * Full suite on `push` to `main` and on the nightly schedule.
@@ -115,9 +117,25 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - run: echo "secret scan goes here (always runs)"
 
+  # Tier-0 dogfood (report-only): the reusable deterministic quality gate
+  # running against this repo's own diff, so the 20-PR false-positive
+  # measurement starts here. Same-repo caller, so no SHA to pin — and no
+  # timeout-minutes/runs-on on a uses: job (GitHub rejects them there);
+  # timeouts live inside the reusable workflow. Change-gated like the
+  # other heavy jobs (Gate 6 budgets 30 minutes).
+  tier-0:
+    name: tier-0 (report-only dogfood)
+    needs: [changes, full_run]
+    if: needs.full_run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || needs.changes.outputs.docs_only != 'true'
+    uses: ./.github/workflows/tier-0-quality-gate.yml
+    with:
+      mode: report-only
+    permissions:
+      contents: read
+
   ci-ok:
     name: ci-ok
-    needs: [changes, full_run, lint, test-web, test-bot, secret-scan]
+    needs: [changes, full_run, lint, test-web, test-bot, secret-scan, tier-0]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
