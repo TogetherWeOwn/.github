@@ -55,7 +55,13 @@ The reusable workflow `.github/workflows/promote-staging.yml` in this repo has t
 | Input (optional) | `sha` | Empty means the latest successful run of that workflow on main |
 | Output | `sha` | The commit to deploy |
 
-The caller keeps its own environment and exact-SHA gates and checks out `needs.<job>.outputs.sha`.
+The caller keeps its own environment and exact-SHA gates and checks out `needs.<job>.outputs.sha`. Two rules:
+
+- `staging-workflow` must be a workflow that ONLY deploys staging, for example a separate `deploy-staging.yml`.
+  Never point it at the workflow that also runs the production deploy. A successful production run, or a
+  dispatch where every job is skipped, would otherwise count as "staging-verified".
+- Before deploying, the caller verifies that the commit is an ancestor of `origin/main`. A `sha` override must
+  never ship an unmerged commit with production secrets.
 
 Adopted in two-bot-next #755 and two-web-next #629. Never freeze main to deploy.
 
@@ -64,7 +70,8 @@ Adopted in two-bot-next #755 and two-web-next #629. Never freeze main to deploy.
 - **Change-gated, per [CI-STANDARD.md](CI-STANDARD.md).** Nightly and heavy suites run on schedule and on push to
   main, never on every PR push. Superseded PR runs are cancelled early. Push-to-main, deploy and release runs are
   never cancelled.
-- (Details: section 4a, appended by the CI change-gating rollout.)
+- The CI rules, including "no nightly or scheduled-only suites on every pull request", live in
+  [CI-STANDARD.md](CI-STANDARD.md) and are not repeated here.
 
 ## 5. Release
 
