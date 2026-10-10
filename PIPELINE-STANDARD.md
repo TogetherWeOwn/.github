@@ -52,7 +52,20 @@ Every repo links this file from its CONTRIBUTING.md or README. New repos start f
   current. It merges through the same gates as any other PR: deterministic release tests, required checks, and
   Paperclip Review 5/5 via the review gate. The host approves the `pull_request` workflow runs on
   `release-please--*` branches automatically (they come from `github-actions[bot]`).
-- (Details: section 5a, per repo.)
+### 5a. Release train (host-automated, two-bot-next and two-web-next)
+
+When a `release-please--*` PR is open, the host `release-train.timer` runs the merge freeze those repos' own
+`docs/releases.md` describes:
+
+1. It adds a temporary ruleset `release-train-freeze (host, auto)` that blocks updates to main for everyone except
+   the host App.
+2. It dispatches `release.yml` on main, which regenerates the release PR against the frozen tip.
+3. The review gate requests one Paperclip Review once CI is green.
+4. Once the head's parent is main, every check is green and the review is 5/5, the train merges with
+   `--match-head-commit` and lifts the freeze.
+
+A freeze lifts itself after 60 minutes at most, and a failed train waits 6 hours before retrying. Push-to-main
+release runs (tag and publish) are unchanged. Agents never freeze main by hand.
 
 ## 6. Self-blocking anti-patterns (each measured on 2026-10-10)
 
