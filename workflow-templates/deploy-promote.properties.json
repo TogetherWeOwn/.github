@@ -1,0 +1,5 @@
+{
+  "name": "Deploy: staging then promote",
+  "description": "Staging on every green main push; production promotes the last green staging SHA (TogetherWeOwn pipeline standard section 3).",
+  "iconName": "octicon rocket"
+}
