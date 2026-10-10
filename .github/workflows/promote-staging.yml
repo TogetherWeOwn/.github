@@ -1,0 +1,68 @@
+# Reusable: resolve the commit a production deploy should promote (PIPELINE-STANDARD "Deploy: promote last
+# green staging"). Merges keep landing on main and supersede pending staging deploys, so the newest main SHA
+# is rarely staged; production deploys what staging last verified instead of freezing main.
+#
+# Usage (first job of a deploy-production workflow_dispatch):
+#   jobs:
+#     target:
+#       uses: TogetherWeOwn/.github/.github/workflows/promote-staging.yml@main
+#       with:
+#         staging-workflow: deploy-staging.yml   # or e2e-staging.yml: whichever proves staging works
+#         sha: ${{ inputs.sha }}                 # optional explicit override
+#     guard:
+#       needs: target
+#       # ... existing exact-SHA gates run against needs.target.outputs.sha
+#
+# This only CHOOSES the SHA. The calling workflow keeps every safety gate (ancestry of main, green required
+# checks on that exact SHA, staging success, Environment protection, rollback) and must check out
+# needs.target.outputs.sha, never github.sha.
+name: promote-staging
+
+on:
+  workflow_call:
+    inputs:
+      staging-workflow:
+        description: Workflow file whose latest successful run on main marks a commit as staging-verified
+        required: true
+        type: string
+      sha:
+        description: Explicit 40-hex commit; empty promotes the latest staging-verified commit
+        required: false
+        type: string
+        default: ""
+    outputs:
+      sha:
+        description: The commit to deploy
+        value: ${{ jobs.resolve.outputs.sha }}
+
+permissions: {}
+
+jobs:
+  resolve:
+    name: resolve promotion target
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: read # list the staging workflow's runs
+    outputs:
+      sha: ${{ steps.target.outputs.sha }}
+    steps:
+      - name: Resolve the commit to promote
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_SHA: ${{ inputs.sha }}
+          STAGING_WORKFLOW: ${{ inputs.staging-workflow }}
+          REPO: ${{ github.repository }}
+        run: |
+          sha="$(printf '%s' "$INPUT_SHA" | tr -d '[:space:]' | tr 'A-F' 'a-f')"
+          if [ -z "$sha" ]; then
+            sha="$(gh api --method GET "repos/$REPO/actions/workflows/$STAGING_WORKFLOW/runs" \
+              -f branch=main -f status=success -f per_page=1 --jq '.workflow_runs[0].head_sha // ""')"
+            echo "Promoting the latest successful $STAGING_WORKFLOW commit on main: $sha"
+          fi
+          if ! printf '%s' "$sha" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::error::No full 40-hex commit to promote (input empty and no successful $STAGING_WORKFLOW run on main)"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
