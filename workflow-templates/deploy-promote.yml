@@ -38,13 +38,25 @@ jobs:
       - name: Deploy to staging (replace)
         run: echo "deploy ${GITHUB_SHA} to staging"
 
-  promote-production:
+  resolve-staged-sha:
     if: github.event_name == 'workflow_dispatch' && inputs.target == 'production'
-    # Pin by SHA when adopting.
+    # Pin by SHA when adopting. Output `sha` = the last commit whose staging deploy succeeded on main (or inputs.sha).
     uses: TogetherWeOwn/.github/.github/workflows/promote-staging.yml@main
     with:
-      staging-workflow: deploy
-      staging-job: deploy-staging
-      environment: production
+      staging-workflow: deploy.yml
       sha: ${{ inputs.sha }}
-    secrets: inherit
+
+  deploy-production:
+    needs: resolve-staged-sha
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve-staged-sha.outputs.sha }}
+          persist-credentials: false
+      - name: Deploy the staged commit to production (replace)
+        run: echo "deploy ${{ needs.resolve-staged-sha.outputs.sha }} to production"

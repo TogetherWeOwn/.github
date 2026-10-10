@@ -26,18 +26,38 @@ Every repo links this file from its CONTRIBUTING.md or README. New repos start f
 
 ## 2. Merge
 
-- **Merge queue, not auto-merge races.** A ready PR is enqueued, `gh pr merge --auto --squash` enqueues when a
-  merge queue exists, and the queue tests the merge result once. Nobody runs `update-branch` on a BEHIND PR and
-  re-runs all CI just because main moved.
-- Workflows that provide a required check also trigger on `merge_group:`.
-- (Details: section 2a, appended by the merge-queue rollout.)
+- **No rebase churn.** Every repo's rulesets have `strict_required_status_checks_policy=false`, so a BEHIND PR
+  merges as-is once its checks and review pass.
+- **Rule:** never update-branch, rebase or merge main into a PR unless it is DIRTY (has conflicts). Each refresh
+  pushes a new head, re-runs all CI and supersedes that head's Paperclip Review.
+- Host `pr_automerge.sh` enables `--auto --squash` and no longer runs update-branch, except for repos that are
+  strict.
+
+### 2a. Merge queue (not enabled)
+
+The merge queue is off, because non-strict checks already remove the churn it would fix. If a repo enables it
+later, every workflow that provides a required check must add `merge_group:`; the starter `ci.yml` template
+already does.
 
 ## 3. Deploy
 
 - **Production promotes the last green staging SHA.** The production deploy takes the commit of the most recent
   successful staging deploy on main. It no longer demands the newest main SHA, which main churn kept cancelling,
   and nobody freezes main to deploy.
-- (Details: section 3a, appended by the promote-from-staging rollout.)
+
+### 3a. Promote the last staging-verified commit
+
+The reusable workflow `.github/workflows/promote-staging.yml` in this repo has these inputs and output:
+
+| | Name | Meaning |
+|---|---|---|
+| Input (required) | `staging-workflow` | The repo's staging workflow file, e.g. `deploy-staging.yml` |
+| Input (optional) | `sha` | Empty means the latest successful run of that workflow on main |
+| Output | `sha` | The commit to deploy |
+
+The caller keeps its own environment and exact-SHA gates and checks out `needs.<job>.outputs.sha`.
+
+Adopted in two-bot-next #755 and two-web-next #629. Never freeze main to deploy.
 
 ## 4. CI
 
