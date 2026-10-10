@@ -41,9 +41,10 @@ jobs:
           ref: ${{ needs.resolve-staged-sha.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
+      # checkout with fetch-depth 0 already fetched every branch into origin/* while authenticated; a second fetch
+      # here would fail in private repos (persist-credentials: false removes the auth).
       - name: Refuse a commit that is not on the default branch
         run: |
-          git fetch --no-tags origin "$DEFAULT_BRANCH"
           if ! git merge-base --is-ancestor "$SHA" "origin/$DEFAULT_BRANCH"; then
             echo "::error::$SHA is not an ancestor of origin/$DEFAULT_BRANCH; refusing to deploy an unmerged commit"
             exit 1
