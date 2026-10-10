@@ -407,7 +407,11 @@ jobs:
   # Gate 4 — workflow checks: actionlint + zizmor on every workflow file,
   # plus the structural rule from the report — no gating workflow may use
   # `paths:`/`paths-ignore:` (a required check that skips is a hole). Always
-  # runs: workflow hygiene is stack-independent.
+  # runs: workflow hygiene is stack-independent. Each tool step runs even
+  # when an earlier tool failed (default success() gating would skip the
+  # rest of the evidence); only the final verdict step is always(). zizmor
+  # audits at medium severity so help-level style notes (like the
+  # self-repository suggestion) stay advisory, not gate-failing.
   # ------------------------------------------------------------------
   workflow-checks:
     name: Gate 4 — workflow checks
@@ -423,6 +427,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
       - name: Install actionlint and zizmor (pinned)
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           curl -sSfL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -o /tmp/actionlint.tgz
@@ -433,14 +438,17 @@ jobs:
           sudo mv "$(find /tmp/zizmor-ex -name zizmor -type f | head -1)" /usr/local/bin/zizmor
           actionlint --version; zizmor --version
       - name: actionlint on all workflows
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           actionlint .github/workflows/*.yml
       - name: zizmor on all workflows
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          zizmor --no-online-audits .github/workflows/
+          zizmor --no-online-audits --min-severity medium .github/workflows/
       - name: "Structural rule — no path filters on gating workflows"
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -490,7 +498,9 @@ jobs:
   # templates (authz-helper, check-then-write grants) that each repo enables
   # by naming its own functions — a generic regex cannot know what a repo
   # calls its authz function, and a guessing rule would blow the 5%
-  # false-positive promotion budget on day one.
+  # false-positive promotion budget on day one. Each scanner step runs
+  # even when an earlier scanner failed, so one broken tool never hides
+  # the rest of the evidence.
   # ------------------------------------------------------------------
   security:
     name: Gate 5 — security scanners
@@ -506,6 +516,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Compute changed files for this job
+        if: ${{ !cancelled() }}
         env:
           TIER0_EVENT: ${{ github.event_name }}
           TIER0_PR_BASE: ${{ github.event.pull_request.base.sha }}
@@ -527,6 +538,7 @@ jobs:
           fi
           echo "changed files: $(wc -l < /tmp/tier0-changed.txt)"
       - name: gitleaks secret scan on the PR diff
+        if: ${{ !cancelled() }}
         env:
           TIER0_EVENT: ${{ github.event_name }}
           TIER0_PR_BASE: ${{ github.event.pull_request.base.sha }}
@@ -541,6 +553,7 @@ jobs:
             gitleaks git --verbose --redact .
           fi
       - name: Semgrep with the org rules folder
+        if: ${{ !cancelled() }}
         env:
           TIER0_SEMGREP_CONFIG: ${{ inputs.semgrep_config }}
         run: |
@@ -553,7 +566,7 @@ jobs:
             python3 -m semgrep scan --config auto --error .
           fi
       - name: squawk on changed SQL migrations
-        if: ${{ needs.detect.outputs.has-migrations == 'true' }}
+        if: ${{ !cancelled() && needs.detect.outputs.has-migrations == 'true' }}
         run: |
           set -euo pipefail
           curl -sSfL "https://github.com/sbdchd/squawk/releases/download/v${SQUAWK_VERSION}/squawk-linux-x64" -o /tmp/squawk

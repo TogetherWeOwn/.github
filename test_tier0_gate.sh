@@ -80,6 +80,21 @@ check('verdict' in agg_src and 'outputs' in agg_src,
       "tier-0-ok reads honest verdict outputs (not masked results)")
 check('enforcing' in agg_src,
       "tier-0-ok still fails failed gates in enforcing mode")
+# 3b. Full evidence in Gates 4 and 5: tool steps run when an earlier tool
+#     failed (default success() gating would skip them), so one broken
+#     tool never hides the rest. install/summarise/verdict steps keep
+#     their defaults (first runs once, rest are always()).
+for gj in ('workflow-checks', 'security'):
+    gsteps = jobs[gj].get('steps', [])
+    tools = [s for s in gsteps
+             if (s.get('name') or '') not in ('Summarise findings',)
+             and s.get('id') != 'verdict'
+             and 'checkout' not in s.get('uses', '')
+             and 'Compute changed files' not in (s.get('name') or '')]
+    check(all((s.get('if') or '').startswith('${{ !cancelled()') for s in tools),
+          f"gate {gj}: every tool step runs unless cancelled (full evidence)")
+check('min-severity' in str(jobs['workflow-checks']),
+      "zizmor audits at a pinned severity floor (help notes stay advisory)")
 
 # 4. Exactly one aggregator, always-running, needs every gate.
 agg = jobs.get('tier-0-ok', {})
