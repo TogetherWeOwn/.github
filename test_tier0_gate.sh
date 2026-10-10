@@ -220,6 +220,13 @@ check('squawk_${SQUAWK_VERSION}_x86_64' not in gate_text,
       "squawk download is not the missing musl tarball")
 check('releases/download/v${SQUAWK_VERSION}/squawk-linux-x64' in gate_text,
       "squawk downloads the plain linux-x64 binary")
+check('gitleaks diff ' not in gate_text and 'gitleaks detect ' not in gate_text,
+      "gitleaks uses only subcommands that exist in 8.30.1 (git/dir/stdin)")
+check('gitleaks git --log-opts=' in gate_text,
+      "gitleaks scans the PR range via git --log-opts")
+for m in re.finditer(r'#\s*shellcheck\s+disable=([A-Z0-9_, ]+)(?::(.*))?', gate_text):
+    check(not (m.group(2) or '').strip(),
+          "shellcheck directive carries no trailing comment (SC1125)")
 for j in ('unused-code', 'security', 'tests'):
     jsteps = jobs[j].get('steps', [])
     checkouts = [s for s in jsteps if 'actions/checkout' in s.get('uses', '')]

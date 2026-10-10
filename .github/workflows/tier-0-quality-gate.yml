@@ -303,7 +303,8 @@ jobs:
           python3 -m pip install --disable-pip-version-check -q vulture 2>&1 | tail -1
           grep '\.py$' /tmp/tier0-changed.txt > /tmp/changed-py.txt || true
           if [[ ! -s /tmp/changed-py.txt ]]; then echo "no changed Python files — skipping"; exit 0; fi
-          # shellcheck disable=SC2046: intentional word-splitting of a file list
+          # Intentional word-splitting of a file list below.
+          # shellcheck disable=SC2046
           python3 -m vulture --min-confidence 80 $(tr '\n' ' ' < /tmp/changed-py.txt) || {
             echo "::warning::vulture reported candidates above (advisory in report-only mode)"
             exit 1
@@ -535,9 +536,9 @@ jobs:
           tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks && sudo mv /tmp/gitleaks /usr/local/bin/
           if [[ "$TIER0_EVENT" == "pull_request" ]]; then
             git cat-file -e "$TIER0_PR_BASE" || { echo "base not in local history; failing closed"; exit 1; }
-            gitleaks diff --log-opts="$TIER0_PR_BASE...HEAD" --verbose --redact
+            gitleaks git --log-opts="$TIER0_PR_BASE...HEAD" --verbose --redact .
           else
-            gitleaks detect --source . --verbose --redact
+            gitleaks git --verbose --redact .
           fi
       - name: Semgrep with the org rules folder
         env:
