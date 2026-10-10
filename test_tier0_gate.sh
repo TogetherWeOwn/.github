@@ -47,7 +47,9 @@ for name, wf in (("gate", gate), ("caller", caller)):
                 check('paths' not in cfg and 'paths-ignore' not in cfg,
                       f"{name}: trigger '{trig}' has no path filter")
 
-# 3. Every gate job is advisory in report-only mode via continue-on-error.
+# 3. Honest verdicts: no gate job masks failures with continue-on-error.
+#    Report-only softness lives in the tier-0-ok aggregator (mode check),
+#    so needs results — and the tier-0-findings artifact — stay truthful.
 jobs = gate.get('jobs', {})
 expected_gates = {'lint-types', 'unused-code', 'generator-drift',
                   'workflow-checks', 'security', 'tests'}
@@ -55,8 +57,11 @@ check(expected_gates <= set(jobs), f"all six gates present ({sorted(expected_gat
 for j, spec in jobs.items():
     if j in ('detect', 'tier-0-ok'):
         continue
-    check(spec.get('continue-on-error') == "${{ inputs.mode == 'report-only' }}",
-          f"job {j} continue-on-error tied to report-only mode")
+    check('continue-on-error' not in spec,
+          f"job {j} sets no continue-on-error (honest verdict)")
+agg_src = str(jobs.get('tier-0-ok', {}))
+check('enforcing' in agg_src and 'report-only' in agg_src,
+      "tier-0-ok branches on report-only vs enforcing mode")
 
 # 4. Exactly one aggregator, always-running, needs every gate.
 agg = jobs.get('tier-0-ok', {})
@@ -105,6 +110,8 @@ check('timeout-minutes' not in tier0 and 'runs-on' not in tier0,
       "tier-0 caller sets no timeout-minutes/runs-on (rejected on uses: jobs)")
 check(bool(re.search(r'needs\.[a-zA-Z0-9_-]+\.outputs', tier0.get('if', ''))),
       "tier-0 caller is change-gated via needs.*.outputs")
+check('github.event.pull_request.draft' in (tier0.get('if') or ''),
+      "tier-0 caller skips drafts like the other heavy jobs")
 ciok = cjobs.get('ci-ok', {})
 check('tier-0' in (ciok.get('needs') or []), "ci-ok needs the tier-0 caller")
 
@@ -131,11 +138,16 @@ for s in steps(gate):
         check('${{' not in run,
               f"run: block uses env indirection, no inline expression ({s.get('name', '?')})")
 
-# 8. Detect publishes every output the gates consume.
+# 8. Detect publishes stack outputs; the changed-file list never crosses a
+#    job boundary (128 KiB+ environments fail with E2BIG), so no gate may
+#    consume it through needs.
 det_out = (jobs.get('detect', {}).get('outputs', {})) or {}
-for o in ('changed', 'has-ts', 'has-php', 'has-rust', 'has-go',
+for o in ('has-ts', 'has-php', 'has-rust', 'has-go',
           'has-python', 'has-workflows', 'has-migrations'):
     check(o in det_out, f"detect publishes output {o}")
+check('changed' not in det_out, "detect publishes no changed-file output (E2BIG)")
+check('needs.detect.outputs.changed' not in yaml.dump(gate),
+      "no gate consumes needs.detect.outputs.changed")
 
 # 9. Semgrep packs: live rules carry id/languages/patterns; templates are
 #    stub callees that match nothing but stay valid config.
@@ -177,6 +189,30 @@ with tempfile.TemporaryDirectory() as tmp:
     emitted = open(output_path).read().splitlines()
     check(run.returncode == 0 and 'has-ts=true' in emitted,
           "stack detection finds TypeScript on a changed list over 64 KiB")
+
+# 11. Review fixes: a real Semgrep version, a squawk binary that exists,
+#     per-job diffing with full history, and the file-based .tier0-tests
+#     contract (no changed list through the environment).
+env_pins = gate.get('env', {}) or {}
+semgrep_v = env_pins.get('SEMGREP_VERSION', '')
+check(semgrep_v != '1.129.0' and bool(re.match(r'^\d+\.\d+\.\d+$', semgrep_v or '')),
+      f"SEMGREP_VERSION is a real release ({semgrep_v})")
+gate_text = open(gate_path).read()
+check('squawk_${SQUAWK_VERSION}_x86_64' not in gate_text,
+      "squawk download is not the missing musl tarball")
+check('releases/download/v${SQUAWK_VERSION}/squawk-linux-x64' in gate_text,
+      "squawk downloads the plain linux-x64 binary")
+for j in ('unused-code', 'security', 'tests'):
+    jsteps = jobs[j].get('steps', [])
+    checkouts = [s for s in jsteps if 'actions/checkout' in s.get('uses', '')]
+    check(any(c.get('with', {}).get('fetch-depth') == 0 for c in checkouts),
+          f"job {j} checks out full history for per-job diffing")
+    check(any('tier0-changed.txt' in (s.get('run') or '') for s in jsteps),
+          f"job {j} recomputes its own changed-file list")
+check('TIER0_CHANGED: ' not in gate_text and 'TIER0_CHANGED_FILES: ' not in gate_text,
+      "no job passes the changed list through the environment")
+check('TIER0_CHANGED_FILE' in gate_text,
+      "Gate 6 passes the list as TIER0_CHANGED_FILE")
 
 sys.exit(1 if errors else 0)
 PY
