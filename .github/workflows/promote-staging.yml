@@ -1,0 +1,93 @@
+# Reusable: resolve the commit a production deploy should promote (PIPELINE-STANDARD "Deploy: promote last
+# green staging"). Merges keep landing on main and supersede pending staging deploys, so the newest main SHA
+# is rarely staged; production deploys what staging last verified instead of freezing main.
+#
+# Usage (first job of a deploy-production workflow_dispatch):
+#   jobs:
+#     target:
+#       # Pin a full commit SHA of this repo and bump it deliberately (same rule as changes.yml):
+#       # with @main any merge here would silently change every repo's production promotion.
+#       uses: TogetherWeOwn/.github/.github/workflows/promote-staging.yml@<40-hex sha>
+#       with:
+#         staging-workflow: e2e-staging.yml      # the workflow whose job proves staging works
+#         verify-job: staging-journeys           # that job must have concluded success (not skipped)
+#         sha: ${{ inputs.sha }}                 # optional explicit override; ALWAYS set it for rollbacks
+#     guard:
+#       needs: target
+#       # ... existing exact-SHA gates run against needs.target.outputs.sha
+#
+# This only CHOOSES the SHA. The calling workflow keeps every safety gate (ancestry of main, green required
+# checks on that exact SHA, staging success, Environment protection, rollback) and must check out
+# needs.target.outputs.sha, never github.sha.
+name: promote-staging
+
+on:
+  workflow_call:
+    inputs:
+      staging-workflow:
+        description: Workflow file whose latest successful run on main marks a commit as staging-verified
+        required: true
+        type: string
+      verify-job:
+        description: >-
+          Name of the job in staging-workflow that actually verifies staging. A workflow run can conclude
+          success with that job skipped (e.g. docs-only diffs); only runs where this job concluded success count.
+          Empty trusts the workflow conclusion (use only when the workflow cannot succeed without verifying).
+        required: false
+        type: string
+        default: ""
+      sha:
+        description: Explicit 40-hex commit; empty promotes the latest staging-verified commit
+        required: false
+        type: string
+        default: ""
+    outputs:
+      sha:
+        description: The commit to deploy
+        value: ${{ jobs.resolve.outputs.sha }}
+
+permissions: {}
+
+jobs:
+  resolve:
+    name: resolve promotion target
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: read # list the staging workflow's runs
+    outputs:
+      sha: ${{ steps.target.outputs.sha }}
+    steps:
+      - name: Resolve the commit to promote
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_SHA: ${{ inputs.sha }}
+          STAGING_WORKFLOW: ${{ inputs.staging-workflow }}
+          VERIFY_JOB: ${{ inputs.verify-job }}
+          REPO: ${{ github.repository }}
+        run: |
+          sha="$(printf '%s' "$INPUT_SHA" | tr -d '[:space:]' | tr 'A-F' 'a-f')"
+          if [ -z "$sha" ]; then
+            # Newest-first successful runs on main; with verify-job, skip runs whose verification job did not
+            # itself conclude success (a skipped job still lets the workflow conclude success).
+            for page in 1 2 3 4 5; do
+              runs="$(gh api --method GET "repos/$REPO/actions/workflows/$STAGING_WORKFLOW/runs" \
+                -f branch=main -f status=success -f per_page=20 -f page="$page" \
+                --jq '.workflow_runs[] | "\(.id) \(.head_sha)"')"
+              [ -n "$runs" ] || break
+              while read -r run_id run_sha; do
+                if [ -z "$VERIFY_JOB" ]; then sha="$run_sha"; break; fi
+                verdict="$(gh api --method GET "repos/$REPO/actions/runs/$run_id/jobs" -f per_page=100 \
+                  --jq '[.jobs[] | select(.name == $ENV.VERIFY_JOB) | .conclusion] | first // ""')"
+                if [ "$verdict" = "success" ]; then sha="$run_sha"; break; fi
+              done <<< "$runs"
+              [ -n "$sha" ] && break
+            done
+            echo "Promoting the latest staging-verified $STAGING_WORKFLOW commit on main: ${sha:-none}"
+          fi
+          if ! printf '%s' "$sha" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::error::No full 40-hex commit to promote (input empty and no successful $STAGING_WORKFLOW run on main)"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
