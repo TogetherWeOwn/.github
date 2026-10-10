@@ -1,0 +1,5 @@
+{
+  "name": "Deploy: staging",
+  "description": "Staging deploy on every push to the default branch; the only source production promotes from (TogetherWeOwn pipeline standard section 3).",
+  "iconName": "octicon rocket"
+}

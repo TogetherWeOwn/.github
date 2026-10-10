@@ -1,0 +1,5 @@
+{
+  "name": "Deploy: promote to production",
+  "description": "Promotes the last commit deploy-staging.yml deployed on the default branch, after an ancestry check (TogetherWeOwn pipeline standard section 3).",
+  "iconName": "octicon rocket"
+}
