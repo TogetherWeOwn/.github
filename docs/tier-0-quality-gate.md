@@ -58,14 +58,21 @@ false-positive budget on day one.
 
 - `.tier0-generators` — one shell command per line (schema:check, OpenAPI
   codegen, lockfile refresh). Lines starting with `#` are comments.
-- `.tier0-tests` — executable entrypoint receiving `TIER0_CHANGED_FILES`
-  (newline-separated), `TIER0_COVERAGE_THRESHOLD`, `TIER0_MUTATION_BUDGET_MIN`,
-  `TIER0_ENABLE_MUTATION`. Fails under threshold or on surviving mutants.
+- `.tier0-tests` — executable entrypoint receiving `TIER0_CHANGED_FILE`
+  (path to a newline-separated changed-file list — a file, not an
+  environment variable, so thousand-file PRs never hit the 128 KiB
+  environment limit), `TIER0_COVERAGE_THRESHOLD`,
+  `TIER0_MUTATION_BUDGET_MIN`, `TIER0_ENABLE_MUTATION`. Fails under
+  threshold or on surviving mutants.
 - `semgrep-rules/` — copy the templates, name the repo's helpers/sinks.
 
 ## Limits
 
-- Job outputs cap the changed-file list: PRs touching thousands of files
-  fall back to per-job diffing (each gate re-runs `git diff` itself).
+- Changed-file lists never cross a job boundary: each gate re-runs
+  `git diff` itself into a job-local file, so PRs touching thousands of
+  files never hit the 128 KiB environment (E2BIG) limit.
+- TypeScript steps install dependencies with `npm ci` from the repo
+  lockfile (no lockfile: skip with a note) before running tsc, eslint,
+  or knip.
 - Mutation coverage starts when the first repo adopts `.tier0-tests`;
   until then Gate 6 reports its own absence.
