@@ -47,21 +47,39 @@ for name, wf in (("gate", gate), ("caller", caller)):
                 check('paths' not in cfg and 'paths-ignore' not in cfg,
                       f"{name}: trigger '{trig}' has no path filter")
 
-# 3. Honest verdicts: no gate job masks failures with continue-on-error.
-#    Report-only softness lives in the tier-0-ok aggregator (mode check),
-#    so needs results — and the tier-0-findings artifact — stay truthful.
+# 3. Advisory in report-only, honest by output. Gates stay green under a
+#    report-only continue-on-error (so the caller and its ci-ok stay green),
+#    and every job publishes an honest `verdict` output the aggregator reads
+#    for its notices and artifact (results lie masked; verdicts do not).
+#    detect carries no mask: infra failures stay loud.
 jobs = gate.get('jobs', {})
 expected_gates = {'lint-types', 'unused-code', 'generator-drift',
                   'workflow-checks', 'security', 'tests'}
 check(expected_gates <= set(jobs), f"all six gates present ({sorted(expected_gates)})")
 for j, spec in jobs.items():
-    if j in ('detect', 'tier-0-ok'):
+    if j == 'tier-0-ok':
         continue
-    check('continue-on-error' not in spec,
-          f"job {j} sets no continue-on-error (honest verdict)")
+    if j == 'detect':
+        check('continue-on-error' not in spec,
+              "detect sets no continue-on-error (infra failures stay loud)")
+    else:
+        check(spec.get('continue-on-error') == "${{ inputs.mode == 'report-only' }}",
+              f"job {j} continue-on-error tied to report-only mode")
+    outs = spec.get('outputs', {}) or {}
+    check(outs.get('verdict') == '${{ steps.verdict.outputs.verdict }}',
+          f"job {j} publishes an honest verdict output")
+    vsteps = [s for s in spec.get('steps', []) if s.get('id') == 'verdict']
+    check(len(vsteps) == 1 and vsteps[0].get('if') == 'always()',
+          f"job {j} records its verdict in an always-run step")
+    check('${{' not in (vsteps[0].get('run') or '') if vsteps else False,
+          f"job {j} verdict step uses env indirection, no inline expression")
 agg_src = str(jobs.get('tier-0-ok', {}))
-check('enforcing' in agg_src and 'report-only' in agg_src,
-      "tier-0-ok branches on report-only vs enforcing mode")
+check('continue-on-error' not in jobs.get('tier-0-ok', {}),
+      "tier-0-ok sets no continue-on-error (enforcing fails honestly)")
+check('verdict' in agg_src and 'outputs' in agg_src,
+      "tier-0-ok reads honest verdict outputs (not masked results)")
+check('enforcing' in agg_src,
+      "tier-0-ok still fails failed gates in enforcing mode")
 
 # 4. Exactly one aggregator, always-running, needs every gate.
 agg = jobs.get('tier-0-ok', {})

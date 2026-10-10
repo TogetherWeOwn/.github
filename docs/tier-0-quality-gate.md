@@ -45,8 +45,10 @@ false-positive budget on day one.
 
 ## Rollout: report-only first, promote on measured evidence
 
-- Every gate ships `mode: report-only`. Findings land in the step summary
-  and the `tier-0-findings` artifact; the run stays green.
+- Every gate ships `mode: report-only`: gates stay green
+  (`continue-on-error`) so callers stay green, but each publishes an
+  honest `verdict` output. Findings land in the step summary and the
+  truthful `tier-0-findings` artifact; the run stays green.
 - A check becomes required (`mode: enforcing`, per-gate as the workflow
   grows per-gate inputs, or whole-gate) once its false-positive rate over
   the last 20 PRs is measured under 5%.

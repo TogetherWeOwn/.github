@@ -8,13 +8,15 @@
 # diff-coverage + mutation budget on changed lines only.
 #
 # REPORT-ONLY FIRST (the rollout rule): `mode: report-only`
-# (the default) never fails the run for its own findings — each gate job
-# fails honestly so its verdict stays visible, and the `tier-0-ok`
-# aggregator soft-passes (advisory notices only) unless `mode: enforcing`,
-# when any failed gate fails it. Gate verdicts go to the step summary and
-# to a `tier-0-findings` artifact. A check becomes required only after
-# its false-positive rate over the last 20 PRs is measured under 5%; flip
-# that check (or the whole gate) to `mode: enforcing`.
+# (the default) never fails the run for its own findings — every gate job
+# sets `continue-on-error: true`, so the caller (and its `ci-ok`) stays
+# green, AND every gate publishes an honest `verdict` job output that the
+# `tier-0-ok` aggregator reads for its notices and its `tier-0-findings`
+# artifact (job results lie masked-green; verdicts do not). In
+# `mode: enforcing` the mask lifts and any failed gate fails the run.
+# A check becomes required only after its false-positive rate over the
+# last 20 PRs is measured under 5%; flip that check (or the whole gate)
+# to `mode: enforcing`.
 #
 # PORTABILITY RULES (so one file serves TS / PHP / Rust / Go / Python repos):
 #   - `ubuntu-latest` only: hosted runners are free on public repos and
@@ -98,6 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
       has-ts: ${{ steps.stack.outputs.has-ts }}
       has-php: ${{ steps.stack.outputs.has-php }}
       has-rust: ${{ steps.stack.outputs.has-rust }}
@@ -150,6 +153,18 @@ jobs:
           match '^\.github/workflows/.*\.ya?ml$' && echo "has-workflows=true" >> "$GITHUB_OUTPUT" || echo "has-workflows=false" >> "$GITHUB_OUTPUT"
           match 'migrations?/.*\.sql$' && echo "has-migrations=true" >> "$GITHUB_OUTPUT" || echo "has-migrations=false" >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
+      - name: Record honest verdict
+        id: verdict
+        if: always()
+        env:
+          TIER0_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          case "$TIER0_JOB_STATUS" in
+            success) verdict=success ;;
+            *) verdict=failure ;;
+          esac
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
   # ------------------------------------------------------------------
   # Gate 1 — lint and strict types, per stack, only when that stack changed.
@@ -166,6 +181,9 @@ jobs:
     if: ${{ needs.detect.outputs.has-ts == 'true' || needs.detect.outputs.has-php == 'true' || needs.detect.outputs.has-rust == 'true' || needs.detect.outputs.has-go == 'true' || needs.detect.outputs.has-python == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    continue-on-error: ${{ inputs.mode == 'report-only' }}
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -216,6 +234,18 @@ jobs:
           TIER0_JOB_STATUS: ${{ job.status }}
           TIER0_MODE: ${{ inputs.mode }}
         run: 'echo "### $TIER0_GATE: $TIER0_JOB_STATUS (mode $TIER0_MODE)" >> "$GITHUB_STEP_SUMMARY"'
+      - name: Record honest verdict
+        id: verdict
+        if: always()
+        env:
+          TIER0_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          case "$TIER0_JOB_STATUS" in
+            success) verdict=success ;;
+            *) verdict=failure ;;
+          esac
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
   # ------------------------------------------------------------------
   # Gate 2 — unused code: knip for TS, vulture for Python, PHPStan unused
@@ -229,6 +259,9 @@ jobs:
     if: ${{ needs.detect.outputs.has-ts == 'true' || needs.detect.outputs.has-php == 'true' || needs.detect.outputs.has-python == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    continue-on-error: ${{ inputs.mode == 'report-only' }}
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -285,6 +318,18 @@ jobs:
           TIER0_JOB_STATUS: ${{ job.status }}
           TIER0_MODE: ${{ inputs.mode }}
         run: 'echo "### $TIER0_GATE: $TIER0_JOB_STATUS (mode $TIER0_MODE)" >> "$GITHUB_STEP_SUMMARY"'
+      - name: Record honest verdict
+        id: verdict
+        if: always()
+        env:
+          TIER0_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          case "$TIER0_JOB_STATUS" in
+            success) verdict=success ;;
+            *) verdict=failure ;;
+          esac
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
   # ------------------------------------------------------------------
   # Gate 3 — generator drift: re-run the repo's generators, then refuse a
@@ -300,6 +345,9 @@ jobs:
     needs: [detect]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    continue-on-error: ${{ inputs.mode == 'report-only' }}
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -341,6 +389,18 @@ jobs:
           TIER0_JOB_STATUS: ${{ job.status }}
           TIER0_MODE: ${{ inputs.mode }}
         run: 'echo "### $TIER0_GATE: $TIER0_JOB_STATUS (mode $TIER0_MODE)" >> "$GITHUB_STEP_SUMMARY"'
+      - name: Record honest verdict
+        id: verdict
+        if: always()
+        env:
+          TIER0_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          case "$TIER0_JOB_STATUS" in
+            success) verdict=success ;;
+            *) verdict=failure ;;
+          esac
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
   # ------------------------------------------------------------------
   # Gate 4 — workflow checks: actionlint + zizmor on every workflow file,
@@ -353,6 +413,9 @@ jobs:
     needs: [detect]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    continue-on-error: ${{ inputs.mode == 'report-only' }}
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -406,6 +469,18 @@ jobs:
           TIER0_JOB_STATUS: ${{ job.status }}
           TIER0_MODE: ${{ inputs.mode }}
         run: 'echo "### $TIER0_GATE: $TIER0_JOB_STATUS (mode $TIER0_MODE)" >> "$GITHUB_STEP_SUMMARY"'
+      - name: Record honest verdict
+        id: verdict
+        if: always()
+        env:
+          TIER0_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          case "$TIER0_JOB_STATUS" in
+            success) verdict=success ;;
+            *) verdict=failure ;;
+          esac
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
   # ------------------------------------------------------------------
   # Gate 5 — security: gitleaks (secret scan) on the PR diff, Semgrep with
@@ -421,6 +496,9 @@ jobs:
     needs: [detect]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    continue-on-error: ${{ inputs.mode == 'report-only' }}
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -492,6 +570,18 @@ jobs:
           TIER0_JOB_STATUS: ${{ job.status }}
           TIER0_MODE: ${{ inputs.mode }}
         run: 'echo "### $TIER0_GATE: $TIER0_JOB_STATUS (mode $TIER0_MODE)" >> "$GITHUB_STEP_SUMMARY"'
+      - name: Record honest verdict
+        id: verdict
+        if: always()
+        env:
+          TIER0_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          case "$TIER0_JOB_STATUS" in
+            success) verdict=success ;;
+            *) verdict=failure ;;
+          esac
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
   # ------------------------------------------------------------------
   # Gate 6 — tests on changed lines only: a diff-coverage gate (>=90% of
@@ -507,6 +597,9 @@ jobs:
     needs: [detect]
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    continue-on-error: ${{ inputs.mode == 'report-only' }}
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -557,14 +650,27 @@ jobs:
           TIER0_JOB_STATUS: ${{ job.status }}
           TIER0_MODE: ${{ inputs.mode }}
         run: 'echo "### $TIER0_GATE: $TIER0_JOB_STATUS (mode $TIER0_MODE)" >> "$GITHUB_STEP_SUMMARY"'
+      - name: Record honest verdict
+        id: verdict
+        if: always()
+        env:
+          TIER0_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          case "$TIER0_JOB_STATUS" in
+            success) verdict=success ;;
+            *) verdict=failure ;;
+          esac
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
   # ------------------------------------------------------------------
   # tier-0-ok: the ONLY check a consumer wires into its required set. In
   # report-only mode it always passes (findings are advisory notices and
-  # artifacts); in enforcing mode any failed gate fails it. Gate jobs
-  # carry no continue-on-error, so needs results are honest verdicts.
-  # `!cancelled()`, not `always()`: a superseded run must not hold the
-  # merge queue.
+  # artifacts); in enforcing mode any failed gate fails it. Job results
+  # lie masked-green under report-only continue-on-error, so verdicts
+  # come from each gate's honest `verdict` output instead — see the
+  # Record-honest-verdict steps. `!cancelled()`, not `always()`: a
+  # superseded run must not hold the merge queue.
   # ------------------------------------------------------------------
   tier-0-ok:
     name: tier-0-ok
@@ -584,16 +690,28 @@ jobs:
           import json, os, sys
           mode = os.environ.get("TIER0_MODE", "report-only")
           needs = json.load(open(sys.argv[1]))
-          bad = {j: n["result"] for j, n in needs.items()
-                 if n["result"] not in ("success", "skipped")}
+          def verdict_of(entry):
+              # Honest per-gate verdicts travel as job outputs: results are
+              # masked green by continue-on-error in report-only mode.
+              raw = ((entry.get("outputs") or {}).get("verdict") or "").strip()
+              if raw in ("success", "failure", "cancelled"):
+                  return raw
+              # No verdict recorded: fall back to the raw result so a broken
+              # verdict step degrades to visible, never to silent green.
+              return "skipped" if entry.get("result") == "skipped" else "failure"
+          verdicts = {j: verdict_of(n) for j, n in needs.items()}
+          json.dump({j: {"result": n.get("result"), "verdict": verdicts[j]}
+                     for j, n in needs.items()},
+                    open("needs.json", "w"), indent=2, sort_keys=True)
+          bad = {j: v for j, v in sorted(verdicts.items()) if v == "failure"}
           if bad:
-              for j, r in sorted(bad.items()):
-                  print(f"::notice::tier-0 gate {j} ended {r}")
+              for j, v in bad.items():
+                  print(f"::notice::tier-0 gate {j} verdict {v}")
           if mode == "enforcing" and bad:
-              for j, r in sorted(bad.items()):
-                  print(f"::error::tier-0-ok: gate {j} ended {r}")
+              for j, v in bad.items():
+                  print(f"::error::tier-0-ok: gate {j} verdict {v}")
               raise SystemExit(1)
-          skipped = sorted(j for j, n in needs.items() if n["result"] == "skipped")
+          skipped = sorted(j for j, v in verdicts.items() if v == "skipped")
           print("tier-0-ok: all gates succeeded or skipped"
                 + (f" (skipped: {', '.join(skipped)})" if skipped else "")
                 + f" [mode={mode}]")
