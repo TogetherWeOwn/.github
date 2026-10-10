@@ -1,1 +1,152 @@
-PLACEHOLDER_GATE
+# Tier-0 deterministic quality gate.
+#
+# WHAT THIS IS. One reusable workflow every TogetherWeOwn repo opts into with
+# a single `uses:` line (see docs/tier-0-quality-gate.md for the copy-paste
+# snippet).
+# It runs deterministic checks BEFORE any expensive review model is involved: lint/strict types, unused
+# code, generator drift, workflow checks, security scanners, and a
+# diff-coverage + mutation budget on changed lines only.
+#
+# REPORT-ONLY FIRST (the rollout rule): `mode: report-only`
+# (the default) never fails the run for its own findings — each gate job
+# fails honestly so its verdict stays visible, and the `tier-0-ok`
+# aggregator soft-passes (advisory notices only) unless `mode: enforcing`,
+# when any failed gate fails it. Gate verdicts go to the step summary and
+# to a `tier-0-findings` artifact. A check becomes required only after
+# its false-positive rate over the last 20 PRs is measured under 5%; flip
+# that check (or the whole gate) to `mode: enforcing`.
+#
+# PORTABILITY RULES (so one file serves TS / PHP / Rust / Go / Python repos):
+#   - `ubuntu-latest` only: hosted runners are free on public repos and
+#     reachable from every caller.
+#   - No repo-specific toolchains via setup actions: GH-hosted images ship
+#     node, python3, go, rustup, php and composer. Repo-owned linters
+#     (tsc, phpstan, clippy, ruff, mypy) run only when the repo configures
+#     them; gate-owned scanners (actionlint, zizmor, gitleaks, semgrep,
+#     squawk) are installed here at pinned versions.
+#   - Every gate auto-detects its stack from manifests AND changed files,
+#     and skips silently when neither matches — a docs-only PR runs the
+#     workflow-checks job and skips the other five.
+#   - All third-party actions are pinned by SHA (repo rule). Scanner
+#     binaries are pinned by version in `env:` below; bump them in one place.
+#
+# SUPPLY-CHAIN HYGIENE (dogfooded: this file is clean under Gate 4 itself):
+#   - Every checkout sets `persist-credentials: false` — no job needs to
+#     push or to fetch private history (fetch-depth: 0 already carries the
+#     PR base commit, verified with `git cat-file -e`, failing closed).
+#   - No `${{ }}` expression expands inside a `run:` script. Caller inputs,
+#     job outputs and contexts cross into shell only through step `env:`
+#     (the zizmor-sanctioned indirection), so a crafted PR body, branch
+#     name or caller input cannot become shell code.
+#
+# FEEDING ci-ok: this workflow ends in exactly one aggregator, `tier-0-ok`
+# (`if: ${{ !cancelled() }}`), so a consumer repo wires ONE context into its
+# own required aggregator. Never add a second aggregator here.
+
+name: Tier-0 quality gate
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "report-only (advisory, never fails) or enforcing (findings fail the run)"
+        required: false
+        default: report-only
+        type: string
+      diff_coverage_threshold:
+        description: "Minimum % of changed lines covered by tests"
+        required: false
+        default: 90
+        type: number
+      enable_mutation:
+        description: "Run time-boxed mutation testing on changed files"
+        required: false
+        default: true
+        type: boolean
+      mutation_budget_minutes:
+        description: "Wall-clock budget for the mutation step (time-boxed, never open-ended)"
+        required: false
+        default: 10
+        type: number
+      semgrep_config:
+        description: "Semgrep rules path (org starter pack lives at semgrep-rules/ in the gate repo)"
+        required: false
+        default: semgrep-rules
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  ACTIONLINT_VERSION: "1.7.12"
+  ZIZMOR_VERSION: "1.30.1"
+  GITLEAKS_VERSION: "8.30.1"
+  SQUAWK_VERSION: "2.68.0"
+  SEMGREP_VERSION: "1.133.0"
+
+jobs:
+  # ------------------------------------------------------------------
+  # detect: the only job every caller implicitly depends on. Computes the
+  # changed-file list (PR base vs head, or push `before` vs head) for its
+  # own stack detection and publishes one `has-<stack>` output per
+  # language. The file list never crosses a job boundary (a 128 KiB+
+  # environment fails the runner with E2BIG): each gate below re-runs
+  # `git diff` itself into a job-local file.
+  # ------------------------------------------------------------------
+  detect:
+    name: Detect stack and changed files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      has-ts: ${{ steps.stack.outputs.has-ts }}
+      has-php: ${{ steps.stack.outputs.has-php }}
+      has-rust: ${{ steps.stack.outputs.has-rust }}
+      has-go: ${{ steps.stack.outputs.has-go }}
+      has-python: ${{ steps.stack.outputs.has-python }}
+      has-workflows: ${{ steps.stack.outputs.has-workflows }}
+      has-migrations: ${{ steps.stack.outputs.has-migrations }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Compute changed files
+        env:
+          TIER0_EVENT: ${{ github.event_name }}
+          TIER0_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          TIER0_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$TIER0_EVENT" == "pull_request" ]]; then
+            base="$TIER0_PR_BASE"
+          elif [[ -n "$TIER0_BEFORE" && "$TIER0_BEFORE" != "0000000000000000000000000000000000000000" ]]; then
+            base="$TIER0_BEFORE"
+          else
+            base="$(git rev-parse HEAD~1 2>/dev/null || echo '')"
+          fi
+          if [[ -z "$base" ]]; then
+            echo "no base resolvable; treating the whole tree as changed"
+            git ls-files > /tmp/tier0-changed.txt
+          else
+            git cat-file -e "$base" || { echo "base not in local history; failing closed"; exit 1; }
+            git diff --name-only --no-renames "$base" HEAD -- > /tmp/tier0-changed.txt || git ls-files > /tmp/tier0-changed.txt
+          fi
+          echo "changed files: $(wc -l < /tmp/tier0-changed.txt)"
+      - name: Detect stacks from manifests and changed files
+        id: stack
+        run: |
+          set -euo pipefail
+          changed="$(cat /tmp/tier0-changed.txt)"
+          # A pipe false-negatives under pipefail: grep -q exits early on a list over 64 KiB and SIGPIPEs printf.
+          match() { grep -Eq "$1" <<<"$changed"; }
+          # A stack is live when its manifest exists in the tree OR a changed
+          # file belongs to it — new-stack PRs (manifest itself added) match
+          # on the changed path even before the manifest is "existing".
+          [[ -e package.json || -e tsconfig.json ]] || match '\.(ts|tsx|mts|cts)$' && echo "has-ts=true" >> "$GITHUB_OUTPUT" || echo "has-ts=false" >> "$GITHUB_OUTPUT"
+          { [[ -e composer.json ]] || match '\.php$'; } && echo "has-php=true" >> "$GITHUB_OUTPUT" || echo "has-php=false" >> "$GITHUB_OUTPUT"
+          { [[ -e Cargo.toml ]] || match '\.rs$'; } && echo "has-rust=true" >> "$GITHUB_OUTPUT" || echo "has-rust=false" >> "$GITHUB_OUTPUT"
+          { [[ -e go.mod ]] || match '\.go$'; } && echo "has-go=true" >> "$GITHUB_OUTPUT" || echo "has-go=false" >> "$GITHUB_OUTPUT"
+          { [[ -e pyproject.toml || -e setup.cfg || -e requirements.txt ]] || match '\.py$'; } && echo "has-python=true" >> "$GITHUB_OUTPUT" || echo "has-python=false" >> "$GITHUB_OUTPUT"
+          match '^\.github/workflows/.*\.ya?ml$' && echo "has-workflows=true" >> "$GITHUB_OUTPUT" || echo "has-workflows=false" >> "$GITHUB_OUTPUT"
+          match 'migrations?/.*\.sql$' && echo "has-migrations=true" >> "$GITHUB_OUTPUT" || echo "has-migrations=false" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
