@@ -118,6 +118,12 @@ time, money and resources.
 - `cancel-in-progress` on `main`, release, deploy or merge queue.
 - Jobs without `timeout-minutes`.
 - Full mutation / full E2E / full CodeQL on every push.
+- Nightly / scheduled-only suites (full ignored-test sweeps, advisories,
+  benchmarks) triggered on every `pull_request`. They run on `schedule`,
+  `workflow_dispatch` and `push` to `main`; on a PR only when that PR changes
+  the suite's own wiring (decided by the job-level change detector, so the
+  workflow still reports). Measured 2026-10-10: one repo's nightly sweep ran on
+  ~170 PR pushes a day, most cancelled by the next push.
 - Retries that hide flakes (unlogged or ticketless).
 - `push` + `pull_request` duplicate full runs on the same SHA.
 - `[skip ci]` to dodge gates.
