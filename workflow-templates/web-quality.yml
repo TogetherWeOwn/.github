@@ -3,7 +3,7 @@
 # The PR-time half belongs inside the repo's change-gated CI (a `lighthouse` job selected by the scope gate and
 # required by `ci-ok`), measuring a local build with the same config and budget file.
 # Reference implementation: togetherweown/two-web-next (.github/workflows/web-quality-origin.yml, ci/lighthouserc*.cjs,
-# ci/quality-budget.json, ci/web-standards.mjs, ci/lighthouse-summary.mjs).
+# ci/lighthouse-origin-run.mjs, ci/quality-budget.json, ci/web-standards.mjs, ci/lighthouse-summary.mjs).
 name: web-quality
 
 on:
@@ -40,7 +40,13 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_PATH=" + require("playwright").chromium.executablePath() + "\n")'
-      - name: Lighthouse categories and Core Web Vitals (budgets in ci/quality-budget.json)
+      # Two Lighthouse passes, as in the reference: mobile performance + Core Web Vitals budgets (LCP/CLS/TBT, resource
+      # sizes) from ci/lighthouserc.cjs, then desktop category scores from ci/lighthouserc.quality.cjs. Dropping the first
+      # pass would leave mobile performance and CWV ungated after deploys and nightly.
+      - name: Lighthouse performance budgets (mobile + Core Web Vitals, ci/lighthouserc.cjs)
+        run: node ci/lighthouse-origin-run.mjs "$ORIGIN"
+      - name: Lighthouse quality scores (desktop categories vs ci/quality-budget.json)
+        if: ${{ !cancelled() }}
         env:
           QUALITY_ORIGIN: ${{ env.ORIGIN }}
         run: npx lhci autorun --config=ci/lighthouserc.quality.cjs
@@ -54,7 +60,8 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: web-quality-${{ github.run_id }}
+          # run_attempt: re-runs of a failed job happen in the same run, and upload-artifact v4+ refuses an existing name.
+          name: web-quality-${{ github.run_id }}-${{ github.run_attempt }}
           path: .lighthouseci/
           include-hidden-files: true
           if-no-files-found: warn
