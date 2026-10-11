@@ -158,9 +158,11 @@ time, money and resources.
     fixed it":
     - **Critical journeys required on PR.** Browser journeys run on every PR
       that can change the site, against a local full stack (Worker + disposable
-      DB, no secrets), as a required check that reports skipped (= pass) for
-      docs/test/draft PRs. Per-PR remote previews are not used: they would put
-      a deploy-capable credential in PR workflows.
+      DB, no secrets). Like every gated job (rule 3), the journeys count only
+      through `ci-ok`: the scope step decides whether they run, a scope-skip
+      passes, and a failed or cancelled upstream job fails `ci-ok`. They are not
+      a separately required check. Per-PR remote previews are not used: they
+      would put a deploy-capable credential in PR workflows.
     - **Visual regression.** Full-page screenshots of the public routes at
       desktop and mobile widths against committed baselines, before the
       journeys, with volatile regions (times) masked. CI never rewrites a

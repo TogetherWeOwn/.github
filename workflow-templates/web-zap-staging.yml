@@ -21,12 +21,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      TARGET: https://staging.example.com # staging only; guard below
+      TARGET: https://staging.example.com # staging only; enforced by the guard step below
+      STAGING_ORIGIN: https://staging.example.com # the one allowed origin; set both together
       ZAP_IMAGE: ghcr.io/zaproxy/zaproxy@sha256:7aaa659b0d43078febd82e29bad112285c370727e86ab8340444220e17d9f0d2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Staging-only target guard
+        run: |
+          set -euo pipefail
+          [ "$TARGET" = "$STAGING_ORIGIN" ] || { echo "refusing non-staging target: $TARGET"; exit 1; }
       - name: ZAP baseline (passive)
         run: |
           set -uo pipefail
