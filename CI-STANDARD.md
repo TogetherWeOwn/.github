@@ -153,6 +153,40 @@ time, money and resources.
     `workflow-templates/web-quality.yml`. Reference implementation:
     togetherweown/two-web-next.
 
+24. **Web E2E and quality loop (2026-10-11).** Beyond the quality gate (rule
+    23), every website repo closes the loop from "something broke" to "an agent
+    fixed it":
+    - **Critical journeys required on PR.** Browser journeys run on every PR
+      that can change the site, against a local full stack (Worker + disposable
+      DB, no secrets). Like every gated job (rule 3), the journeys count only
+      through `ci-ok`: the scope step decides whether they run, a scope-skip
+      passes, and a failed or cancelled upstream job fails `ci-ok`. They are not
+      a separately required check. Per-PR remote previews are not used: they
+      would put a deploy-capable credential in PR workflows.
+    - **Visual regression.** Full-page screenshots of the public routes at
+      desktop and mobile widths against committed baselines, before the
+      journeys, with volatile regions (times) masked. CI never rewrites a
+      baseline; an intentional change commits reviewed baselines in the same PR.
+    - **Security scan of staging.** An OWASP ZAP passive baseline runs after
+      every staging deploy (gating promotion: a High, or Medium/Low above the
+      committed budget, fails the run the promotion resolver requires) and
+      nightly. Public repos print alert names and counts only and never upload
+      the report.
+    - **Daily explorer + QA routine.** A GET-only, guest, staging-only crawl at
+      desktop and mobile widths records non-200s, page/console errors, failed
+      subresources, broken images, overflow and serious axe violations with
+      stable finding ids; a daily Paperclip routine files one card per new
+      finding for the site's engineer and notes resolved ones.
+    - **Real-user metrics.** A nightly check of production p75 LCP/CLS/INP from
+      the CDN's RUM data against committed budgets, with a read-only analytics
+      token (never the deploy token).
+    Scheduled failures go through the host flake ledger (one re-run, then a
+    private main-red card); PR failures wake the PR's owner card via the PR
+    controller. Baselines and budgets only ratchet; loosening is its own
+    reviewed PR. Templates: `workflow-templates/web-zap-staging.yml`.
+    Reference implementation: togetherweown/two-web-next (docs/visual-regression.md,
+    docs/zap-baseline.md, docs/explore-staging.md, docs/rum-web-vitals.md).
+
 ## Banned
 
 - `on: paths:` on any workflow that produces a required check.

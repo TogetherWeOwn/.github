@@ -1,0 +1,4 @@
+{
+  "name": "ZAP staging baseline",
+  "description": "OWASP ZAP passive scan of staging after each deploy (gates promotion) and nightly (CI-STANDARD rule 24)."
+}
