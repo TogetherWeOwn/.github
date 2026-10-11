@@ -1,0 +1,61 @@
+# Web quality gate (CI-STANDARD rule 23). Reusable: measures a deployed origin (call it from the workflow that
+# verifies staging after each deploy, so a failure blocks promotion) and runs nightly against staging for drift.
+# The PR-time half belongs inside the repo's change-gated CI (a `lighthouse` job selected by the scope gate and
+# required by `ci-ok`), measuring a local build with the same config and budget file.
+# Reference implementation: togetherweown/two-web-next (.github/workflows/web-quality-origin.yml, ci/lighthouserc*.cjs,
+# ci/quality-budget.json, ci/web-standards.mjs, ci/lighthouse-summary.mjs).
+name: web-quality
+
+on:
+  workflow_call:
+    inputs:
+      origin:
+        type: string
+        required: true
+  schedule:
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Replace with the repo's staging origin; keep an explicit allowlist in the measuring script.
+      ORIGIN: ${{ inputs.origin || 'https://staging.example.org' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev --no-audit --no-fund
+      - name: Install Chromium
+        run: |
+          npx playwright install --with-deps chromium
+          node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_PATH=" + require("playwright").chromium.executablePath() + "\n")'
+      - name: Lighthouse categories and Core Web Vitals (budgets in ci/quality-budget.json)
+        env:
+          QUALITY_ORIGIN: ${{ env.ORIGIN }}
+        run: npx lhci autorun --config=ci/lighthouserc.quality.cjs
+      - name: Web standards (security headers, HTML basics, internal links)
+        if: ${{ !cancelled() }}
+        run: node ci/web-standards.mjs --origin "$ORIGIN"
+      - name: What to fix (job summary)
+        if: ${{ !cancelled() }}
+        run: node ci/lighthouse-summary.mjs >> "$GITHUB_STEP_SUMMARY"
+      - name: Evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-quality-${{ github.run_id }}
+          path: .lighthouseci/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
