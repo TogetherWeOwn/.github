@@ -447,11 +447,18 @@ jobs:
                   done("error", True, test_files, "empty commit range with test files touched", mode)
               builder_shas = {}
               unknown_shas = {}
+              claimed = set()
               for sha in shas:
                   # --no-renames to match the aggregate diff: a rename of
                   # a test OUT of the globs must list the deleted test
                   # path (rename detection would show only the new path
                   # and the commit would slip through as non-test).
+                  # Deliberately NO -m: the combined view lets a merge claim
+                  # only files its resolution actually differs in (conflict
+                  # edits, classified by the merger's message), while
+                  # cleanly-carried files keep their original commit's
+                  # provenance (splitting would re-attribute TA-authored
+                  # files to the merger's untrailered message).
                   rc, touched_out = sh("git", "-c", "core.quotepath=false", "show", "--pretty=format:", "--name-only", "-z", "--no-renames", sha)
                   if rc != 0:
                       done("error", True, test_files, f"git show failed on {sha[:7]}; refusing to report clean", mode)
@@ -462,10 +469,18 @@ jobs:
                   if rc != 0:
                       done("error", True, test_files, f"git log failed on {sha[:7]}; refusing to report clean", mode)
                   state = classify(msg)
+                  claimed.update(touched_tests)
                   if state == "builder":
                       builder_shas[sha[:7]] = touched_tests
                   elif state == "unknown":
                       unknown_shas[sha[:7]] = touched_tests
+
+              # Fail-closed safety net: any test file in the aggregate diff
+              # that NO in-range commit claims (should not happen now that
+              # merges split with -m, but history is creative) needs the
+              # label exactly like an untrailered commit.
+              for f in sorted(test_files - claimed):
+                  unknown_shas.setdefault("unclaimed", []).append(f)
 
               note_prefix = f"gate config {cfg_path} changed in this PR (judged by base policy); " if config_touched else ""
               # A known Builder hand fails however labeled: the marker

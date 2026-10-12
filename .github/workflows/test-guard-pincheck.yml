@@ -5,7 +5,10 @@
 # reusable changes. This check fails when the pinned commit's copy of
 # the reusable differs from the working tree's — i.e. repin the wrapper
 # (to the commit carrying the reusable change) in the same PR.
-# Tiny, no secrets, ubuntu-latest.
+# Honest-mistake tripwire only, not a boundary: it runs from the PR
+# checkout, so a PR can remove it. Enforce relies on the ruleset-required
+# WORKFLOW (TEST-GUARD.md step 4), never on this check. Tiny, no secrets,
+# ubuntu-latest.
 
 name: test-guard pincheck
 
