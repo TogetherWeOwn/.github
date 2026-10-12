@@ -115,9 +115,52 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - run: echo "secret scan goes here (always runs)"
 
+  # The test-guard wrapper calls the reusable by pinned path+ref; a
+  # forgotten repin means CI keeps exercising a stale gate. Light and
+  # always-on (no paths filter — this job feeds required `ci-ok`).
+  pincheck:
+    name: pincheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Wrapper pin must carry the current reusable
+        run: |-
+          PIN="$(grep -o 'test-guard\.yml@[0-9a-f]\{40\}' .github/workflows/test-guard-required.yml | head -1 | cut -d@ -f2)"
+          if [ -z "$PIN" ]; then
+            echo "::error::test-guard-pincheck: no pinned test-guard.yml@<sha> in test-guard-required.yml"
+            exit 1
+          fi
+          # The pin may name a commit on the PR branch; make sure it is
+          # present before diffing so a missing object reads as a repin
+          # request, not `fatal: bad object`. After a squash-merge with
+          # branch deletion, repin to the merge commit on main.
+          git fetch origin "$PIN" 2>/dev/null || true
+          if ! git cat-file -e "$PIN^{commit}" 2>/dev/null; then
+            echo "::error::test-guard-pincheck: pin $PIN is not fetchable (branch deleted?) — repin uses: to a commit on main carrying the reusable"
+            exit 1
+          fi
+          if ! git diff --quiet "$PIN" HEAD -- .github/workflows/test-guard.yml; then
+            echo "::error::test-guard-pincheck: wrapper pins $PIN but the reusable changed since; repin uses: to the commit carrying the reusable (see TEST-GUARD.md step 4)"
+            exit 1
+          fi
+          echo "test-guard-pincheck: pin $PIN carries the current reusable"
+
+  # Regression tests for the embedded test-guard gate (see the script).
+  # Light (~30s) and always-on so gate changes can never merge red.
+  gate-selftest:
+    name: gate selftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: bash .github/scripts/test-guard-selftest.sh
+
   ci-ok:
     name: ci-ok
-    needs: [changes, full_run, lint, test-web, test-bot, secret-scan]
+    needs: [changes, full_run, lint, test-web, test-bot, secret-scan, pincheck, gate-selftest]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
