@@ -116,6 +116,11 @@ on:
         required: false
         default: "2c980cec-9df5-40a3-80c5-00b3b9448fbb"
         type: string
+      runs-on-json:
+        description: 'JSON array of runner labels for the gate job. Default GitHub-hosted; private repos pass their self-hosted pool instead (no Actions spend).'
+        required: false
+        default: '["ubuntu-latest"]'
+        type: string
     outputs:
       verdict:
         description: "clean|attributed|builder-touched|error"
@@ -133,7 +138,9 @@ jobs:
     # The bare `test-guard` required check comes from the aggregator in
     # test-guard-required.yml; keep THAT id+name byte-identical instead.
     name: gate
-    runs-on: ubuntu-latest
+    # Private-repo callers override via the runs-on-json input (self-hosted
+    # pool); the default keeps public repos on GitHub-hosted.
+    runs-on: ${{ fromJSON(inputs.runs-on-json) }}
     timeout-minutes: 5
     outputs:
       verdict: ${{ steps.check.outputs.verdict }}

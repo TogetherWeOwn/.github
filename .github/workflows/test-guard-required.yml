@@ -50,12 +50,19 @@ jobs:
     # full path+ref form is documented to resolve there. Pinned to the
     # commit that last touched the reusable (content-addressed, so a
     # pre-merge SHA stays correct); repin on every reusable update.
-    uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@3fffeb9f9465f371763fcc3c789ed4baefe38f95
+    uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@80951a57d7f6e8d1ed97016bd12ed82d78c3fc30
+    # Private repos run the gate on the self-hosted pool (no Actions
+    # spend); public repos stay on GitHub-hosted. Per-repo warn callers
+    # pass their own pool instead (see TEST-GUARD.md).
+    with:
+      runs-on-json: ${{ github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]' }}
 
   # Keep id and name byte-identical: the required check name is `test-guard`.
   test-guard:
     name: test-guard
-    runs-on: ubuntu-latest
+    # Same pool selection as the guard call above: the required check must
+    # report from a runner the repo can actually start.
+    runs-on: ${{ fromJSON(github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     needs: [guard]
     if: always()
