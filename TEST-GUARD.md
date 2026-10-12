@@ -102,10 +102,13 @@ workflow `.github/workflows/test-guard-required.yml` in this repo
 reusable at a fixed SHA, bare `test-guard` aggregator check). A ruleset
 that merely requires the check NAME can still be satisfied by a
 PR-edited caller with weakened inputs — require the WORKFLOW.
-`.github/workflows/test-guard-pincheck.yml` fails the PR when the
-wrapper's pin goes stale (the pinned commit's reusable differs from the
-working tree's), so repin the wrapper in the same PR as any reusable
-change.
+`pincheck` (a job in this repo's `ci.yml`, feeding required `ci-ok`)
+fails the PR when the wrapper's pin goes stale (the pinned commit's
+reusable differs from the working tree's), so repin the wrapper in the
+same PR as any reusable change — a stale pin blocks merge via `ci-ok`,
+not via a side check. `gate-selftest` (same file) runs the gate's
+committed regression suite (`.github/scripts/test-guard-selftest.sh`,
+11 scenarios) on every PR for the same reason.
 
 No secrets, no paid minutes beyond a ~30s ubuntu-latest run.
 

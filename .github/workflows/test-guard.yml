@@ -296,6 +296,7 @@ jobs:
               pr_number = None
               pr_author = ""
               api_base = ""
+              mg = {}
               label_src = "event payload"
               repo_full = os.environ.get("GITHUB_REPOSITORY", "")
               has_token = bool(os.environ.get("GH_TOKEN"))
@@ -334,7 +335,12 @@ jobs:
               except Exception as e:
                   print(f"::warning::test-guard: could not read event labels: {e}")
 
-              base_ref = os.environ.get("EVENT_BASE") or api_base or "main"
+              # merge_group carries its target in the payload; prefer the
+              # API result, then the payload, then main, so a non-main
+              # repo reads the right base config (and the same enforce
+              # verdict) in the queue re-run as on the PR event.
+              mg_base = str((mg.get("base_ref") or ""))
+              base_ref = os.environ.get("EVENT_BASE") or api_base or mg_base or "main"
 
               # Config trust: the PR under test must not control its own
               # gate policy, so the config is read from the BASE ref, not
@@ -476,9 +482,10 @@ jobs:
                       unknown_shas[sha[:7]] = touched_tests
 
               # Fail-closed safety net: any test file in the aggregate diff
-              # that NO in-range commit claims (should not happen now that
-              # merges split with -m, but history is creative) needs the
-              # label exactly like an untrailered commit.
+              # that NO in-range commit claims (combined view plus the
+              # per-commit claims above should leave nothing unclaimed,
+              # but history is creative) needs the label exactly like an
+              # untrailered commit.
               for f in sorted(test_files - claimed):
                   unknown_shas.setdefault("unclaimed", []).append(f)
 

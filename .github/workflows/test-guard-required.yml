@@ -40,6 +40,11 @@ concurrency:
 
 jobs:
   guard:
+    # Intentionally always-run (ci_policy.py: the required gate must
+    # evaluate every PR — no change gating here). `timeout-minutes` is
+    # not a legal key on a `uses:` job; runtime is bounded by the called
+    # reusable (timeout-minutes: 5 there).
+    if: always()
     # Full pinned self-reference (not ./...): ruleset required
     # workflows execute from this repo at a pinned ref, and only the
     # full path+ref form is documented to resolve there. Pinned to the
