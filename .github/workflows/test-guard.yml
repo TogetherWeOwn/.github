@@ -105,19 +105,20 @@ on:
     outputs:
       verdict:
         description: "clean|attributed|builder-touched|error"
-        value: ${{ jobs.guard.outputs.verdict }}
+        value: ${{ jobs.gate.outputs.verdict }}
       would_fail:
         description: "'true' when enforce mode would fail this PR."
-        value: ${{ jobs.guard.outputs.would_fail }}
+        value: ${{ jobs.gate.outputs.would_fail }}
       test_files:
         description: "JSON array of changed test files."
-        value: ${{ jobs.guard.outputs.test_files }}
+        value: ${{ jobs.gate.outputs.test_files }}
 
 jobs:
-  guard:
-    # Keep the required-check name byte-identical to the id: a future
-    # org ruleset will require `test-guard`, and renames strand open PRs.
-    name: test-guard
+  gate:
+    # Display name inside reusable-call checks ("<caller> / gate").
+    # The bare `test-guard` required check comes from the aggregator in
+    # test-guard-required.yml; keep THAT id+name byte-identical instead.
+    name: gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -138,6 +139,9 @@ jobs:
           MARKER_LABEL: ${{ inputs.marker-label }}
           TEST_AUTHOR_IDS: ${{ inputs.test-author-ids }}
           EVENT_BASE: ${{ github.base_ref }}
+          # For the marker-label actor audit (gh issue-events API).
+          # Callers must grant pull-requests: read (see template).
+          GH_TOKEN: ${{ github.token }}
         run: |-
           python3 - <<'PYEOF'
           import fnmatch, json, os, re, subprocess, sys
@@ -157,6 +161,14 @@ jobs:
               with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a") as f:
                   f.write("\n".join(lines) + "\n")
 
+          def esc(s):
+              # Workflow-command escaping for anything printed to the
+              # log: a test path containing a newline could otherwise
+              # inject ::error::/::warning::/::add-mask:: lines. Verdict
+              # and exit code never come from printed text, but forged
+              # annotations would still mislead.
+              return str(s).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
           def finish(verdict, would_fail, test_files, note):
               out("verdict", verdict)
               out("would_fail", "true" if would_fail else "false")
@@ -166,10 +178,10 @@ jobs:
                   f"- verdict: `{verdict}`",
                   f"- would_fail (enforce): `{str(would_fail).lower()}`",
                   f"- test files touched: `{len(test_files)}`",
-                  f"- note: {note}",
+                  f"- note: {esc(note)}",
               ])
               for t in sorted(test_files)[:20]:
-                  summary([f"  - `{t}`"])
+                  summary([f"  - `{esc(t)}`"])
 
           def done(verdict, would_fail, test_files, note, mode):
               # Single exit funnel: warn mode NEVER fails the step
@@ -178,11 +190,11 @@ jobs:
               # to an unguarded traceback.
               if verdict == "error" or (would_fail and mode == "enforce"):
                   tag = "::error::" if mode == "enforce" else "::warning::"
-                  print(f"{tag}test-guard: {note}")
+                  print(f"{tag}test-guard: {esc(note)}")
                   finish(verdict, would_fail, test_files, note)
                   sys.exit(1 if mode == "enforce" else 0)
               if would_fail:
-                  print(f"::warning::test-guard: [warn-only] {note}")
+                  print(f"::warning::test-guard: [warn-only] {esc(note)}")
               finish(verdict, would_fail, test_files, note)
               sys.exit(0)
 
@@ -214,6 +226,9 @@ jobs:
               if rc == 0:
                   try:
                       cfg = json.loads(cfg_text)
+                      for k in (cfg or {}):
+                          if k not in ("testGlobs", "mode", "markerLabel", "testAuthorIds"):
+                              print(f"::warning::test-guard: ignoring unknown config key {k!r}")
                       if isinstance(cfg.get("testGlobs"), list) and cfg["testGlobs"]:
                           globs = [str(g) for g in cfg["testGlobs"] if str(g)]
                       if str(cfg.get("mode", "")).lower() in ("warn", "enforce"):
@@ -239,15 +254,54 @@ jobs:
                           return True
                   return False
 
-              # PR labels prove Test Author ownership (label is set by the
-              # Test Author/QA flow, not by the Builder).
+              # PR labels prove Test Author ownership ONLY when applied by
+              # someone other than the PR author (the Test Author/QA flow,
+              # not the Builder self-labeling its own PR). The actor comes
+              # from the issue-events API, not the payload, so a
+              # PR-edited caller cannot forge it.
               labels = []
+              pr_number = None
+              pr_author = ""
+              repo_full = os.environ.get("GITHUB_REPOSITORY", "")
               try:
                   event = json.load(open(os.environ["GITHUB_EVENT_PATH"]))
                   pr = event.get("pull_request") or {}
                   labels = [(l.get("name") or "").lower() for l in (pr.get("labels") or [])]
+                  pr_number = pr.get("number")
+                  pr_author = ((pr.get("user") or {}).get("login") or "").lower()
+                  repo_full = ((event.get("repository") or {}).get("full_name") or repo_full)
               except Exception as e:
                   print(f"::warning::test-guard: could not read event labels: {e}")
+
+              def marker_actor():
+                  # Latest actor to apply the marker label, or (None,
+                  # reason) when it cannot be proven. Any API/parse
+                  # failure is an error, never a silent pass.
+                  if marker not in labels:
+                      return None, "marker label absent"
+                  if not pr_number or not repo_full:
+                      return None, "no PR number/repo for label audit"
+                  if not os.environ.get("GH_TOKEN"):
+                      return None, "no GH_TOKEN for label audit"
+                  rc, out = sh("gh", "api", f"repos/{repo_full}/issues/{pr_number}/events",
+                               "--paginate", "--jq", "[.[]]")
+                  if rc != 0:
+                      return None, "label events API failed"
+                  try:
+                      events = json.loads(out or "[]")
+                  except Exception:
+                      return None, "label events unparseable"
+                  applied = [e for e in events
+                             if e.get("event") == "labeled"
+                             and str(((e.get("label") or {}).get("name")) or "").lower() == marker]
+                  if not applied:
+                      return None, "no labeled event for marker"
+                  actor = str((((applied[-1].get("actor") or {}).get("login")) or "").lower())
+                  if not actor:
+                      return None, "label actor unknown"
+                  if pr_author and actor == pr_author:
+                      return None, f"marker applied by PR author ({actor})"
+                  return actor, "ok"
 
               rc, base = sh("git", "merge-base", "HEAD", f"origin/{base_ref}")
               if rc != 0 or not base:
@@ -284,8 +338,12 @@ jobs:
                   # line still passes — trailers are advisory; the hook's
                   # overwrite + audit log is the boundary. See header.)
                   hits = trailer_re.findall(message or "")
-                  if hits and hits[-1].lower() in ids:
-                      return True
+                  if hits:
+                      return hits[-1].lower() in ids
+                  # Legacy fallback ONLY when the commit carries no
+                  # Paperclip-Agent trailer at all (pre-hook history).
+                  # The hook never touches Co-authored-by lines, so a
+                  # Builder trailer + legacy QA line must NOT attribute.
                   for line in (message or "").splitlines():
                       if line.lower().startswith("co-authored-by:") and legacy_marker.search(line):
                           role = line.split(":", 1)[1].split("<", 1)[0]
@@ -318,8 +376,11 @@ jobs:
                       unattributed[sha[:7]] = touched_tests
 
               note_prefix = f"gate config {cfg_path} changed in this PR (judged by base policy); " if config_touched else ""
-              if marker in labels or not unattributed:
-                  why = f"label `{marker}` present" if marker in labels else "all test-touching commits test-author-attributed"
+              actor, actor_why = marker_actor()
+              if actor_why != "ok" and marker in labels:
+                  done("error", True, test_files, note_prefix + f"marker label unproven ({actor_why})", mode)
+              if actor or not unattributed:
+                  why = f"label `{marker}` applied by {actor}" if actor else "all test-touching commits test-author-attributed"
                   done("attributed", False, test_files, note_prefix + why, mode)
 
               detail = "; ".join(f"{s}: {', '.join(fs[:5])}" for s, fs in sorted(unattributed.items()))

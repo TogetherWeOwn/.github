@@ -1,0 +1,62 @@
+# Thin pull_request wrapper so an org ruleset can require the test-guard
+# WORKFLOW (not just the check name). Ruleset required workflows need
+# their own pull_request/merge_group trigger — they cannot target the
+# workflow_call-only reusable directly. Calls the local reusable by
+# relative path so both version together (no SHA chicken-egg; if the
+# ruleset runner ever rejects relative refs, switch to the pinned
+# TogetherWeOwn/.github form and repin on updates).
+#
+# Check-name mechanics: a direct reusable call would report as
+# "guard / test-guard". The `test-guard` aggregator below (org ci-ok
+# pattern) re-exports a BARE `test-guard` check — that bare name is what
+# the ruleset requires. In warn mode the reusable never fails, so the
+# check stays green; in enforce (base config) a builder-touched verdict
+# fails the reusable job and the aggregator turns red.
+#
+# Do NOT point a ruleset here until the per-repo rollout (TEST-GUARD.md)
+# reaches enforce with zero false positives. Requires pull-requests:
+# read for the marker-label actor audit.
+
+name: test-guard (required)
+
+on:
+  pull_request:
+    # NOTE: rulesets may ignore `types`; the list documents intent for
+    # normal runs. labeled/unlabeled re-evaluates a fresh marker label.
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  merge_group: {}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: test-guard-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    uses: ./.github/workflows/test-guard.yml
+
+  # Keep id and name byte-identical: the required check name is `test-guard`.
+  test-guard:
+    name: test-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [guard]
+    if: always()
+    steps:
+      - name: Re-export gate verdict as a bare check
+        env:
+          GUARD_RESULT: ${{ needs.guard.result }}
+          GUARD_VERDICT: ${{ needs.guard.outputs.verdict }}
+        run: |-
+          if [ "$GUARD_RESULT" = "failure" ]; then
+            echo "::error::test-guard: gate failed (verdict: ${GUARD_VERDICT:-unknown})"
+            exit 1
+          fi
+          if [ "$GUARD_RESULT" != "success" ]; then
+            echo "::error::test-guard: gate did not succeed (result: $GUARD_RESULT)"
+            exit 1
+          fi
+          echo "test-guard: gate ${GUARD_RESULT} (verdict: ${GUARD_VERDICT:-unknown})"

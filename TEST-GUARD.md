@@ -8,11 +8,15 @@ design, section (c); evidence: AgentCoder). Enforcement is deterministic
 ## How it works
 
 On each PR the gate diffs against the merge base and matches changed
-files against the test globs. If test files changed, it passes only when
-ownership is proven: the PR carries the marker label (default
-`tests-by-test-author`, set by the Test Author/QA flow) **or** every
-test-touching commit carries a Test Author `Paperclip-Agent` trailer.
-Otherwise it warns (`warn` mode, the default) or fails (`enforce` mode).
+files against the test globs (fnmatch on the raw NUL-separated path).
+If test files changed, it passes only when ownership is proven: the PR
+carries the marker label (default `tests-by-test-author`) applied by
+someone OTHER than the PR author (actor read from the issue-events API,
+so a Builder cannot self-label its own PR) **or** every test-touching
+commit carries a Test Author `Paperclip-Agent` trailer. An unprovable
+label (API failure, unknown actor, self-applied) is an `error` verdict,
+never a silent pass. Otherwise it warns (`warn` mode, the default) or
+fails (`enforce` mode).
 
 A commit is Test Author-attributed when its LAST `Paperclip-Agent:`
 trailer value matches an id in `test-author-ids` (the host commit-msg
@@ -63,6 +67,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read # marker-label actor audit via the issue-events API
 
 concurrency:
   group: test-guard-${{ github.event.pull_request.number || github.sha }}
@@ -75,6 +80,13 @@ jobs:
     uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@<pinned-sha>
 ```
 
+Enforce (step 4) does NOT use this caller: it uses the required
+workflow `.github/workflows/test-guard-required.yml` in this repo
+(pull_request + merge_group triggers, local reusable call, bare
+`test-guard` aggregator check). A ruleset that merely requires the
+check NAME can still be satisfied by a PR-edited caller with weakened
+inputs — require the WORKFLOW.
+
 No secrets, no paid minutes beyond a ~30s ubuntu-latest run.
 
 ## Per-repo overrides (`.github/test-guard.json`)
@@ -84,10 +96,11 @@ No secrets, no paid minutes beyond a ~30s ubuntu-latest run.
   "testGlobs": ["tests/**", "spec/**"],
   "mode": "warn",
   "markerLabel": "tests-by-test-author",
-  "testAuthorTokens": ["test-author"],
   "testAuthorIds": ["2c980cec-9df5-40a3-80c5-00b3b9448fbb"]
 }
 ```
+
+Unknown keys are ignored with a warning (typo safety).
 
 All keys optional (`testGlobs`, `mode`, `markerLabel`,
 `testAuthorIds`). Present keys beat the workflow inputs. Trust,
@@ -114,23 +127,26 @@ and flagged in the step summary; the change takes effect for later PRs.
    one; do NOT flip the default here first):
 
 ```sh
-# flip <repo> to enforce (after Test Author flow live + ~20 clean PRs)
-git clone <repo> && cd <repo> &&
-  cat > .github/test-guard.json <<'EOF'
-{
-  "mode": "enforce"
-}
-EOF
-  git add .github/test-guard.json && git commit -m "ci(test-guard): enforce Builder/Test-Author separation" && git push
+# flip <repo> to enforce (after Test Author flow live + ~20 clean PRs).
+# Branch + PR: protected branches reject direct pushes, and clobbering
+# an existing config would drop that repo's overrides.
+git clone <repo> && cd <repo> && git checkout -b ci/test-guard-enforce &&
+  python3 -c "import json,os;p='.github/test-guard.json';d=json.load(open(p)) if os.path.exists(p) else {};d['mode']='enforce';open(p,'w').write(json.dumps(d,indent=2)+'\n')" &&
+  git add .github/test-guard.json &&
+  git commit -m "ci(test-guard): enforce Builder/Test-Author separation" &&
+  git push -u origin ci/test-guard-enforce
+# then open a PR; merge normally.
 ```
 
    The flip PR itself is judged by the old (warn) policy since the
    config is read from the base ref; enforce bites from the next PR on.
 
-4. Only then, optionally add an org-ruleset REQUIRED WORKFLOW for
-   `test-guard` (sourced from this repo at a pinned ref) — requiring
-   the check NAME alone is not enough, since a PR-edited caller can
-   satisfy a name check with weakened inputs.
+4. Only then, add an org-ruleset REQUIRED WORKFLOW pointing at
+   `.github/workflows/test-guard-required.yml` in this repo —
+   requiring the check NAME alone is not enough, since a PR-edited
+   caller can satisfy a name check with weakened inputs. Never require
+   the reusable (`test-guard.yml`) directly: rulesets need a
+   pull_request/merge_group trigger, which only the wrapper has.
 
 ## Rollback
 
