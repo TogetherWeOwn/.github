@@ -9,25 +9,37 @@ design, section (c); evidence: AgentCoder). Enforcement is deterministic
 
 On each PR the gate diffs against the merge base and matches changed
 files against the test globs (fnmatch on the raw NUL-separated path).
-If test files changed, it passes only when ownership is proven: the PR
-carries the marker label (default `tests-by-test-author`) applied by
-someone OTHER than the PR author (actor read from the issue-events API,
-so a Builder cannot self-label its own PR) **or** every test-touching
-commit carries a Test Author `Paperclip-Agent` trailer. An unprovable
-label (API failure, unknown actor, self-applied) is an `error` verdict,
-never a silent pass. Otherwise it warns (`warn` mode, the default) or
-fails (`enforce` mode).
+Each test-touching commit classifies as Test Author (`Paperclip-Agent`
+trailer in `test-author-ids`, or legacy test/QA `(Paperclip agent)`
+co-author on trailer-less pre-hook history), Builder (an explicit
+`Paperclip-Agent` trailer that is NOT the Test Author), or unknown (no
+trailer at all).
+
+- Any Builder-classified commit fails the gate however labeled: the
+  marker label excuses UNKNOWN provenance, never a known Builder hand.
+- Unknown commits need the marker label (default
+  `tests-by-test-author`): present AND applied by someone other than the
+  PR author (actor read from the issue-events API with multi-page
+  parsing, so a Builder cannot self-label its own PR). Labels are read
+  from the `pull_request` payload, or — on `merge_group` events, whose
+  payload carries no PR — from the pulls API, so a label-authorized PR
+  survives the merge-queue re-run.
+- A label that is not needed (every commit Test Author-attributed) is
+  ignored, so a stale or self-applied label cannot poison a clean PR.
+  An unprovable-but-needed label (API failure, unknown actor,
+  self-applied) is an `error` verdict, never a silent pass.
+- Otherwise it warns (`warn` mode, the default) or fails (`enforce`).
 
 A commit is Test Author-attributed when its LAST `Paperclip-Agent:`
 trailer value matches an id in `test-author-ids` (the host commit-msg
 hook appends trailers from the run env and overwrites pre-existing
 ones, so the last line is the hook's), or carries a legacy test/QA
 `(Paperclip agent)` co-author (pre-hook history only).
-Trailers are advisory: a deliberately forged lone trailer passes the
-gate. The boundary is the hook — platform-set env, overwrite semantics,
-audit log — not the string. Deliberate forgery means tampering with the
-run env, which is auditable, not a role mix-up, which is what this gate
-catches.
+Trailers are advisory: a deliberately typed trailer (e.g. `git commit
+--no-verify`) passes the gate with no run-env tampering at all, so the
+hook (platform-set env, overwrite semantics, audit log) is friction,
+not a forgery boundary. The gate catches role mix-ups — the wrong agent
+editing tests — not determined forgery, which is a conduct/audit matter.
 
 ## Attribution (live)
 
@@ -147,6 +159,13 @@ git clone <repo> && cd <repo> && git checkout -b ci/test-guard-enforce &&
    caller can satisfy a name check with weakened inputs. Never require
    the reusable (`test-guard.yml`) directly: rulesets need a
    pull_request/merge_group trigger, which only the wrapper has.
+   Add the ruleset in Evaluate mode first, confirm the bare
+   `test-guard` check appears green on 2+ PRs (proving the wrapper's
+   pinned internal reference resolves under required-workflow
+   execution), then switch to Active. If the check misfires there,
+   repin the wrapper's internal `uses:` (it names the reusable at a
+   pinned SHA for exactly this reason) rather than touching the
+   reusable.
 
 ## Rollback
 

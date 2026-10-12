@@ -22,13 +22,23 @@
 #     appends — and overwrites pre-existing — trailers from the run env,
 #     so the last line is the hook's; an id in `test-author-ids` proves
 #     the Test Author wrote it, with a legacy co-author fallback for
-#     pre-hook history). Trailers are advisory: a deliberately forged
-#     trailer passes the gate; the boundary is the hook (platform-set
-#     env, overwrite semantics, audit log), not the string;
-#   * passes when no test files are touched, or when the marker is proven:
-#     the PR carries the marker label (default `tests-by-test-author`, set
-#     by the Test Author/QA flow) or every test-touching commit is
-#     test-author-attributed;
+#     pre-hook history). Trailers are advisory: a deliberately typed
+#     trailer (e.g. `git commit --no-verify`) passes the gate with no run-
+#     env tampering at all, so the hook (platform-set env, overwrite
+#     semantics, audit log) is friction, not a forgery boundary. The gate
+#     catches role mix-ups — the wrong agent editing tests — not
+#     determined forgery, which is a conduct/audit matter;
+#   * passes when no test files are touched, when every test-touching
+#     commit is test-author-attributed, or — for untrailered (pre-hook)
+#     history only — when the marker label (default
+#     `tests-by-test-author`, set by the Test Author/QA flow) is proven:
+#     present AND applied by someone other than the PR author (actor from
+#     the issue-events API, so the Builder cannot self-label). An explicit
+#     Builder trailer fails the gate even when the label is present (the
+#     label excuses unknown provenance, never a known Builder hand), and
+#     an unprovable-but-needed label is an error, never a silent pass. A
+#     label that is not needed (commits already prove ownership) is
+#     ignored, so a self-applied label cannot poison a clean PR;
 #   * otherwise warns (mode `warn`, the default) or fails (mode `enforce`).
 #
 # Rollout: warn mode org-wide first. Add the caller as a NON-required
@@ -254,15 +264,52 @@ jobs:
                           return True
                   return False
 
-              # PR labels prove Test Author ownership ONLY when applied by
-              # someone other than the PR author (the Test Author/QA flow,
-              # not the Builder self-labeling its own PR). The actor comes
-              # from the issue-events API, not the payload, so a
-              # PR-edited caller cannot forge it.
+              # PR labels excuse untrailered (pre-hook) test history ONLY
+              # when applied by someone other than the PR author (the Test
+              # Author/QA flow, not the Builder self-labeling its own PR).
+              # The actor comes from the issue-events API, not the payload,
+              # so a PR-edited caller cannot forge it. Labels themselves
+              # come from the pull_request payload, or — on merge_group
+              # events, whose payload carries no PR — from the pulls API
+              # (commit -> PR -> labels), since a label-authorized PR must
+              # survive the merge-queue re-run in enforce mode.
+              def gh_paged(path):
+                  # Paginated GET returning every top-level value across
+                  # all pages. No --jq: `gh api --paginate --jq '[.[]]'`
+                  # prints one JSON array PER page, which is unparseable
+                  # as a whole past page one (>30 issue events). Raw
+                  # bodies are split with raw_decode instead.
+                  rc, raw = sh("gh", "api", path, "--paginate")
+                  if rc != 0:
+                      return False, []
+                  vals = []
+                  try:
+                      dec = json.JSONDecoder()
+                      i, n = 0, len(raw)
+                      while i < n:
+                          while i < n and raw[i].isspace():
+                              i += 1
+                          if i >= n:
+                              break
+                          obj, j = dec.raw_decode(raw, i)
+                          vals.append(obj)
+                          i = j
+                  except Exception:
+                      return False, []
+                  flat = []
+                  for v in vals:
+                      if isinstance(v, list):
+                          flat.extend(v)
+                      elif isinstance(v, dict):
+                          flat.append(v)
+                  return True, flat
+
               labels = []
               pr_number = None
               pr_author = ""
+              label_src = "event payload"
               repo_full = os.environ.get("GITHUB_REPOSITORY", "")
+              has_token = bool(os.environ.get("GH_TOKEN"))
               try:
                   event = json.load(open(os.environ["GITHUB_EVENT_PATH"]))
                   pr = event.get("pull_request") or {}
@@ -270,30 +317,42 @@ jobs:
                   pr_number = pr.get("number")
                   pr_author = ((pr.get("user") or {}).get("login") or "").lower()
                   repo_full = ((event.get("repository") or {}).get("full_name") or repo_full)
+                  mg = event.get("merge_group") or {}
+                  mg_sha = mg.get("head_sha") or ""
+                  if pr_number is None and mg_sha and repo_full and has_token:
+                      # merge_group: resolve the PR behind the queue head.
+                      ok, pulls = gh_paged(f"repos/{repo_full}/commits/{mg_sha}/pulls?per_page=100")
+                      pr0 = (pulls or [{}])[0]
+                      if ok and pr0.get("number"):
+                          pr_number = pr0.get("number")
+                          pr_author = ((pr0.get("user") or {}).get("login") or "").lower()
+                          ok2, prdoc = gh_paged(f"repos/{repo_full}/pulls/{pr_number}")
+                          if ok2 and prdoc:
+                              labels = [(l.get("name") or "").lower()
+                                        for l in ((prdoc[0] or {}).get("labels") or [])]
+                              label_src = f"pulls API (merge_group {mg_sha[:7]})"
+                      if pr_number is None:
+                          print("::warning::test-guard: merge_group PR resolution failed; label path unavailable")
               except Exception as e:
                   print(f"::warning::test-guard: could not read event labels: {e}")
 
               def marker_actor():
                   # Latest actor to apply the marker label, or (None,
                   # reason) when it cannot be proven. Any API/parse
-                  # failure is an error, never a silent pass.
+                  # failure is an error, never a silent pass — but only
+                  # callers that NEED the label consult this.
                   if marker not in labels:
                       return None, "marker label absent"
                   if not pr_number or not repo_full:
                       return None, "no PR number/repo for label audit"
-                  if not os.environ.get("GH_TOKEN"):
+                  if not has_token:
                       return None, "no GH_TOKEN for label audit"
-                  rc, out = sh("gh", "api", f"repos/{repo_full}/issues/{pr_number}/events",
-                               "--paginate", "--jq", "[.[]]")
-                  if rc != 0:
+                  ok, events = gh_paged(f"repos/{repo_full}/issues/{pr_number}/events?per_page=100")
+                  if not ok:
                       return None, "label events API failed"
-                  try:
-                      events = json.loads(out or "[]")
-                  except Exception:
-                      return None, "label events unparseable"
                   applied = [e for e in events
-                             if e.get("event") == "labeled"
-                             and str(((e.get("label") or {}).get("name")) or "").lower() == marker]
+                             if isinstance(e, dict) and e.get("event") == "labeled"
+                             and str((((e.get("label") or {}).get("name")) or "")).lower() == marker]
                   if not applied:
                       return None, "no labeled event for marker"
                   actor = str((((applied[-1].get("actor") or {}).get("login")) or "").lower())
@@ -331,25 +390,29 @@ jobs:
               legacy_marker = re.compile(r"\(paperclip agent\)", re.IGNORECASE)
               legacy_role = re.compile(r"(?:^|[\s\-_/])(test-author|test author|testauthor|\bqa\b)(?:$|[\s\-_/])", re.IGNORECASE)
 
-              def attributed(message):
-                  # LAST trailer wins: the host hook overwrites/appends
-                  # from the run env, so the last Paperclip-Agent line is
-                  # the hook's; a forged earlier line loses. (A lone forged
-                  # line still passes — trailers are advisory; the hook's
-                  # overwrite + audit log is the boundary. See header.)
+              def classify(message):
+                  # Three states: "ta" (Test Author trailer, or legacy
+                  # QA co-author on trailer-less pre-hook history),
+                  # "builder" (an explicit Paperclip-Agent trailer that is
+                  # NOT the Test Author — a known Builder hand), or
+                  # "unknown" (no trailer at all). LAST trailer wins: the
+                  # host hook overwrites/appends from the run env, so the
+                  # last Paperclip-Agent line is the hook's. (A lone forged
+                  # line still reads "ta" — trailers are advisory; the gate
+                  # catches role mix-ups, not determined forgery.)
                   hits = trailer_re.findall(message or "")
                   if hits:
-                      return hits[-1].lower() in ids
+                      return "ta" if hits[-1].lower() in ids else "builder"
                   # Legacy fallback ONLY when the commit carries no
                   # Paperclip-Agent trailer at all (pre-hook history).
                   # The hook never touches Co-authored-by lines, so a
-                  # Builder trailer + legacy QA line must NOT attribute.
+                  # Builder trailer + legacy QA line stays "builder".
                   for line in (message or "").splitlines():
                       if line.lower().startswith("co-authored-by:") and legacy_marker.search(line):
                           role = line.split(":", 1)[1].split("<", 1)[0]
                           if legacy_role.search(role):
-                              return True
-                  return False
+                              return "ta"
+                  return "unknown"
 
               rc, rev_out = sh("git", "rev-list", f"{base}..HEAD")
               if rc != 0:
@@ -357,7 +420,8 @@ jobs:
               shas = rev_out.splitlines()
               if test_files and not shas:
                   done("error", True, test_files, "empty commit range with test files touched", mode)
-              unattributed = {}
+              builder_shas = {}
+              unknown_shas = {}
               for sha in shas:
                   # --no-renames to match the aggregate diff: a rename of
                   # a test OUT of the globs must list the deleted test
@@ -372,21 +436,38 @@ jobs:
                   rc, msg = sh("git", "log", "-1", "--format=%B", sha)
                   if rc != 0:
                       done("error", True, test_files, f"git log failed on {sha[:7]}; refusing to report clean", mode)
-                  if not attributed(msg):
-                      unattributed[sha[:7]] = touched_tests
+                  state = classify(msg)
+                  if state == "builder":
+                      builder_shas[sha[:7]] = touched_tests
+                  elif state == "unknown":
+                      unknown_shas[sha[:7]] = touched_tests
 
               note_prefix = f"gate config {cfg_path} changed in this PR (judged by base policy); " if config_touched else ""
-              actor, actor_why = marker_actor()
-              if actor_why != "ok" and marker in labels:
-                  done("error", True, test_files, note_prefix + f"marker label unproven ({actor_why})", mode)
-              if actor or not unattributed:
-                  why = f"label `{marker}` applied by {actor}" if actor else "all test-touching commits test-author-attributed"
-                  done("attributed", False, test_files, note_prefix + why, mode)
-
-              detail = "; ".join(f"{s}: {', '.join(fs[:5])}" for s, fs in sorted(unattributed.items()))
-              if mode == "enforce":
-                  done("builder-touched", True, test_files, note_prefix + f"FAIL: Builder touched tests in enforce mode: {detail}", mode)
-              done("builder-touched", True, test_files, note_prefix + f"warn-only: would fail in enforce mode: {detail}", mode)
+              # A known Builder hand fails however labeled: the marker
+              # excuses unknown (pre-hook) provenance, never an explicit
+              # Builder trailer. Consulted first so the label path (and
+              # its API calls) is skipped when it cannot change the
+              # verdict.
+              if builder_shas:
+                  detail = "; ".join(f"{s}: {', '.join(fs[:5])}" for s, fs in sorted(builder_shas.items()))
+                  if mode == "enforce":
+                      done("builder-touched", True, test_files, note_prefix + f"FAIL: Builder touched tests in enforce mode: {detail}", mode)
+                  done("builder-touched", True, test_files, note_prefix + f"warn-only: would fail in enforce mode: {detail}", mode)
+              if unknown_shas:
+                  # The label is NEEDED here: prove it or fail closed.
+                  # (When every commit is TA-attributed the label is not
+                  # consulted at all, so a stale/self-applied label can
+                  # never poison a clean PR.)
+                  actor, actor_why = marker_actor()
+                  if actor:
+                      done("attributed", False, test_files, note_prefix + f"label `{marker}` applied by {actor} ({label_src})", mode)
+                  if marker in labels:
+                      done("error", True, test_files, note_prefix + f"marker label unproven ({actor_why})", mode)
+                  detail = "; ".join(f"{s}: {', '.join(fs[:5])}" for s, fs in sorted(unknown_shas.items()))
+                  if mode == "enforce":
+                      done("builder-touched", True, test_files, note_prefix + f"FAIL: Builder touched tests in enforce mode: {detail}", mode)
+                  done("builder-touched", True, test_files, note_prefix + f"warn-only: would fail in enforce mode: {detail}", mode)
+              done("attributed", False, test_files, note_prefix + "all test-touching commits test-author-attributed", mode)
           except SystemExit:
               raise
           except Exception as e:

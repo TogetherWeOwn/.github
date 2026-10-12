@@ -31,11 +31,20 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: test-guard-${{ github.event.pull_request.number || github.sha }}
+  # Distinct from the caller template's `test-guard-<n>` group: the
+  # rollout installs BOTH in each repo, and sharing one group with
+  # cancel-in-progress would let them cancel each other, leaving the
+  # required `test-guard` check cancelled instead of green/red.
+  group: test-guard-required-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
   guard:
+    # PINNED-PLACEHOLDER: replaced with the full pinned path
+    # (TogetherWeOwn/.github/.github/workflows/test-guard.yml@<sha>)
+    # in the commit right after this — the pin must name the commit
+    # that carries the reusable, so it cannot be written before it
+    # exists. Repin to the merge SHA on every reusable update.
     uses: ./.github/workflows/test-guard.yml
 
   # Keep id and name byte-identical: the required check name is `test-guard`.
