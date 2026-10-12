@@ -45,7 +45,7 @@ jobs:
     # full path+ref form is documented to resolve there. Pinned to the
     # commit that last touched the reusable (content-addressed, so a
     # pre-merge SHA stays correct); repin on every reusable update.
-    uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@f572cac250b397a46ea7fe710c94f6ef7c0f5875
+    uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@13f05c303204e45477aa25e056387e1052a663e5
 
   # Keep id and name byte-identical: the required check name is `test-guard`.
   test-guard:
