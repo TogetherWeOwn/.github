@@ -1,0 +1,259 @@
+# Reusable SDLC separation gate: the Builder must not modify acceptance
+# tests written by the Test Author (SDLC factory design, section (c)).
+#
+# Evidence: AgentCoder — a separate test designer gains a lot (HumanEval
+# 79.9% vs 71.3%, test accuracy 87.8% vs 61.0%). Enforcement here is a
+# deterministic permission boundary (git trailer + CI gate), NOT a new
+# session: a fresh session without a permission split is theatre.
+#
+# Lives in the org `.github` repo at `.github/workflows/test-guard.yml`.
+# Callers reference a pinned SHA:
+#   uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@<sha>
+#
+# What it does (stdlib python + git diff only, ~30s on ubuntu-latest):
+#   * diffs the PR against its merge base, matches changed files against
+#     the test globs (defaults cover **/*.test.*, **/*.spec.*,
+#     **/__tests__/**, tests/**, test/**, *_test.go, **/tests/*.rs;
+#     per-repo overrides in `.github/test-guard.json`);
+#   * classifies every commit touching test files by its
+#     `Paperclip-Agent: <agent-id>` trailer (appended by the host
+#     commit-msg hook; an id in `test-author-ids` proves the Test Author
+#     wrote it, with role-token and legacy co-author fallbacks);
+#   * passes when no test files are touched, or when the marker is proven:
+#     the PR carries the marker label (default `tests-by-test-author`, set
+#     by the Test Author/QA flow) or every test-touching commit is
+#     test-author-attributed;
+#   * otherwise warns (mode `warn`, the default) or fails (mode `enforce`).
+#
+# Rollout: warn mode org-wide first. Add the caller as a NON-required
+# check (required-check renames strand open PRs). Flip to enforce per repo
+# only after the Test Author flow is live and ~20 PRs show no false
+# positives: set `"mode": "enforce"` in that repo's
+# `.github/test-guard.json`. Do NOT flip the default here until then.
+# The `would_fail` output lets you count would-be failures while in warn.
+#
+# Attribution contract (agents were NOT distinguishable in commits: Oct
+# 2026 commits are all author=committer=Rick7C2 with one generic
+# `Co-Authored-By: Paperclip <noreply@paperclip.ing>` trailer; per-role
+# `Co-authored-by: <Role> (Paperclip agent)` trailers seen Sep 2026 had
+# regressed away). Fixed at ONE host-side choke point (owner decision
+# 2026-10-12, no per-agent config): the host commit-msg hook at
+# core.hooksPath appends `Paperclip-Agent: <agent-id>` and
+# `Paperclip-Run: <run-id>` to every agent commit (both ids come from the
+# run env PAPERCLIP_AGENT_ID / PAPERCLIP_RUN_ID; idempotent, fail-open,
+# never invokes git, so it is clear of the per-run shim recursion trap).
+# Test Author id: 2c980cec-9df5-40a3-80c5-00b3b9448fbb; if the Test Author
+# agent is ever replaced, update `test-author-ids` (input or repo config),
+# not this file. Commits before the hook carry no trailer and count as
+# builder-touched, so the gate MUST stay in warn mode until ~20 PRs carry
+# correct trailers with no false positives.
+#
+# Inputs are JSON strings where they carry structure, mirroring
+# changes.yml. A repo-local `.github/test-guard.json` overrides the
+# inputs when present: {"testGlobs": [...], "mode": "warn"|"enforce",
+# "markerLabel": "...", "testAuthorTokens": ["test-author", ...],
+# "testAuthorIds": ["2c980cec-9df5-40a3-80c5-00b3b9448fbb"]}.
+# Outputs: `verdict` is clean|attributed|builder-touched|error;
+# `would_fail` is 'true' when enforce mode would fail this PR.
+
+name: test-guard (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: '"warn" (default, never fails) or "enforce". Repo config file wins when present.'
+        required: false
+        default: "warn"
+        type: string
+      test-globs-json:
+        description: 'JSON array of globs for test files. Repo config file wins when present.'
+        required: false
+        default: '["**/*.test.*", "**/*.spec.*", "**/__tests__/**", "tests/**", "**/tests/**", "test/**", "**/test/**", "*_test.go", "**/tests/*.rs"]'
+        type: string
+      config-path:
+        description: "Repo-local override file, relative to repo root."
+        required: false
+        default: ".github/test-guard.json"
+        type: string
+      marker-label:
+        description: "PR label proving Test Author ownership. Repo config file wins when present."
+        required: false
+        default: "tests-by-test-author"
+        type: string
+      test-author-tokens:
+        description: 'Comma-separated Paperclip-Agent role tokens that prove Test Author ownership (fallback for role-named trailers). Repo config file wins when present.'
+        required: false
+        default: "test-author"
+        type: string
+      test-author-ids:
+        description: 'Comma-separated Paperclip agent-UUIDs that prove Test Author ownership (primary key: the Paperclip-Agent trailer carries the agent id, appended by the host commit-msg hook). Repo config file wins when present.'
+        required: false
+        default: "2c980cec-9df5-40a3-80c5-00b3b9448fbb"
+        type: string
+    outputs:
+      verdict:
+        description: "clean|attributed|builder-touched|error"
+        value: ${{ jobs.guard.outputs.verdict }}
+      would_fail:
+        description: "'true' when enforce mode would fail this PR."
+        value: ${{ jobs.guard.outputs.would_fail }}
+      test_files:
+        description: "JSON array of changed test files."
+        value: ${{ jobs.guard.outputs.test_files }}
+
+jobs:
+  guard:
+    # Keep the required-check name byte-identical to the id: a future
+    # org ruleset will require `test-guard`, and renames strand open PRs.
+    name: test-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      verdict: ${{ steps.check.outputs.verdict }}
+      would_fail: ${{ steps.check.outputs.would_fail }}
+      test_files: ${{ steps.check.outputs.test_files }}
+    steps:
+      # Pinned: actions/checkout v4.2.2. Repin with the SHA, never a moving tag.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Check test-file ownership
+        id: check
+        env:
+          MODE: ${{ inputs.mode }}
+          TEST_GLOBS_JSON: ${{ inputs.test-globs-json }}
+          CONFIG_PATH: ${{ inputs.config-path }}
+          MARKER_LABEL: ${{ inputs.marker-label }}
+          TEST_AUTHOR_TOKENS: ${{ inputs.test-author-tokens }}
+          TEST_AUTHOR_IDS: ${{ inputs.test-author-ids }}
+          EVENT_BASE: ${{ github.base_ref }}
+        run: |-
+          python3 - <<'PYEOF'
+          import json, os, re, subprocess, sys
+          from pathlib import PurePosixPath
+
+          def sh(*args):
+              return subprocess.run(args, capture_output=True, text=True).stdout.strip()
+
+          def out(name, value):
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write(f"{name}={value}\n")
+
+          def summary(lines):
+              with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a") as f:
+                  f.write("\n".join(lines) + "\n")
+
+          def finish(verdict, would_fail, test_files, note):
+              out("verdict", verdict)
+              out("would_fail", "true" if would_fail else "false")
+              out("test_files", json.dumps(sorted(test_files)))
+              summary([
+                  "## test-guard",
+                  f"- verdict: `{verdict}`",
+                  f"- would_fail (enforce): `{str(would_fail).lower()}`",
+                  f"- test files touched: `{len(test_files)}`",
+                  f"- note: {note}",
+              ])
+              for t in sorted(test_files)[:20]:
+                  summary([f"  - `{t}`"])
+
+          mode = os.environ.get("MODE", "warn").strip().lower()
+          globs = json.loads(os.environ.get("TEST_GLOBS_JSON", "[]"))
+          marker = os.environ.get("MARKER_LABEL", "tests-by-test-author").strip().lower()
+          tokens = [t.strip().lower() for t in os.environ.get("TEST_AUTHOR_TOKENS", "test-author").split(",") if t.strip()]
+          ids = [t.strip().lower() for t in os.environ.get("TEST_AUTHOR_IDS", "").split(",") if t.strip()]
+
+          # Repo-local override file wins over inputs when present.
+          cfg_path = os.environ.get("CONFIG_PATH", ".github/test-guard.json")
+          cfg_src = "inputs"
+          if os.path.isfile(cfg_path):
+              try:
+                  cfg = json.load(open(cfg_path))
+                  if isinstance(cfg.get("testGlobs"), list) and cfg["testGlobs"]:
+                      globs = cfg["testGlobs"]
+                  if str(cfg.get("mode", "")).lower() in ("warn", "enforce"):
+                      mode = str(cfg["mode"]).lower()
+                  if str(cfg.get("markerLabel", "")).strip():
+                      marker = str(cfg["markerLabel"]).strip().lower()
+                  if isinstance(cfg.get("testAuthorTokens"), list) and cfg["testAuthorTokens"]:
+                      tokens = [str(t).strip().lower() for t in cfg["testAuthorTokens"] if str(t).strip()]
+                  if isinstance(cfg.get("testAuthorIds"), list) and cfg["testAuthorIds"]:
+                      ids = [str(t).strip().lower() for t in cfg["testAuthorIds"] if str(t).strip()]
+                  cfg_src = cfg_path
+              except Exception as e:
+                  print(f"::warning::test-guard: ignoring unreadable {cfg_path}: {e}")
+
+          def is_test(path):
+              p = PurePosixPath(path)
+              return any(p.match(g) for g in globs)
+
+          # PR labels prove Test Author ownership (label is set by the
+          # Test Author/QA flow, not by the Builder).
+          labels = []
+          try:
+              event = json.load(open(os.environ["GITHUB_EVENT_PATH"]))
+              pr = event.get("pull_request") or {}
+              labels = [(l.get("name") or "").lower() for l in (pr.get("labels") or [])]
+          except Exception as e:
+              print(f"::warning::test-guard: could not read event labels: {e}")
+
+          base_ref = os.environ.get("EVENT_BASE") or "main"
+          base = sh("git", "merge-base", "HEAD", f"origin/{base_ref}")
+          if not base:
+              base = sh("git", "rev-parse", f"origin/{base_ref}")
+          if not base:
+              msg = "no base ref available; failing open"
+              print(f"::warning::test-guard: {msg}")
+              finish("error", True, set(), msg)
+              sys.exit(0)
+
+          files = [f for f in sh("git", "diff", "--name-only", "--no-renames", f"{base}...HEAD").splitlines() if f]
+          test_files = {f for f in files if is_test(f)}
+          if not test_files:
+              finish("clean", False, set(), f"no test files touched (globs from {cfg_src})")
+              sys.exit(0)
+
+          trailer_re = re.compile(r"^paperclip-agent:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+          # Legacy fallback: Sep-2026 style per-role co-authors, e.g.
+          # "Co-authored-by: Director of Engineering (Paperclip agent) <...>".
+          legacy_re = re.compile(r"\(paperclip agent\)", re.IGNORECASE)
+
+          def attributed(message):
+              m = trailer_re.search(message or "")
+              if m and (m.group(1).lower() in ids or m.group(1).lower() in tokens):
+                  return True
+              for line in (message or "").splitlines():
+                  if line.lower().startswith("co-authored-by:") and legacy_re.search(line):
+                      name = line.split(":", 1)[1].lower()
+                      if "test" in name or name.strip().startswith("qa"):
+                          return True
+              return False
+
+          shas = sh("git", "rev-list", f"{base}..HEAD").splitlines()
+          unattributed = {}
+          for sha in shas:
+              touched = sh("git", "show", "--pretty=format:", "--name-only", sha).splitlines()
+              touched_tests = sorted({f for f in touched if f and is_test(f)})
+              if not touched_tests:
+                  continue
+              msg = sh("git", "log", "-1", "--format=%B", sha)
+              if not attributed(msg):
+                  unattributed[sha[:7]] = touched_tests
+
+          if marker in labels or not unattributed:
+              why = f"label `{marker}` present" if marker in labels else "all test-touching commits test-author-attributed"
+              finish("attributed", False, test_files, why)
+              sys.exit(0)
+
+          detail = "; ".join(f"{s}: {', '.join(fs[:5])}" for s, fs in sorted(unattributed.items()))
+          if mode == "enforce":
+              print(f"::error::test-guard: Builder commits touch test files without Test Author attribution: {detail}")
+              finish("builder-touched", True, test_files, "FAIL: Builder touched tests in enforce mode")
+              sys.exit(1)
+
+          print(f"::warning::test-guard: [warn-only] Builder commits touch test files without Test Author attribution: {detail}")
+          finish("builder-touched", True, test_files, "warn-only: would fail in enforce mode")
+          sys.exit(0)
+          PYEOF

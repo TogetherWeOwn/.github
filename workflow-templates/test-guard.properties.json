@@ -1,0 +1,5 @@
+{
+  "name": "test-guard",
+  "description": "SDLC separation gate: warn when Builder commits touch Test Author acceptance tests (TogetherWeOwn standard).",
+  "iconName": "octicon shield-check"
+}
