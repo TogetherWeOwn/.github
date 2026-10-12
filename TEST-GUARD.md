@@ -81,7 +81,11 @@ No secrets, no paid minutes beyond a ~30s ubuntu-latest run.
 }
 ```
 
-All keys optional. Present keys beat the workflow inputs.
+All keys optional. Present keys beat the workflow inputs. Trust: the
+file is read from the BASE ref, never the PR head, so a PR cannot
+neuter its own gate (narrower globs, weaker mode, extra author ids).
+A PR that adds or edits this file is judged by the base policy and
+flagged in the step summary; the change takes effect for later PRs.
 
 ## Rollout
 
