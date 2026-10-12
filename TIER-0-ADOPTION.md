@@ -30,16 +30,18 @@ Add the caller job name (`tier-0`) to the repo's required aggregator
 `needs:` list. `tier-0-ok` is the gate's only aggregator — never wire an
 individual gate job into a required set. In `report-only` mode `tier-0-ok`
 always passes; findings land in the step summary and the
-`tier-0-findings` artifact.
+`tier-0-findings` artifact (`needs.json` plus per-step `gate-results.json`).
 
 ## Rollout: report-only 24h, then required
 
 1. Land the caller in `report-only` (default). The workflow never fails the
-   run for its own findings — every gate job sets `continue-on-error`.
-2. After 24h, read the `tier-0-findings` artifacts across PRs. A gate whose
-   false-positive rate over the last 20 PRs measures under 5% flips to
-   `mode: enforcing` (whole gate first; per-gate inputs when the workflow
-   grows them).
+   run for its own findings — each check step tolerates failure in
+   `report-only` mode while recording its real outcome.
+2. After 24h, read the `tier-0-findings` artifacts across PRs
+   (`gate-results.json` carries the real per-step outcomes; `needs.json`
+   alone is not enough). A gate whose false-positive rate over the last
+   20 PRs measures under 5% flips to `mode: enforcing` (whole gate first;
+   per-gate inputs when the workflow grows them).
 3. The org ruleset requires `ci-ok` on every active repo,
    so the gate rides the existing required check — no branch-protection
    edit per repo.
