@@ -335,11 +335,14 @@ jobs:
               except Exception as e:
                   print(f"::warning::test-guard: could not read event labels: {e}")
 
-              # merge_group carries its target in the payload; prefer the
-              # API result, then the payload, then main, so a non-main
-              # repo reads the right base config (and the same enforce
-              # verdict) in the queue re-run as on the PR event.
-              mg_base = str((mg.get("base_ref") or ""))
+              # merge_group carries its target in the payload as a full ref
+              # (`refs/heads/main`); prefer the API result, then the
+              # payload (prefix-stripped — `origin/refs/heads/main` does
+              # not exist), then main, so a non-main repo reads the right
+              # base config (and the same enforce verdict) in the queue
+              # re-run as on the PR event.
+              mg_raw = str((mg.get("base_ref") or ""))
+              mg_base = mg_raw[len("refs/heads/"):] if mg_raw.startswith("refs/heads/") else mg_raw
               base_ref = os.environ.get("EVENT_BASE") or api_base or mg_base or "main"
 
               # Config trust: the PR under test must not control its own
