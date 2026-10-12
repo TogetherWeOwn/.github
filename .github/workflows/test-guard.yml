@@ -17,10 +17,14 @@
 #     *_test.go, **/tests/*.rs; per-repo overrides in
 #     `.github/test-guard.json`). fnmatch, not PurePath.match: the
 #     latter treats ** as one component and misses nested files;
-#   * classifies every commit touching test files by its
-#     `Paperclip-Agent: <agent-id>` trailer (appended by the host
-#     commit-msg hook; an id in `test-author-ids` proves the Test Author
-#     wrote it, with role-token and legacy co-author fallbacks);
+#   * classifies every commit touching test files by its LAST
+#     `Paperclip-Agent: <agent-id>` trailer (the host commit-msg hook
+#     appends — and overwrites pre-existing — trailers from the run env,
+#     so the last line is the hook's; an id in `test-author-ids` proves
+#     the Test Author wrote it, with a legacy co-author fallback for
+#     pre-hook history). Trailers are advisory: a deliberately forged
+#     trailer passes the gate; the boundary is the hook (platform-set
+#     env, overwrite semantics, audit log), not the string;
 #   * passes when no test files are touched, or when the marker is proven:
 #     the PR carries the marker label (default `tests-by-test-author`, set
 #     by the Test Author/QA flow) or every test-touching commit is
@@ -41,9 +45,12 @@
 # regressed away). Fixed at ONE host-side choke point (owner decision
 # 2026-10-12, no per-agent config): the host commit-msg hook at
 # core.hooksPath appends `Paperclip-Agent: <agent-id>` and
-# `Paperclip-Run: <run-id>` to every agent commit (both ids come from the
-# run env PAPERCLIP_AGENT_ID / PAPERCLIP_RUN_ID; idempotent, fail-open,
-# never invokes git, so it is clear of the per-run shim recursion trap).
+# `Paperclip-Run: <run-id>` to every agent commit and OVERWRITES any
+# pre-existing Paperclip-Agent/Run trailer lines with the run-env values
+# (both ids come from PAPERCLIP_AGENT_ID / PAPERCLIP_RUN_ID; idempotent
+# when identical, fail-open, never invokes git, so it is clear of the
+# per-run shim recursion trap). The gate reads the LAST trailer line,
+# which post-hook is always the hook's — a forged earlier line loses.
 # Test Author id: 2c980cec-9df5-40a3-80c5-00b3b9448fbb; if the Test Author
 # agent is ever replaced, update `test-author-ids` (input or repo config),
 # not this file. Commits before the hook carry no trailer and count as
@@ -53,11 +60,20 @@
 # Inputs are JSON strings where they carry structure, mirroring
 # changes.yml. A repo-local `.github/test-guard.json` overrides the
 # inputs when present: {"testGlobs": [...], "mode": "warn"|"enforce",
-# "markerLabel": "...", "testAuthorTokens": ["test-author", ...],
+# "markerLabel": "...",
 # "testAuthorIds": ["2c980cec-9df5-40a3-80c5-00b3b9448fbb"]}.
-# Trust: the config is read from the BASE ref, never the PR head, so a
-# PR cannot neuter its own gate. A PR that touches the config path is
-# judged by the base policy and flagged in the summary.
+# Trust (read carefully — this overstates nothing):
+#   * the config is read from the BASE ref at the HARD-CODED path
+#     .github/test-guard.json (no config-path input to retarget), so a
+#     PR cannot neuter its gate via the config file. A PR that touches
+#     the config path is judged by the base policy and flagged;
+#   * BUT on pull_request events the caller workflow comes from the PR
+#     itself, so a PR-edited caller (mode/test-globs inputs) can still
+#     weaken its own run. Enforce is therefore trustworthy ONLY when the
+#     gate runs as an org-ruleset required workflow (sourced from this
+#     repo at a pinned ref) or when the caller + config are
+#     CODEOWNERS-protected. Step 4 of the rollout requires the WORKFLOW,
+#     not just the check name. Until then: warn mode, no security claim.
 # Outputs: `verdict` is clean|attributed|builder-touched|error;
 # `would_fail` is 'true' when enforce mode would fail this PR.
 
@@ -76,20 +92,10 @@ on:
         required: false
         default: '["**/*.test.*", "**/*.spec.*", "**/__tests__/**", "tests/**", "**/tests/**", "test/**", "**/test/**", "*_test.go", "**/tests/*.rs"]'
         type: string
-      config-path:
-        description: "Repo-local override file, relative to repo root."
-        required: false
-        default: ".github/test-guard.json"
-        type: string
       marker-label:
         description: "PR label proving Test Author ownership. Repo config file wins when present."
         required: false
         default: "tests-by-test-author"
-        type: string
-      test-author-tokens:
-        description: 'Comma-separated Paperclip-Agent role tokens that prove Test Author ownership (fallback for role-named trailers). Repo config file wins when present.'
-        required: false
-        default: "test-author"
         type: string
       test-author-ids:
         description: 'Comma-separated Paperclip agent-UUIDs that prove Test Author ownership (primary key: the Paperclip-Agent trailer carries the agent id, appended by the host commit-msg hook). Repo config file wins when present.'
@@ -129,9 +135,7 @@ jobs:
         env:
           MODE: ${{ inputs.mode }}
           TEST_GLOBS_JSON: ${{ inputs.test-globs-json }}
-          CONFIG_PATH: ${{ inputs.config-path }}
           MARKER_LABEL: ${{ inputs.marker-label }}
-          TEST_AUTHOR_TOKENS: ${{ inputs.test-author-tokens }}
           TEST_AUTHOR_IDS: ${{ inputs.test-author-ids }}
           EVENT_BASE: ${{ github.base_ref }}
         run: |-
@@ -193,11 +197,12 @@ jobs:
               if not isinstance(globs, list) or not all(isinstance(g, str) for g in globs):
                   raise ValueError("bad test-globs-json: want a JSON array of strings")
               marker = os.environ.get("MARKER_LABEL", "tests-by-test-author").strip().lower()
-              tokens = [t.strip().lower() for t in os.environ.get("TEST_AUTHOR_TOKENS", "test-author").split(",") if t.strip()]
               ids = [t.strip().lower() for t in os.environ.get("TEST_AUTHOR_IDS", "").split(",") if t.strip()]
 
               base_ref = os.environ.get("EVENT_BASE") or "main"
-              cfg_path = os.environ.get("CONFIG_PATH", ".github/test-guard.json")
+              # Hard-coded: no config-path input to retarget (a PR-edited
+              # caller must not be able to point the gate at /dev/null).
+              cfg_path = ".github/test-guard.json"
 
               # Config trust: the PR under test must not control its own
               # gate policy, so the config is read from the BASE ref, not
@@ -215,8 +220,6 @@ jobs:
                           mode = str(cfg["mode"]).lower()
                       if str(cfg.get("markerLabel", "")).strip():
                           marker = str(cfg["markerLabel"]).strip().lower()
-                      if isinstance(cfg.get("testAuthorTokens"), list) and cfg["testAuthorTokens"]:
-                          tokens = [str(t).strip().lower() for t in cfg["testAuthorTokens"] if str(t).strip()]
                       if isinstance(cfg.get("testAuthorIds"), list) and cfg["testAuthorIds"]:
                           ids = [str(t).strip().lower() for t in cfg["testAuthorIds"] if str(t).strip()]
                       cfg_src = f"origin/{base_ref}:{cfg_path}"
@@ -252,10 +255,13 @@ jobs:
               if rc != 0 or not base:
                   done("error", True, set(), "no base ref available", mode)
 
-              rc, diff_out = sh("git", "diff", "--name-only", "--no-renames", f"{base}...HEAD")
+              # -z throughout: NUL-separated raw paths. Default quotepath
+              # renders non-ASCII paths as "quoted octal" (tests/caf\E9..),
+              # which evades anchored globs; -z emits them raw.
+              rc, diff_out = sh("git", "-c", "core.quotepath=false", "diff", "--name-only", "-z", "--no-renames", f"{base}...HEAD")
               if rc != 0:
                   done("error", True, set(), "git diff failed; refusing to report clean", mode)
-              files = [f for f in diff_out.splitlines() if f]
+              files = [f for f in diff_out.split("\0") if f]
               # A PR that edits the gate config is judged by the base
               # policy above; flag it so reviewers look twice.
               config_touched = cfg_path in files
@@ -272,8 +278,13 @@ jobs:
               legacy_role = re.compile(r"(?:^|[\s\-_/])(test-author|test author|testauthor|\bqa\b)(?:$|[\s\-_/])", re.IGNORECASE)
 
               def attributed(message):
-                  m = trailer_re.search(message or "")
-                  if m and (m.group(1).lower() in ids or m.group(1).lower() in tokens):
+                  # LAST trailer wins: the host hook overwrites/appends
+                  # from the run env, so the last Paperclip-Agent line is
+                  # the hook's; a forged earlier line loses. (A lone forged
+                  # line still passes — trailers are advisory; the hook's
+                  # overwrite + audit log is the boundary. See header.)
+                  hits = trailer_re.findall(message or "")
+                  if hits and hits[-1].lower() in ids:
                       return True
                   for line in (message or "").splitlines():
                       if line.lower().startswith("co-authored-by:") and legacy_marker.search(line):
@@ -290,10 +301,14 @@ jobs:
                   done("error", True, test_files, "empty commit range with test files touched", mode)
               unattributed = {}
               for sha in shas:
-                  rc, touched_out = sh("git", "show", "--pretty=format:", "--name-only", sha)
+                  # --no-renames to match the aggregate diff: a rename of
+                  # a test OUT of the globs must list the deleted test
+                  # path (rename detection would show only the new path
+                  # and the commit would slip through as non-test).
+                  rc, touched_out = sh("git", "-c", "core.quotepath=false", "show", "--pretty=format:", "--name-only", "-z", "--no-renames", sha)
                   if rc != 0:
                       done("error", True, test_files, f"git show failed on {sha[:7]}; refusing to report clean", mode)
-                  touched_tests = sorted({f for f in touched_out.splitlines() if f and is_test(f)})
+                  touched_tests = sorted({f for f in touched_out.split("\0") if f and is_test(f)})
                   if not touched_tests:
                       continue
                   rc, msg = sh("git", "log", "-1", "--format=%B", sha)

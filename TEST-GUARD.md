@@ -14,10 +14,16 @@ ownership is proven: the PR carries the marker label (default
 test-touching commit carries a Test Author `Paperclip-Agent` trailer.
 Otherwise it warns (`warn` mode, the default) or fails (`enforce` mode).
 
-A commit is Test Author-attributed when its `Paperclip-Agent:` trailer
-value matches an id in `test-author-ids` (primary; appended by the host
-commit-msg hook from the run env) or a token in `test-author-tokens`
-(fallback), or carries a legacy test/QA `(Paperclip agent)` co-author.
+A commit is Test Author-attributed when its LAST `Paperclip-Agent:`
+trailer value matches an id in `test-author-ids` (the host commit-msg
+hook appends trailers from the run env and overwrites pre-existing
+ones, so the last line is the hook's), or carries a legacy test/QA
+`(Paperclip agent)` co-author (pre-hook history only).
+Trailers are advisory: a deliberately forged lone trailer passes the
+gate. The boundary is the hook — platform-set env, overwrite semantics,
+audit log — not the string. Deliberate forgery means tampering with the
+run env, which is auditable, not a role mix-up, which is what this gate
+catches.
 
 ## Attribution (live)
 
@@ -50,8 +56,10 @@ tests/**, **/tests/**, test/**, **/test/**,
 name: test-guard
 
 on:
+  # labeled/unlabeled: the marker label is usually set after the PR
+  # exists; without these the gate never re-evaluates a fresh label.
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -81,11 +89,19 @@ No secrets, no paid minutes beyond a ~30s ubuntu-latest run.
 }
 ```
 
-All keys optional. Present keys beat the workflow inputs. Trust: the
-file is read from the BASE ref, never the PR head, so a PR cannot
-neuter its own gate (narrower globs, weaker mode, extra author ids).
-A PR that adds or edits this file is judged by the base policy and
-flagged in the step summary; the change takes effect for later PRs.
+All keys optional (`testGlobs`, `mode`, `markerLabel`,
+`testAuthorIds`). Present keys beat the workflow inputs. Trust,
+stated precisely: the file is read from the BASE ref at the hard-coded
+path `.github/test-guard.json`, so a PR cannot neuter its gate via the
+config file. But on `pull_request` events the caller workflow comes
+from the PR itself, so a PR-edited caller (mode/globs inputs) can still
+weaken its own run. Enforce is therefore trustworthy ONLY as an
+org-ruleset required workflow (sourced from the `.github` repo at a
+pinned ref) or with caller + config CODEOWNERS-protected. Rollout step
+4 requires the WORKFLOW, not just the check name. Until then the gate
+is warn-mode tripwire, not a security boundary.
+A PR that adds or edits the config file is judged by the base policy
+and flagged in the step summary; the change takes effect for later PRs.
 
 ## Rollout
 
@@ -94,15 +110,27 @@ flagged in the step summary; the change takes effect for later PRs.
    paperclip-ops-tooling, paperclip-plugin-model-capacity.
 2. Watch `would_fail`/`verdict` outputs for ~20 PRs carrying correct
    trailers; false positives must be zero.
-3. Flip per repo with a one-line PR (do NOT flip the default here first):
+3. Flip per repo by committing a NEW config file (repos start without
+   one; do NOT flip the default here first):
 
 ```sh
 # flip <repo> to enforce (after Test Author flow live + ~20 clean PRs)
 git clone <repo> && cd <repo> &&
-  python3 -c "import json;p='.github/test-guard.json';d=json.load(open(p));d['mode']='enforce';json.dump(d,open(p,'w'),indent=2)" 
+  cat > .github/test-guard.json <<'EOF'
+{
+  "mode": "enforce"
+}
+EOF
+  git add .github/test-guard.json && git commit -m "ci(test-guard): enforce Builder/Test-Author separation" && git push
 ```
 
-4. Only then, optionally require `test-guard` in the org ruleset.
+   The flip PR itself is judged by the old (warn) policy since the
+   config is read from the base ref; enforce bites from the next PR on.
+
+4. Only then, optionally add an org-ruleset REQUIRED WORKFLOW for
+   `test-guard` (sourced from this repo at a pinned ref) — requiring
+   the check NAME alone is not enough, since a PR-edited caller can
+   satisfy a name check with weakened inputs.
 
 ## Rollback
 

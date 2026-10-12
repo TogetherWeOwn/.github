@@ -10,8 +10,10 @@ name: test-guard
 # Do NOT add this check to any ruleset until the repo flips to enforce.
 
 on:
+  # labeled/unlabeled: the marker label is usually set after the PR
+  # exists; without these the gate never re-evaluates a fresh label.
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
 
 permissions:
   contents: read
