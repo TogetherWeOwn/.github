@@ -1,10 +1,10 @@
 # Thin pull_request wrapper so an org ruleset can require the test-guard
 # WORKFLOW (not just the check name). Ruleset required workflows need
 # their own pull_request/merge_group trigger — they cannot target the
-# workflow_call-only reusable directly. Calls the local reusable by
-# relative path so both version together (no SHA chicken-egg; if the
-# ruleset runner ever rejects relative refs, switch to the pinned
-# TogetherWeOwn/.github form and repin on updates).
+# workflow_call-only reusable directly. Calls the reusable by full
+# pinned path+ref so it resolves identically as a normal workflow and
+# as a ruleset required workflow; repin the `uses:` SHA on every
+# reusable update (it must name a commit carrying the reusable).
 #
 # Check-name mechanics: a direct reusable call would report as
 # "guard / test-guard". The `test-guard` aggregator below (org ci-ok
@@ -40,12 +40,12 @@ concurrency:
 
 jobs:
   guard:
-    # PINNED-PLACEHOLDER: replaced with the full pinned path
-    # (TogetherWeOwn/.github/.github/workflows/test-guard.yml@<sha>)
-    # in the commit right after this — the pin must name the commit
-    # that carries the reusable, so it cannot be written before it
-    # exists. Repin to the merge SHA on every reusable update.
-    uses: ./.github/workflows/test-guard.yml
+    # Full pinned self-reference (not ./...): ruleset required
+    # workflows execute from this repo at a pinned ref, and only the
+    # full path+ref form is documented to resolve there. Pinned to the
+    # commit that last touched the reusable (content-addressed, so a
+    # pre-merge SHA stays correct); repin on every reusable update.
+    uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@dcd18713a9fa5c15f66dc84d1ad2311ae9a21760
 
   # Keep id and name byte-identical: the required check name is `test-guard`.
   test-guard:
