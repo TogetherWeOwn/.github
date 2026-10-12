@@ -10,7 +10,9 @@
 # Callers reference a pinned SHA:
 #   uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@<sha>
 #
-# What it does (stdlib python + git diff only, ~30s on ubuntu-latest):
+# What it does (stdlib python under `python3 -I` + git diff only,
+# ~30s on ubuntu-latest; -I so a PR-planted root module cannot shadow
+# the stdlib):
 #   * diffs the PR against its merge base, matches changed files against
 #     the test globs with fnmatch on the full posix path (defaults cover
 #     **/*.test.*, **/*.spec.*, **/__tests__/**, tests/**, test/**,
@@ -33,7 +35,9 @@
 #     history only — when the marker label (default
 #     `tests-by-test-author`, set by the Test Author/QA flow) is proven:
 #     present AND applied by someone other than the PR author (actor from
-#     the issue-events API, so the Builder cannot self-label). An explicit
+#     the issue-events API, so the Builder cannot self-label; labels are
+#     refreshed from the pulls API each run since re-runs keep a stale
+#     event, and the merge_group base comes from the API too). An explicit
 #     Builder trailer fails the gate even when the label is present (the
 #     label excuses unknown provenance, never a known Builder hand), and
 #     an unprovable-but-needed label is an error, never a silent pass. A
@@ -141,6 +145,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      # `python3 -I -`: isolated mode. The step runs on the PR checkout,
+      # so without -I a PR could plant a root-level `fnmatch.py` (or set
+      # PYTHONPATH) and shadow the stdlib the gate imports, turning an
+      # enforce failure into `clean`. -I drops the cwd/script-dir from
+      # sys.path and ignores PYTHON* / user site; the script needs only
+      # stdlib + env + absolute paths, so nothing else changes.
       - name: Check test-file ownership
         id: check
         env:
@@ -153,7 +163,7 @@ jobs:
           # Callers must grant pull-requests: read (see template).
           GH_TOKEN: ${{ github.token }}
         run: |-
-          python3 - <<'PYEOF'
+          python3 -I - <<'PYEOF'
           import fnmatch, json, os, re, subprocess, sys
 
           def sh(*args):
@@ -221,35 +231,13 @@ jobs:
               marker = os.environ.get("MARKER_LABEL", "tests-by-test-author").strip().lower()
               ids = [t.strip().lower() for t in os.environ.get("TEST_AUTHOR_IDS", "").split(",") if t.strip()]
 
-              base_ref = os.environ.get("EVENT_BASE") or "main"
               # Hard-coded: no config-path input to retarget (a PR-edited
               # caller must not be able to point the gate at /dev/null).
               cfg_path = ".github/test-guard.json"
-
-              # Config trust: the PR under test must not control its own
-              # gate policy, so the config is read from the BASE ref, not
-              # the PR working tree. A PR that adds or edits the config is
-              # judged by the base policy; the change takes effect for
-              # LATER PRs (so the flip-to-enforce PR itself still passes).
-              cfg_src = "inputs"
-              rc, cfg_text = sh("git", "show", f"origin/{base_ref}:{cfg_path}")
-              if rc == 0:
-                  try:
-                      cfg = json.loads(cfg_text)
-                      for k in (cfg or {}):
-                          if k not in ("testGlobs", "mode", "markerLabel", "testAuthorIds"):
-                              print(f"::warning::test-guard: ignoring unknown config key {k!r}")
-                      if isinstance(cfg.get("testGlobs"), list) and cfg["testGlobs"]:
-                          globs = [str(g) for g in cfg["testGlobs"] if str(g)]
-                      if str(cfg.get("mode", "")).lower() in ("warn", "enforce"):
-                          mode = str(cfg["mode"]).lower()
-                      if str(cfg.get("markerLabel", "")).strip():
-                          marker = str(cfg["markerLabel"]).strip().lower()
-                      if isinstance(cfg.get("testAuthorIds"), list) and cfg["testAuthorIds"]:
-                          ids = [str(t).strip().lower() for t in cfg["testAuthorIds"] if str(t).strip()]
-                      cfg_src = f"origin/{base_ref}:{cfg_path}"
-                  except Exception as e:
-                      print(f"::warning::test-guard: ignoring unreadable base config: {e}")
+              # base_ref + base config resolve AFTER the PR lookup below:
+              # on merge_group events github.base_ref is empty and the
+              # true base comes from the pulls API (master-default repos
+              # would otherwise error against a nonexistent origin/main).
 
               def is_test(path):
                   # fnmatch on the full posix path (fnmatch '*' crosses
@@ -307,6 +295,7 @@ jobs:
               labels = []
               pr_number = None
               pr_author = ""
+              api_base = ""
               label_src = "event payload"
               repo_full = os.environ.get("GITHUB_REPOSITORY", "")
               has_token = bool(os.environ.get("GH_TOKEN"))
@@ -320,21 +309,57 @@ jobs:
                   mg = event.get("merge_group") or {}
                   mg_sha = mg.get("head_sha") or ""
                   if pr_number is None and mg_sha and repo_full and has_token:
-                      # merge_group: resolve the PR behind the queue head.
+                      # merge_group: resolve the PR behind the queue head
+                      # (best-effort; the merge queue is off as of 2026-10,
+                      # so this path is unexercised live and fails closed
+                      # below when the label is actually needed).
                       ok, pulls = gh_paged(f"repos/{repo_full}/commits/{mg_sha}/pulls?per_page=100")
                       pr0 = (pulls or [{}])[0]
                       if ok and pr0.get("number"):
                           pr_number = pr0.get("number")
                           pr_author = ((pr0.get("user") or {}).get("login") or "").lower()
-                          ok2, prdoc = gh_paged(f"repos/{repo_full}/pulls/{pr_number}")
-                          if ok2 and prdoc:
-                              labels = [(l.get("name") or "").lower()
-                                        for l in ((prdoc[0] or {}).get("labels") or [])]
-                              label_src = f"pulls API (merge_group {mg_sha[:7]})"
-                      if pr_number is None:
+                      else:
                           print("::warning::test-guard: merge_group PR resolution failed; label path unavailable")
+                  if pr_number and repo_full and has_token:
+                      # Fresh labels + base from the API, not the payload:
+                      # a re-run keeps its original event, so payload labels
+                      # go stale and a late label would need a new push.
+                      # Payload stays as the fallback when the API fails.
+                      ok2, prdoc = gh_paged(f"repos/{repo_full}/pulls/{pr_number}")
+                      if ok2 and prdoc and isinstance(prdoc[0], dict):
+                          labels = [(l.get("name") or "").lower()
+                                    for l in ((prdoc[0] or {}).get("labels") or [])]
+                          api_base = str((((prdoc[0] or {}).get("base") or {}).get("ref")) or "")
+                          label_src = "pulls API"
               except Exception as e:
                   print(f"::warning::test-guard: could not read event labels: {e}")
+
+              base_ref = os.environ.get("EVENT_BASE") or api_base or "main"
+
+              # Config trust: the PR under test must not control its own
+              # gate policy, so the config is read from the BASE ref, not
+              # the PR working tree. A PR that adds or edits the config is
+              # judged by the base policy; the change takes effect for
+              # LATER PRs (so the flip-to-enforce PR itself still passes).
+              cfg_src = "inputs"
+              rc, cfg_text = sh("git", "show", f"origin/{base_ref}:{cfg_path}")
+              if rc == 0:
+                  try:
+                      cfg = json.loads(cfg_text)
+                      for k in (cfg or {}):
+                          if k not in ("testGlobs", "mode", "markerLabel", "testAuthorIds"):
+                              print(f"::warning::test-guard: ignoring unknown config key {k!r}")
+                      if isinstance(cfg.get("testGlobs"), list) and cfg["testGlobs"]:
+                          globs = [str(g) for g in cfg["testGlobs"] if str(g)]
+                      if str(cfg.get("mode", "")).lower() in ("warn", "enforce"):
+                          mode = str(cfg["mode"]).lower()
+                      if str(cfg.get("markerLabel", "")).strip():
+                          marker = str(cfg["markerLabel"]).strip().lower()
+                      if isinstance(cfg.get("testAuthorIds"), list) and cfg["testAuthorIds"]:
+                          ids = [str(t).strip().lower() for t in cfg["testAuthorIds"] if str(t).strip()]
+                      cfg_src = f"origin/{base_ref}:{cfg_path}"
+                  except Exception as e:
+                      print(f"::warning::test-guard: ignoring unreadable base config: {e}")
 
               def marker_actor():
                   # Latest actor to apply the marker label, or (None,

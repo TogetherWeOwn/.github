@@ -20,10 +20,14 @@ trailer at all).
 - Unknown commits need the marker label (default
   `tests-by-test-author`): present AND applied by someone other than the
   PR author (actor read from the issue-events API with multi-page
-  parsing, so a Builder cannot self-label its own PR). Labels are read
-  from the `pull_request` payload, or — on `merge_group` events, whose
-  payload carries no PR — from the pulls API, so a label-authorized PR
-  survives the merge-queue re-run.
+  parsing, so a Builder cannot self-label its own PR). Labels are
+  refreshed from the pulls API on every run (a re-run keeps its original
+  event, so payload labels go stale); on `merge_group` events, whose
+  payload carries no PR at all, the PR is resolved via the commits API
+  and the base ref comes from the pulls API too (best-effort — the merge
+  queue is off, so that path is unexercised live and fails closed when
+  the label is needed). The gate runs under `python3 -I` so a PR-planted
+  root module cannot shadow the stdlib it imports.
 - A label that is not needed (every commit Test Author-attributed) is
   ignored, so a stale or self-applied label cannot poison a clean PR.
   An unprovable-but-needed label (API failure, unknown actor,
@@ -94,10 +98,14 @@ jobs:
 
 Enforce (step 4) does NOT use this caller: it uses the required
 workflow `.github/workflows/test-guard-required.yml` in this repo
-(pull_request + merge_group triggers, local reusable call, bare
-`test-guard` aggregator check). A ruleset that merely requires the
-check NAME can still be satisfied by a PR-edited caller with weakened
-inputs — require the WORKFLOW.
+(pull_request + merge_group triggers, pinned full-path call into the
+reusable at a fixed SHA, bare `test-guard` aggregator check). A ruleset
+that merely requires the check NAME can still be satisfied by a
+PR-edited caller with weakened inputs — require the WORKFLOW.
+`.github/workflows/test-guard-pincheck.yml` fails the PR when the
+wrapper's pin goes stale (the pinned commit's reusable differs from the
+working tree's), so repin the wrapper in the same PR as any reusable
+change.
 
 No secrets, no paid minutes beyond a ~30s ubuntu-latest run.
 
