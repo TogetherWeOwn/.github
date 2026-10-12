@@ -28,3 +28,6 @@ jobs:
   test-guard:
     name: test-guard
     uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@<pinned-sha>
+    # Private repos: run on the self-hosted pool instead of ubuntu-latest.
+    # with:
+    #   runs-on-json: '["self-hosted","two-selfhosted"]'
