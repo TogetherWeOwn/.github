@@ -11,10 +11,14 @@ name: PR lint
 # Forward control for public repos: the strict subset (tracker ids only when
 # INTERNAL_ID_PREFIXES is set above, instance UI links like /TOG/issues/ outside
 # github.com URLs, and the internal host) always fails the PR title/body check.
+# github.com scrub accepts an optional scheme and www and stops at delimiters so
+# glued refs are still scanned; UI-link needs a start/boundary or host path so code
+# paths stay clean.
 # STRICT_INTERNAL_LEVEL fail-closed: any value other than an explicit "warning"
 # (or "warn") downgrade fails. The tracker-id hit is skipped when REQUIRE_CARD_REF
 # is "true" (private repos expect a card id), and INTERNAL_ID_LEVEL=error still
-# fails a tracker id even when the strict level is downgraded (stricter wins).
+# fails a tracker id even when the strict level is downgraded (stricter wins,
+# advisory runs when the tracker id itself is not strict).
 # Otherwise advisory INTERNAL_ID_LEVEL behavior is unchanged.
 
 on:
@@ -69,10 +73,11 @@ jobs:
           # generic pattern stays advisory), instance UI links and the internal host. These
           # always fail a public title/body check unless the strict level is explicitly
           # downgraded to a warning (fail-closed).
-          UI_LINK = re.compile(r"/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
+          UI_LINK_BARE = re.compile(r"(?<![\w.-])/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
+          UI_LINK_HOST = re.compile(r"(?:https?://)?(?:www\.)?[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?::\d+)?/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
           HOST_INTERNAL = re.compile(r"\binfextion\.net\b", re.IGNORECASE)
-          GITHUB_URL = re.compile(r"https?://github\.com/\S+", re.IGNORECASE)
-          STRICT_FIXED = [(UI_LINK, "an instance UI link"), (HOST_INTERNAL, "the internal host")]
+          GITHUB_URL = re.compile(r"(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9_.~%/#?=&+\-]*", re.IGNORECASE)
+          STRICT_FIXED = [(UI_LINK_BARE, "an instance UI link"), (UI_LINK_HOST, "an instance UI link"), (HOST_INTERNAL, "the internal host")]
           HELP = ("Expected a Conventional Commits header, e.g. 'fix(auth): refuse expired sudo "
                   "sessions'. Allowed types: " + TYPES.replace("|", ", ") + ".")
 
@@ -134,7 +139,7 @@ jobs:
                   hits.append("a tracker id")
               scrubbed = GITHUB_URL.sub("", text or "")
               for pat, label in STRICT_FIXED:
-                  if pat.search(scrubbed):
+                  if pat.search(scrubbed) and label not in hits:
                       hits.append(label)
               return hits
 
@@ -190,6 +195,8 @@ jobs:
                   hits = strict_internal_hits(text)
                   if hits:
                       if report_strict(hits, where):
+                          failed = True
+                      if "a tracker id" not in hits and internal_id_notes(text, where):
                           failed = True
                   elif internal_id_notes(text, where):
                       failed = True
