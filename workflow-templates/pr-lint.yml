@@ -8,11 +8,14 @@ name: PR lint
 # Private repos: set REQUIRE_CARD_REF to "true" so every PR links its tracking card.
 # Set INTERNAL_ID_PREFIXES to a comma- or pipe-separated list (e.g. "ABC,XYZ") to flag
 # org-specific ticket ids; empty means a generic ticket-like pattern.
-# Forward control for public repos: the strict subset (tracker ids scoped to the prefixes
-# above, instance UI links like /TOG/issues/, and the internal host) always fails the PR
-# title/body check. STRICT_INTERNAL_LEVEL fail-closed: any value other than an explicit
-# "warning" (or "warn") downgrade fails. Advisory INTERNAL_ID_LEVEL behavior is unchanged
-# and is skipped for a field the strict subset already flagged.
+# Forward control for public repos: the strict subset (tracker ids only when
+# INTERNAL_ID_PREFIXES is set above, instance UI links like /TOG/issues/ outside
+# github.com URLs, and the internal host) always fails the PR title/body check.
+# STRICT_INTERNAL_LEVEL fail-closed: any value other than an explicit "warning"
+# (or "warn") downgrade fails. The tracker-id hit is skipped when REQUIRE_CARD_REF
+# is "true" (private repos expect a card id), and INTERNAL_ID_LEVEL=error still
+# fails a tracker id even when the strict level is downgraded (stricter wins).
+# Otherwise advisory INTERNAL_ID_LEVEL behavior is unchanged.
 
 on:
   pull_request:
@@ -58,14 +61,17 @@ jobs:
               if raw:
                   parts = [p.strip() for p in re.split(r"[,\s|]+", raw) if p.strip()]
                   if parts:
-                      return re.compile(r"\b(" + "|".join(re.escape(p) for p in parts) + r")-\d+\b")
-              return re.compile(r"\b[A-Z]{2,10}-\d+\b")
-          INTERNAL_ID = build_internal_id()
-          # Strict public-text subset: tracker ids (prefix-scoped above), instance UI links
-          # and the internal host. These always fail a public title/body check unless the
-          # strict level is explicitly downgraded to a warning (fail-closed).
+                      return (re.compile(r"\b(" + "|".join(re.escape(p) for p in parts) + r")-\d+\b"),
+                              True)
+              return re.compile(r"\b[A-Z]{2,10}-\d+\b"), False
+          INTERNAL_ID, HAVE_PREFIXES = build_internal_id()
+          # Strict public-text subset: tracker ids only when prefixes are set (otherwise the
+          # generic pattern stays advisory), instance UI links and the internal host. These
+          # always fail a public title/body check unless the strict level is explicitly
+          # downgraded to a warning (fail-closed).
           UI_LINK = re.compile(r"/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
           HOST_INTERNAL = re.compile(r"\binfextion\.net\b", re.IGNORECASE)
+          GITHUB_URL = re.compile(r"https?://github\.com/\S+", re.IGNORECASE)
           STRICT_FIXED = [(UI_LINK, "an instance UI link"), (HOST_INTERNAL, "the internal host")]
           HELP = ("Expected a Conventional Commits header, e.g. 'fix(auth): refuse expired sudo "
                   "sessions'. Allowed types: " + TYPES.replace("|", ", ") + ".")
@@ -123,16 +129,20 @@ jobs:
           def strict_internal_hits(text):
               """Fail-closed strict subset for public title/body. Labels only, never values."""
               hits = []
-              if INTERNAL_ID.search(text or ""):
+              require_card = os.environ.get("REQUIRE_CARD_REF") == "true"
+              if HAVE_PREFIXES and not require_card and INTERNAL_ID.search(text or ""):
                   hits.append("a tracker id")
+              scrubbed = GITHUB_URL.sub("", text or "")
               for pat, label in STRICT_FIXED:
-                  if pat.search(text or ""):
+                  if pat.search(scrubbed):
                       hits.append(label)
               return hits
 
           def report_strict(hits, where):
               raw = (os.environ.get("STRICT_INTERNAL_LEVEL") or "").strip().lower()
               level = "warning" if raw in ("warning", "warn") else "error"
+              if "a tracker id" in hits and os.environ.get("INTERNAL_ID_LEVEL") == "error":
+                  level = "error"
               print(f"::{level} title=Strict internal ref in {where}::The PR {where} holds " +
                     f"{', '.join(hits)}. Public PR text carries no tracker ids, instance " +
                     "links or internal hosts: say it in plain words and link only public " +
