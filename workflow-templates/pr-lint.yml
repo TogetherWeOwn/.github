@@ -12,8 +12,9 @@ name: PR lint
 # INTERNAL_ID_PREFIXES is set above, instance UI links like /TOG/issues/ outside
 # github.com URLs, and the internal host) always fails the PR title/body check.
 # github.com scrub accepts an optional scheme and www and stops at delimiters so
-# glued refs are still scanned; UI-link needs a start/boundary or host path so code
-# paths stay clean.
+# glued refs are still scanned; UI-link matches any scheme-qualified host
+# (localhost, single-label, IP, IPv6) and dotted bare hosts with a boundary,
+# so code paths stay clean and long blobs stay fast.
 # STRICT_INTERNAL_LEVEL fail-closed: any value other than an explicit "warning"
 # (or "warn") downgrade fails. The tracker-id hit is skipped when REQUIRE_CARD_REF
 # is "true" (private repos expect a card id), and INTERNAL_ID_LEVEL=error still
@@ -74,7 +75,7 @@ jobs:
           # always fail a public title/body check unless the strict level is explicitly
           # downgraded to a warning (fail-closed).
           UI_LINK_BARE = re.compile(r"(?<![\w.-])/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
-          UI_LINK_HOST = re.compile(r"(?:https?://)?(?:www\.)?[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?::\d+)?/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
+          UI_LINK_HOST = re.compile(r"(?:https?://[^\s/<>()]+|(?<![\w./-])[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?::\d+)?)/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
           HOST_INTERNAL = re.compile(r"\binfextion\.net\b", re.IGNORECASE)
           GITHUB_URL = re.compile(r"(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9_.~%/#?=&+\-]*", re.IGNORECASE)
           STRICT_FIXED = [(UI_LINK_BARE, "an instance UI link"), (UI_LINK_HOST, "an instance UI link"), (HOST_INTERNAL, "the internal host")]
