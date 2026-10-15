@@ -186,7 +186,7 @@ jobs:
           path: two-web-next
           persist-credentials: false
       - name: Run gradual promotion self-tests
-        run: node --test ci/gradual-promote.test.mjs ci/gradual-promote-gate-acceptance.test.mjs
+        run: node --test ci/gradual-promote.test.mjs ci/gradual-promote-gate-acceptance.test.mjs ci/gradual-promote-action.test.mjs
         env:
           TWO_WEB_NEXT_ROOT: two-web-next
 
