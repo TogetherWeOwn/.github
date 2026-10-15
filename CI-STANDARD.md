@@ -187,6 +187,43 @@ time, money and resources.
     Reference implementation: togetherweown/two-web-next (docs/visual-regression.md,
     docs/zap-baseline.md, docs/explore-staging.md, docs/rum-web-vitals.md).
 
+## Advisory PR-size labels
+
+One definition, in this repo: `.github/scripts/pr_size.py` (stdlib only,
+unit-tested by the `pr-size selftest` job) behind the reusable workflow
+`.github/workflows/pr-size.yml`. Adopters add only the thin caller from
+`workflow-templates/pr-size.yml`, pin its `uses:` to a full SHA of this
+repo's `main`, and pass their generated paths as `exclude-extra`. Nobody
+copies the script. The reusable checks the script out from this repository
+at its own ref (`job.workflow_repository` / `job.workflow_sha`), never from
+the caller's pull-request head, so a pull request cannot run a modified
+labeller or silence its own label by deleting a local copy.
+
+- **Thresholds are central and fixed**: `size/S` <= 100, `size/M` <= 400,
+  `size/L` <= 1000 counted lines (additions + deletions, lockfiles /
+  generated files / fixtures excluded), `size/XL` above that. They are not
+  caller inputs; changing them is one reviewed PR here.
+- **Advisory only, permanently.** `pr-size` is never a required status
+  check and must never appear in a ruleset's required-workflows list -
+  either would make it block merges and break the invariant. Org-level
+  inheritance happens through this template and repo bootstrap, not merge
+  blocking. The script exits 0 on any API failure (and fork PRs, whose
+  token is read-only, warn and skip), so labelling can never turn a run red.
+- **Token**: callers grant job-level `issues: write` + `pull-requests:
+  write` for label mode and read-only for weekly mode. No secrets are
+  passed; never add `secrets: inherit` - the reusable job's `GITHUB_TOKEN`
+  is minted for the caller's repo and capped by the caller's permissions.
+- **Weekly tally**: the schedule stays in the caller (decided once, here).
+  A reusable workflow has no schedule of its own for caller repositories
+  and the tally is per-repository, so the caller's Monday `schedule:` calls
+  the reusable with `mode: weekly`. The labels are the durable record: the
+  same tally is any `is:pr is:merged label:size/L` search.
+- **Repinning**: when the labeller changes here, adopters repin their
+  caller's `uses:` SHA in their own small PRs; until they do, they keep
+  running the older pinned labeller, which is safe because it is advisory.
+
+Reference adoption: TogetherWeOwn/two-web-next `.github/workflows/pr-size.yml`.
+
 ## Banned
 
 - `on: paths:` on any workflow that produces a required check.
