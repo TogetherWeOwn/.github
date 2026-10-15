@@ -2,15 +2,17 @@
 //
 // Ported from two-web-next ci/production-deploy-gate.test.mjs (tests
 // 'shared gradual action promotes 5-50-100...' and 'rollback stand-down...'
-// at two-web-next d09b4bee) to this repo, pointed at
-// actions/gradual-promote/action.yml. The only intentional difference from
-// the originals is the action path: the web copy those tests read is retired
-// by the follow-up repoint PR, so without this port the rollback chain that
-// runs in production (failure-or-cancelled triggers, stand-down outputs,
-// 120s timeout, PREV_VERSION check, no trigger/full-deploy side effects)
-// would merge untested here. The traffic-math unit tests and the canary-gate
-// acceptance tests do not read these steps (8/8 guard mutants stay green
-// there), so these pins are the ones that fail a broken rollback.
+// plus the live-gate half of 'rollback smoke enforces the same public-route
+// set as the gradual live gate' at two-web-next d09b4bee) to this repo,
+// pointed at actions/gradual-promote/action.yml. The only intentional
+// difference from the originals is the action path: the web copy those tests
+// read is retired by the follow-up repoint PR, so without this port the
+// rollback chain that runs in production (failure-or-cancelled triggers,
+// stand-down outputs, 120s timeout, PREV_VERSION check, no trigger/full-deploy
+// side effects) and the final live-traffic gate would merge untested here.
+// The traffic-math unit tests and the canary-gate acceptance tests do not read
+// these steps (8/8 guard mutants and 4/4 live-gate mutants stay green there),
+// so these pins are the ones that fail a broken rollback or live gate.
 //
 // Run: node --test ci/gradual-promote-action.test.mjs
 import assert from "node:assert/strict";
@@ -141,4 +143,34 @@ test("rollback stand-down retries promote failures, cancellations and failed res
     assert.equal(wouldRun50(restored5 ?? ""), run50, label);
     assert.equal(wouldRun100(restored5 ?? "", restored50 ?? ""), run100, label);
   }
+});
+
+test("live-traffic gate at 100 percent probes production without version override", () => {
+  // Live-gate half of two-web-next 'rollback smoke enforces the same
+  // public-route set as the gradual live gate' (d09b4bee:775), pointed at the
+  // central action. smoke-100 is the only probe of unpinned live traffic after
+  // the 100% promote and triggers the third rollback; the acceptance suite
+  // runs only smoke-5, smoke-50 and smoke-100-override, so without this pin
+  // the four live-gate mutants below stay green here (they fail the web test).
+  const action = readFileSync(
+    new URL("../actions/gradual-promote/action.yml", import.meta.url),
+    "utf8",
+  );
+  const live = action.match(
+    /    - name: Health and SLO gate at 100 percent \(live traffic\)\n(?:.*\n)*?      run: \|\n((?:        .*\n)+)/,
+  )?.[1];
+  assert.ok(live, "smoke-100 run block found");
+  assert.match(live, /node bin\/smoke\.mjs /);
+  assert.match(live, /for i in 1 2 3 4 5 6/);
+  assert.ok(!live.includes("curl "));
+  // Live traffic probes the production domain through $DOMAIN with the shared
+  // $INDEXABLE flag, and never carries --version-override (the canary
+  // override must not leak into the live probe).
+  assert.match(live, /\$INDEXABLE/);
+  assert.ok(live.includes('node bin/smoke.mjs "https://$DOMAIN"'));
+  assert.ok(live.includes('node bin/smoke.mjs "https://$DOMAIN" $INDEXABLE'));
+  assert.ok(!live.includes("--version-override"));
+  // The gate must fail closed: replacing the probe with `if true` would let
+  // the 100% stage pass without probing and suppress the third rollback.
+  assert.match(live, /if node bin\/smoke\.mjs "https:\/\/\$DOMAIN" \$INDEXABLE; then/);
 });
