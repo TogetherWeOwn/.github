@@ -25,6 +25,11 @@ name: PR lint
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review]
+  # Merge queue validation: `pr-lint` is a required check, so it must
+  # report on merge_group. The queue run carries no PR title and an
+  # empty commits payload, so the run step passes vacuously (the title
+  # was already linted on the PR head).
+  merge_group:
   push:
     branches: [ $default-branch ]
 
@@ -33,7 +38,7 @@ permissions:
 
 concurrency:
   group: pr-lint-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   REQUIRE_CARD_REF: "false"

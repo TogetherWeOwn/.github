@@ -14,6 +14,9 @@ on:
   # exists; without these the gate never re-evaluates a fresh label.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  # Merge queue validation: `test-guard` is a required check, so it must
+  # report on merge_group (cf. test-guard-required.yml wrapper).
+  merge_group:
 
 permissions:
   contents: read
@@ -21,7 +24,7 @@ permissions:
 
 concurrency:
   group: test-guard-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Keep id and name byte-identical: a future org ruleset requires `test-guard`.
