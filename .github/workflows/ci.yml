@@ -172,9 +172,27 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - run: python3 -m unittest discover -s .github/scripts -p 'test_pr_size*.py'
 
+  gradual-promote-selftest:
+    name: gradual-promote selftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Checkout the caller smoke checker
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: TogetherWeOwn/two-web-next
+          ref: d09b4bee57ad7effdaa79d0765574c3a60e8068e
+          path: two-web-next
+          persist-credentials: false
+      - name: Run gradual promotion self-tests
+        run: node --test ci/gradual-promote.test.mjs ci/gradual-promote-gate-acceptance.test.mjs
+        env:
+          TWO_WEB_NEXT_ROOT: two-web-next
+
   ci-ok:
     name: ci-ok
-    needs: [changes, full_run, lint, test-web, test-bot, secret-scan, pincheck, gate-selftest, pr-size-selftest]
+    needs: [changes, full_run, lint, test-web, test-bot, secret-scan, pincheck, gate-selftest, pr-size-selftest, gradual-promote-selftest]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
