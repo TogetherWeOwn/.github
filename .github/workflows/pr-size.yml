@@ -10,37 +10,42 @@
 #
 # ADVISORY ONLY. This workflow is never a required check and must never be
 # added to a ruleset's required-workflows list (that would make it block
-# merges). The labeller exits 0 on any API failure, and an unknown `mode`
-# skips both jobs, so even a miswired caller cannot turn a pull request red.
+# merges). The labeller script exits 0 on any API failure.
 #
 # The labelling logic lives ONCE in `.github/scripts/pr_size.py` next to
-# this file. Each job checks out THIS repository at the reusable workflow's
+# this file. The job checks out THIS repository at the reusable workflow's
 # own ref (`job.workflow_repository` / `job.workflow_sha`), never the
 # caller's pull-request head: a pull request cannot run its own modified
 # labeller, and cannot silence its own label by deleting the script.
 # Thresholds are fixed centrally in the script (size/S <= 100, size/M <= 400,
 # size/L <= 1000 counted lines, size/XL above that) and are not inputs.
 #
+# Why TWO reusable files: GitHub validates a reusable workflow's nested-job
+# permissions against the caller job's grant statically, when parsing the
+# workflow, and ignores the nested jobs' `if:` conditions (runner
+# `PermissionsHelper.ValidateEmbeddedPermissions`). One file holding both
+# the write-permission label job and the read-only weekly job would make a
+# read-only weekly caller fail at startup - and an invalid workflow fails
+# the whole run, label path included. So the weekly tally lives in its own
+# file, `pr-size-weekly.yml`, and each caller grants only what the file it
+# calls requests. `.github/scripts/test_pr_size_workflows.py` pins that
+# caller-grant >= reusable-request contract for the shipped template.
+#
 # Token: no secrets are passed or needed. The job's GITHUB_TOKEN is minted
 # for the caller's repository and capped by the caller's job permissions,
-# so callers grant `issues: write` + `pull-requests: write` for label mode
-# and read-only for weekly mode (see the template). Never pass
+# so callers of THIS file grant `issues: write` + `pull-requests: write`
+# (the weekly file's callers grant read-only). Never pass
 # `secrets: inherit` to this workflow.
 #
 # Weekly tally: the schedule stays in the CALLER (a reusable workflow has
 # no schedule of its own for caller repositories, and the tally is
-# per-repository); this workflow only supplies `mode: weekly`.
+# per-repository); the caller invokes `pr-size-weekly.yml` on its schedule.
 
 name: pr-size (reusable)
 
 on:
   workflow_call:
     inputs:
-      mode:
-        description: "'label' (one PR) or 'weekly' (tally of the last 7 days)."
-        required: false
-        default: "label"
-        type: string
       pr-number:
         description: >-
           Pull request to label. Empty means the pull request that triggered
@@ -70,7 +75,6 @@ permissions:
 jobs:
   label:
     name: label
-    if: inputs.mode == 'label'
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
     permissions:
@@ -98,27 +102,3 @@ jobs:
           PR_SIZE_THRESHOLD: "400"
           PR_SIZE_EXCLUDE_EXTRA: ${{ inputs.exclude-extra }}
         run: python3 .pr-size-central/.github/scripts/pr_size.py label
-
-  weekly:
-    name: weekly
-    if: inputs.mode == 'weekly'
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      issues: read
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: .pr-size-central
-          sparse-checkout: .github/scripts/pr_size.py
-          persist-credentials: false
-
-      - name: Weekly size tally (advisory)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: python3 .pr-size-central/.github/scripts/pr_size.py weekly

@@ -158,15 +158,19 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - run: bash .github/scripts/test-guard-selftest.sh
 
-  # Unit tests for the org PR-size labeller (stdlib unittest, seconds).
-  # Always-on like gate-selftest so labeller changes can never merge red.
+  # Unit tests for the org PR-size labeller (stdlib unittest, seconds),
+  # including the static check that every caller job in the shipped
+  # template grants at least the permissions its reusable file requests
+  # (GitHub rejects an under-granting caller at parse time, which no
+  # executing job here could catch). Always-on like gate-selftest so
+  # labeller changes can never merge red.
   pr-size-selftest:
     name: pr-size selftest
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - run: python3 -m unittest discover -s .github/scripts -p 'test_pr_size.py'
+      - run: python3 -m unittest discover -s .github/scripts -p 'test_pr_size*.py'
 
   ci-ok:
     name: ci-ok

@@ -190,8 +190,9 @@ time, money and resources.
 ## Advisory PR-size labels
 
 One definition, in this repo: `.github/scripts/pr_size.py` (stdlib only,
-unit-tested by the `pr-size selftest` job) behind the reusable workflow
-`.github/workflows/pr-size.yml`. Adopters add only the thin caller from
+unit-tested by the `pr-size selftest` job) behind the reusable workflows
+`.github/workflows/pr-size.yml` (label) and
+`.github/workflows/pr-size-weekly.yml` (weekly tally). Adopters add only the thin caller from
 `workflow-templates/pr-size.yml`, pin its `uses:` to a full SHA of this
 repo's `main`, and pass their generated paths as `exclude-extra`. Nobody
 copies the script. The reusable checks the script out from this repository
@@ -210,13 +211,21 @@ labeller or silence its own label by deleting a local copy.
   blocking. The script exits 0 on any API failure (and fork PRs, whose
   token is read-only, warn and skip), so labelling can never turn a run red.
 - **Token**: callers grant job-level `issues: write` + `pull-requests:
-  write` for label mode and read-only for weekly mode. No secrets are
-  passed; never add `secrets: inherit` - the reusable job's `GITHUB_TOKEN`
-  is minted for the caller's repo and capped by the caller's permissions.
+  write` to call the label reusable and read-only to call the weekly one.
+  The two modes are separate reusable FILES because GitHub validates a
+  reusable workflow's nested-job permissions against the caller job's
+  grant when parsing the workflow, ignoring nested `if:` conditions: a
+  read-only weekly caller of a file that also holds the write-permission
+  label job would fail the whole workflow at startup. The `pr-size
+  selftest` job statically checks that every caller job in the shipped
+  template grants at least what the file it calls requests. No secrets
+  are passed; never add `secrets: inherit` - the reusable job's
+  `GITHUB_TOKEN` is minted for the caller's repo and capped by the
+  caller's permissions.
 - **Weekly tally**: the schedule stays in the caller (decided once, here).
   A reusable workflow has no schedule of its own for caller repositories
   and the tally is per-repository, so the caller's Monday `schedule:` calls
-  the reusable with `mode: weekly`. The labels are the durable record: the
+  the `pr-size-weekly.yml` reusable. The labels are the durable record: the
   same tally is any `is:pr is:merged label:size/L` search.
 - **Repinning**: when the labeller changes here, adopters repin their
   caller's `uses:` SHA in their own small PRs; until they do, they keep

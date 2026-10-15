@@ -28,13 +28,15 @@ Environment contract (every value is a plain string):
   GITHUB_STEP_SUMMARY    optional path the weekly tally is appended to
 
 Stdlib only. This file lives once, here in the org `.github` repository, and
-runs unchanged for every adopting repository through the reusable workflow
-`.github/workflows/pr-size.yml`: adopters add only the thin caller from
+runs unchanged for every adopting repository through the reusable workflows
+`.github/workflows/pr-size.yml` and `.github/workflows/pr-size-weekly.yml`:
+adopters add only the thin caller from
 `workflow-templates/pr-size.yml` and never copy this script. Thresholds are
 fixed here (SIZES below): size/S <= 100, size/M <= 400, size/L <= 1000
 counted lines, size/XL above that.
 """
 import fnmatch
+import http.client
 import json
 import os
 import sys
@@ -227,7 +229,13 @@ class GitHubApi:
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as exc:
             raise ApiError(f"{method} {path} -> HTTP {exc.code}") from exc
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        # Transport failures are NOT all wrapped in URLError: a dropped
+        # connection raises http.client.RemoteDisconnected (an OSError) out
+        # of getresponse(), and a truncated body raises
+        # http.client.IncompleteRead (an HTTPException) out of resp.read().
+        # Catch the full transport family so main() can keep the exit-0
+        # advisory contract. OSError also covers URLError and TimeoutError.
+        except (http.client.HTTPException, OSError, json.JSONDecodeError) as exc:
             raise ApiError(f"{method} {path} -> {exc}") from exc
 
     def paged(self, path):

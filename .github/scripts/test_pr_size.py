@@ -4,8 +4,13 @@ Run with: python3 -m unittest discover -s .github/scripts -p 'test_pr_size.py'
 Also wired into the `pr-size selftest` job in .github/workflows/ci.yml.
 """
 
+import contextlib
+import http.client
+import io
+import os
 import unittest
 from datetime import datetime, timezone
+from unittest import mock
 
 import pr_size
 
@@ -187,6 +192,69 @@ class Weekly(unittest.TestCase):
         )
         self.assertIn("**5**", report)
         self.assertIn("(2 over the advisory threshold)", report)
+
+
+class TruncatedResponse:
+    """A response whose body is shorter than its Content-Length."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def read(self):
+        raise http.client.IncompleteRead(b"partial", 100)
+
+
+class TransportErrors(unittest.TestCase):
+    """The exit-0 advisory contract covers raw transport failures too.
+
+    urllib does not wrap a dropped connection (RemoteDisconnected, raised
+    out of getresponse()) or a truncated body (IncompleteRead, raised out
+    of resp.read()) in URLError, so request() must catch them itself -
+    otherwise one dropped connection turns an advisory run red.
+    """
+
+    ENV = {"REPO": "owner/name", "GH_TOKEN": "test-token", "PR_NUMBER": "7"}
+
+    def _run_main(self, mode, urlopen):
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, self.ENV):
+            with mock.patch("urllib.request.urlopen", urlopen):
+                with contextlib.redirect_stdout(out):
+                    code = pr_size.main(["pr_size.py", mode])
+        return code, out.getvalue()
+
+    def test_request_wraps_remote_disconnected_as_api_error(self):
+        api = pr_size.GitHubApi("test-token", "owner/name")
+        dropped = mock.Mock(
+            side_effect=http.client.RemoteDisconnected("closed without response")
+        )
+        with mock.patch("urllib.request.urlopen", dropped):
+            with self.assertRaises(pr_size.ApiError):
+                api.request("GET", "/repos/owner/name/pulls/7")
+
+    def test_label_mode_exits_0_on_remote_disconnected(self):
+        dropped = mock.Mock(
+            side_effect=http.client.RemoteDisconnected("closed without response")
+        )
+        code, out = self._run_main("label", dropped)
+        self.assertEqual(code, 0)
+        self.assertIn("::warning::pr_size advisory skipped:", out)
+
+    def test_label_mode_exits_0_on_incomplete_read(self):
+        code, out = self._run_main("label", mock.Mock(return_value=TruncatedResponse()))
+        self.assertEqual(code, 0)
+        self.assertIn("::warning::pr_size advisory skipped:", out)
+
+    def test_weekly_mode_exits_0_on_remote_disconnected(self):
+        dropped = mock.Mock(
+            side_effect=http.client.RemoteDisconnected("closed without response")
+        )
+        code, out = self._run_main("weekly", dropped)
+        self.assertEqual(code, 0)
+        self.assertIn("::warning::pr_size advisory skipped:", out)
 
 
 if __name__ == "__main__":
