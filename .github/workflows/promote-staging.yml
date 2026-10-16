@@ -78,8 +78,9 @@ jobs:
               [ -n "$runs" ] || break
               while read -r run_id run_sha; do
                 if [ -z "$VERIFY_JOB" ]; then sha="$run_sha"; break; fi
-                verdict="$(gh api --method GET "repos/$REPO/actions/runs/$run_id/jobs" -f per_page=100 \
-                  --jq '[.jobs[] | select(.name == $ENV.VERIFY_JOB) | .conclusion] | first // ""')"
+                # jq reads VERIFY_JOB from its own environment; the single quotes are intentional.
+                verdict="$(VERIFY_JOB="$VERIFY_JOB" gh api --method GET "repos/$REPO/actions/runs/$run_id/jobs" -f per_page=100 \
+                  --jq '[.jobs[] | select(.name == env.VERIFY_JOB) | .conclusion] | first // ""')"
                 if [ "$verdict" = "success" ]; then sha="$run_sha"; break; fi
               done <<< "$runs"
               [ -n "$sha" ] && break
