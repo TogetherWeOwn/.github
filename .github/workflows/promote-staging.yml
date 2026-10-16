@@ -78,7 +78,8 @@ jobs:
               [ -n "$runs" ] || break
               while read -r run_id run_sha; do
                 if [ -z "$VERIFY_JOB" ]; then sha="$run_sha"; break; fi
-                # shellcheck disable=SC2016 -- $ENV.VERIFY_JOB is a jq env lookup, not shell expansion.
+                # $ENV.VERIFY_JOB is a jq env lookup, not shell expansion.
+                # SC2016 is intentionally ignored for this jq expression.
                 verdict="$(gh api --method GET "repos/$REPO/actions/runs/$run_id/jobs" -f per_page=100 \
                   --jq '[.jobs[] | select(.name == $ENV.VERIFY_JOB) | .conclusion] | first // ""')"
                 if [ "$verdict" = "success" ]; then sha="$run_sha"; break; fi
