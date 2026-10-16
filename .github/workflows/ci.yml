@@ -92,8 +92,12 @@ jobs:
           tar -xzf /tmp/actionlint.tgz -C /tmp actionlint
           sudo mv /tmp/actionlint /usr/local/bin/actionlint
       - name: Validate every workflow with actionlint
-        # actionlint 1.7.12 predates the documented job.workflow_sha context.
-        run: actionlint -ignore 'property "workflow_sha" is not defined' .github/workflows/*.yml
+        # actionlint 1.7.12 predates these documented reusable-workflow job contexts.
+        run: >-
+          actionlint
+          -ignore 'property "workflow_sha" is not defined'
+          -ignore 'property "workflow_repository" is not defined'
+          .github/workflows/*.yml
 
   test-web:
     name: test web
