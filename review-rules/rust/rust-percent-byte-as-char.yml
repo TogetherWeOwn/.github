@@ -1,0 +1,23 @@
+rules:
+- id: rust-percent-byte-as-char
+  languages:
+  - rust
+  message: 'RUST-05: byte-as-char in a decoder corrupts UTF-8; use a strict shared percent decoder and
+    multibyte probes.'
+  severity: WARNING
+  metadata:
+    examples:
+    - nntunev2#13 params-decode-latin1
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: $B as char
+  - metavariable-regex:
+      metavariable: $B
+      regex: (?i)^(b|byte|decoded_byte)$
+  paths:
+    include:
+    - '**/*decode*.rs'
+    - '**/params.rs'

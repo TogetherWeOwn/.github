@@ -1,0 +1,17 @@
+rules:
+- id: ts-split-index
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-006: direct split()[N] has no intervening length check; prove delimiter/empty-cell behavior
+    or parse structurally.'
+  severity: WARNING
+  metadata:
+    examples:
+    - two-web-next#704 floor-guard-threshold-pairing-by-empty-label
+    - two-web-next#796 llms-txt-link-labels-split-on-colon
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern: $S.split($D)[$N]

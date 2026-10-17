@@ -1,0 +1,25 @@
+rules:
+- id: ts-delete-in-merge-restore
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-011: deletion in merge/restore needs explicit intent and modify/delete preservation tests.'
+  severity: ERROR
+  metadata:
+    examples:
+    - paperclip#56 baseline-merge-deletes-excluded-local-dirs
+    - paperclip#61 skipped-nested-dir-deleted-on-sandbox-restore
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-either:
+  - pattern: fs.rm(...)
+  - pattern: fs.promises.rm(...)
+  - pattern: rmSync(...)
+  paths:
+    include:
+    - '**/*workspace-restore-merge*'
+    - '**/*git-workspace-sync*'
+    - '**/*sandbox-managed-runtime*'
+    - '**/*remote-managed-runtime*'

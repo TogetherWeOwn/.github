@@ -1,0 +1,1 @@
+onMount(() => void redeem(token));

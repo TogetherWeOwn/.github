@@ -1,0 +1,20 @@
+rules:
+- id: ts-slice-byte-budget
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-006: UTF-16 slice in a byte-budget context may split surrogates; test astral characters
+    at the boundary.'
+  severity: WARNING
+  metadata:
+    examples:
+    - two-web-next#790 byte-trim-splits-surrogate-pairs
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: $S.slice($A, $B)
+  - metavariable-regex:
+      metavariable: $S
+      regex: (?i).*(budget|bytes|trim|fit|desc|body).*

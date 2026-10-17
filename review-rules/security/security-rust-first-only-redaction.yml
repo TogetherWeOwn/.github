@@ -1,0 +1,23 @@
+rules:
+- id: security-rust-first-only-redaction
+  languages:
+  - rust
+  message: 'RUST-06b/SEC-AUTH-03B: first-only scrub can leave repeated/case-varied keys; test all occurrences
+    and error arms.'
+  severity: ERROR
+  metadata:
+    examples:
+    - nntunev2#10 redact-first-apikey-only
+    - nntunev2#57 redaction-partial-authinfo
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern-either:
+    - pattern: $S.replacen($A, $B, 1)
+    - pattern: if let Some($P) = $S.find($Q) { ... }
+  - pattern-inside: fn $F(...) -> $T { ... }
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?i).*(redact|scrub).*

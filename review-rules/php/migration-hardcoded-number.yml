@@ -1,0 +1,16 @@
+rules:
+- id: migration-hardcoded-number
+  languages:
+  - bash
+  - python
+  message: 'R2b: hardcoded migration number can drift from the manifest; informational hygiene only, never
+    a block.'
+  severity: INFO
+  metadata:
+    examples:
+    - nntunev2#51 nit-stale-migration-number
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-regex: (?i)migration[^0-9a-zA-Z\n]{0,10}0\d{3}

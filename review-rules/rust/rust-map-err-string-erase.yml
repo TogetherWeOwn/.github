@@ -1,0 +1,15 @@
+rules:
+- id: rust-map-err-string-erase
+  languages:
+  - rust
+  message: 'RUST-01: map_err replaces the source with a literal; preserve context and pin the failure
+    path.'
+  severity: WARNING
+  metadata:
+    examples:
+    - two-bot-next#609 boot-executor-error-discarded
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern: $X.map_err(|$E| "...")

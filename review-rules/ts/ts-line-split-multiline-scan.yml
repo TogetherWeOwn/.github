@@ -1,0 +1,20 @@
+rules:
+- id: ts-line-split-multiline-scan
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-003c: line-by-line console.error scan misses formatter wraps; scan full text or AST plus
+    count parity.'
+  severity: WARNING
+  metadata:
+    examples:
+    - two-web-next#649 guard-misses-multiline-console-error
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: '$TEXT.split("\n").$FN($PAT)'
+  - metavariable-regex:
+      metavariable: $PAT
+      regex: (?s).*console.*error.*

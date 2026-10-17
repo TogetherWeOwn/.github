@@ -1,0 +1,20 @@
+rules:
+- id: rust-sql-text-pinned-authz
+  languages:
+  - rust
+  message: 'RUST-12: SQL predicate text assertion is not execution proof; seed private/public rows and
+    kill predicate mutants.'
+  severity: ERROR
+  metadata:
+    examples:
+    - nntunev2#28 list-sql-text-pinned-paren-mutant-leaks-private-rows
+    - nntunev2#15 claim-sql-unpinned
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-regex: (?i)\b\w*sql\w*\.(?:contains|matches)\s*\(
+  paths:
+    include:
+    - '**/workers/api/src/library.rs'
+    - '**/workers/api/tests/security_regressions.rs'

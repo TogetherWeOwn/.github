@@ -1,0 +1,24 @@
+rules:
+- id: ts-id-insensitive-validator-exact-match
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-002a: ID is validated case-insensitively but matched without normalization; test uppercase
+    IDs.'
+  severity: WARNING
+  metadata:
+    examples:
+    - paperclip-operator-toolkit#56 exempt-id-case-mismatch
+    - paperclip-operator-toolkit#57 exempt-id-case-mismatch
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: if ($RE.test($ID)) { ... $IDS.includes($ID); ... }
+  - metavariable-regex:
+      metavariable: $RE
+      regex: (?s)^/.*/[a-z]*i[a-z]*$
+  - metavariable-regex:
+      metavariable: $ID
+      regex: (?i).*(id|uuid).*

@@ -1,0 +1,20 @@
+rules:
+- id: ts-truncated-json-evidence
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-013: parsing a capped/truncated tail as evidence requires fragment detection and missing-data
+    propagation.'
+  severity: WARNING
+  metadata:
+    examples:
+    - paperclip#80 truncated-stdout-fragment-as-raw-evidence
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: JSON.parse($BUF)
+  - metavariable-regex:
+      metavariable: $BUF
+      regex: (?i).*(tail|truncat|capped).*

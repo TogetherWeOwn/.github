@@ -1,0 +1,4 @@
+jobs:
+  gate:
+    if: github.head_ref == 'chore/refresh-lockfile'
+    runs-on: ubuntu-latest

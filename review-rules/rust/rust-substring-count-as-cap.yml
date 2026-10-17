@@ -1,0 +1,17 @@
+rules:
+- id: rust-substring-count-as-cap
+  languages:
+  - rust
+  message: 'RUST-04: substring segment counting is not parser-equivalent; test tab, CR, LF and self-closing
+    delimiters.'
+  severity: ERROR
+  metadata:
+    examples:
+    - nntunev2#10 intake-segment-cap-bypass
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-either:
+  - pattern: $S.find("<segment")
+  - pattern: $S.matches("<segment").count()

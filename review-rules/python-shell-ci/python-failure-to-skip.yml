@@ -1,0 +1,20 @@
+rules:
+- id: python-failure-to-skip
+  languages:
+  - python
+  message: 'PYCI-08: failure-to-SKIP mapping needs a verdict/exit/message truth-table; failures are not
+    optional checks.'
+  severity: WARNING
+  metadata:
+    examples:
+    - two-bot-next#616 voice-fail-downgraded-to-skip
+    - paperclip-ops-tooling#758 cli-exit0-on-confirmation-failed
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: '"SKIP" if $FAIL else $OTHER'
+  - metavariable-regex:
+      metavariable: $FAIL
+      regex: (?i).*(fail|error|broken).*

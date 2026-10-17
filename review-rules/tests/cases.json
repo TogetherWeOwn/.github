@@ -1,0 +1,554 @@
+[
+  {
+    "rule": "rust-err-arm-without-metric",
+    "file": "fixtures/rust-err-arm-without-metric/positive/src/worker.rs",
+    "positive": true
+  },
+  {
+    "rule": "rust-err-arm-without-metric",
+    "file": "fixtures/rust-err-arm-without-metric/negative/src/worker.rs",
+    "positive": false
+  },
+  {
+    "rule": "rust-map-err-string-erase",
+    "file": "fixtures/rust-map-err-string-erase/positive/src/errors.rs",
+    "positive": true
+  },
+  {
+    "rule": "rust-map-err-string-erase",
+    "file": "fixtures/rust-map-err-string-erase/negative/src/errors.rs",
+    "positive": false
+  },
+  {
+    "rule": "rust-buffer-before-cap",
+    "file": "fixtures/rust-buffer-before-cap/positive/src/ingest.rs",
+    "positive": true
+  },
+  {
+    "rule": "rust-buffer-before-cap",
+    "file": "fixtures/rust-buffer-before-cap/negative/src/ingest.rs",
+    "positive": false
+  },
+  {
+    "rule": "rust-substring-count-as-cap",
+    "file": "fixtures/rust-substring-count-as-cap/positive/src/intake.rs",
+    "positive": true
+  },
+  {
+    "rule": "rust-substring-count-as-cap",
+    "file": "fixtures/rust-substring-count-as-cap/negative/src/intake.rs",
+    "positive": false
+  },
+  {
+    "rule": "rust-percent-byte-as-char",
+    "file": "fixtures/rust-percent-byte-as-char/positive/src/params_decode.rs",
+    "positive": true
+  },
+  {
+    "rule": "rust-percent-byte-as-char",
+    "file": "fixtures/rust-percent-byte-as-char/negative/src/params_decode.rs",
+    "positive": false
+  },
+  {
+    "rule": "rust-timeout-lane-permit",
+    "file": "fixtures/rust-timeout-lane-permit/positive/src/executor.rs",
+    "positive": true
+  },
+  {
+    "rule": "rust-timeout-lane-permit",
+    "file": "fixtures/rust-timeout-lane-permit/negative/src/executor.rs",
+    "positive": false
+  },
+  {
+    "rule": "rust-sql-text-pinned-authz",
+    "file": "fixtures/rust-sql-text-pinned-authz/positive/workers/api/src/library.rs",
+    "positive": true
+  },
+  {
+    "rule": "rust-sql-text-pinned-authz",
+    "file": "fixtures/rust-sql-text-pinned-authz/negative/workers/api/src/library.rs",
+    "positive": false
+  },
+  {
+    "rule": "rust-format-joined-identity-key",
+    "file": "fixtures/rust-format-joined-identity-key/positive/src/identity.rs",
+    "positive": true
+  },
+  {
+    "rule": "rust-format-joined-identity-key",
+    "file": "fixtures/rust-format-joined-identity-key/negative/src/identity.rs",
+    "positive": false
+  },
+  {
+    "rule": "rust-double-percent-encode",
+    "file": "fixtures/rust-double-percent-encode/positive/src/url.rs",
+    "positive": true
+  },
+  {
+    "rule": "rust-double-percent-encode",
+    "file": "fixtures/rust-double-percent-encode/negative/src/url.rs",
+    "positive": false
+  },
+  {
+    "rule": "rust-localhost-prefix-allow",
+    "file": "fixtures/rust-localhost-prefix-allow/positive/src/auth.rs",
+    "positive": true
+  },
+  {
+    "rule": "rust-localhost-prefix-allow",
+    "file": "fixtures/rust-localhost-prefix-allow/negative/src/auth.rs",
+    "positive": false
+  },
+  {
+    "rule": "ts-secret-env-read",
+    "file": "fixtures/ts-secret-env-read/positive/server/src/env.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-secret-env-read",
+    "file": "fixtures/ts-secret-env-read/negative/server/src/env.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-id-insensitive-validator-exact-match",
+    "file": "fixtures/ts-id-insensitive-validator-exact-match/positive/src/resolve-config.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-id-insensitive-validator-exact-match",
+    "file": "fixtures/ts-id-insensitive-validator-exact-match/negative/src/resolve-config.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-case-fold-before-grammar",
+    "file": "fixtures/ts-case-fold-before-grammar/positive/src/attestation.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-case-fold-before-grammar",
+    "file": "fixtures/ts-case-fold-before-grammar/negative/src/attestation.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-insensitive-tracker-pattern",
+    "file": "fixtures/ts-insensitive-tracker-pattern/positive/src/tracker.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-insensitive-tracker-pattern",
+    "file": "fixtures/ts-insensitive-tracker-pattern/negative/src/tracker.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-unanchored-ci-regexp-pin",
+    "file": "fixtures/ts-unanchored-ci-regexp-pin/positive/ci/wiring-test.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-unanchored-ci-regexp-pin",
+    "file": "fixtures/ts-unanchored-ci-regexp-pin/negative/ci/wiring-test.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-line-split-multiline-scan",
+    "file": "fixtures/ts-line-split-multiline-scan/positive/ci/guard.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-line-split-multiline-scan",
+    "file": "fixtures/ts-line-split-multiline-scan/negative/ci/guard.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-empty-catch",
+    "file": "fixtures/ts-empty-catch/positive/src/read.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-empty-catch",
+    "file": "fixtures/ts-empty-catch/negative/src/read.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-split-index",
+    "file": "fixtures/ts-split-index/positive/src/parse.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-split-index",
+    "file": "fixtures/ts-split-index/negative/src/parse.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-searchparams-last-wins",
+    "file": "fixtures/ts-searchparams-last-wins/positive/src/params.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-searchparams-last-wins",
+    "file": "fixtures/ts-searchparams-last-wins/negative/src/params.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-slice-byte-budget",
+    "file": "fixtures/ts-slice-byte-budget/positive/src/text.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-slice-byte-budget",
+    "file": "fixtures/ts-slice-byte-budget/negative/src/text.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-markdown-line-escape",
+    "file": "fixtures/ts-markdown-line-escape/positive/src/ai-friendly.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-markdown-line-escape",
+    "file": "fixtures/ts-markdown-line-escape/negative/src/ai-friendly.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-flash-delete-before-model",
+    "file": "fixtures/ts-flash-delete-before-model/positive/web/src/routes/+page.server.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-flash-delete-before-model",
+    "file": "fixtures/ts-flash-delete-before-model/negative/web/src/routes/+page.server.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-browser-global-secret-headers",
+    "file": "fixtures/ts-browser-global-secret-headers/positive/e2e/helpers/accounts.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-browser-global-secret-headers",
+    "file": "fixtures/ts-browser-global-secret-headers/negative/e2e/helpers/accounts.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-route-continue-headers",
+    "file": "fixtures/ts-route-continue-headers/positive/e2e/redirect.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-route-continue-headers",
+    "file": "fixtures/ts-route-continue-headers/negative/e2e/redirect.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-redeem-on-mount",
+    "file": "fixtures/ts-redeem-on-mount/positive/apps/web/src/routes/auth/magic/page.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-redeem-on-mount",
+    "file": "fixtures/ts-redeem-on-mount/negative/apps/web/src/routes/auth/magic/page.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-delete-in-merge-restore",
+    "file": "fixtures/ts-delete-in-merge-restore/positive/src/workspace-restore-merge.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-delete-in-merge-restore",
+    "file": "fixtures/ts-delete-in-merge-restore/negative/src/workspace-restore-merge.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-config-parseint",
+    "file": "fixtures/ts-config-parseint/positive/src/config.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-config-parseint",
+    "file": "fixtures/ts-config-parseint/negative/src/config.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-time-delta-division",
+    "file": "fixtures/ts-time-delta-division/positive/src/score.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-time-delta-division",
+    "file": "fixtures/ts-time-delta-division/negative/src/score.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-unbounded-request-query",
+    "file": "fixtures/ts-unbounded-request-query/positive/src/routes/events.ts",
+    "positive": true,
+    "lines": [1, 2]
+  },
+  {
+    "rule": "ts-unbounded-request-query",
+    "file": "fixtures/ts-unbounded-request-query/negative/src/routes/events.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-log-cap-keeps-head",
+    "file": "fixtures/ts-log-cap-keeps-head/positive/src/job-log.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-log-cap-keeps-head",
+    "file": "fixtures/ts-log-cap-keeps-head/negative/src/job-log.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-truncated-json-evidence",
+    "file": "fixtures/ts-truncated-json-evidence/positive/src/stream.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-truncated-json-evidence",
+    "file": "fixtures/ts-truncated-json-evidence/negative/src/stream.ts",
+    "positive": false
+  },
+  {
+    "rule": "ts-accounting-tail-fallback",
+    "file": "fixtures/ts-accounting-tail-fallback/positive/src/accounting.ts",
+    "positive": true
+  },
+  {
+    "rule": "ts-accounting-tail-fallback",
+    "file": "fixtures/ts-accounting-tail-fallback/negative/src/accounting.ts",
+    "positive": false
+  },
+  {
+    "rule": "shell-curl-pipe-to-shell",
+    "file": "fixtures/shell-curl-pipe-to-shell/positive/scripts/install.sh",
+    "positive": true
+  },
+  {
+    "rule": "shell-curl-pipe-to-shell",
+    "file": "fixtures/shell-curl-pipe-to-shell/negative/scripts/install.sh",
+    "positive": false
+  },
+  {
+    "rule": "shell-pip-without-hashes",
+    "file": "fixtures/shell-pip-without-hashes/positive/ci/install.sh",
+    "positive": true
+  },
+  {
+    "rule": "shell-pip-without-hashes",
+    "file": "fixtures/shell-pip-without-hashes/negative/ci/install.sh",
+    "positive": false
+  },
+  {
+    "rule": "shell-secret-sed-argv",
+    "file": "fixtures/shell-secret-sed-argv/positive/scripts/scrub.sh",
+    "positive": true
+  },
+  {
+    "rule": "shell-secret-sed-argv",
+    "file": "fixtures/shell-secret-sed-argv/negative/scripts/scrub.sh",
+    "positive": false
+  },
+  {
+    "rule": "shell-pin-regex-no-end-anchor",
+    "file": "fixtures/shell-pin-regex-no-end-anchor/positive/scripts/pins.sh",
+    "positive": true
+  },
+  {
+    "rule": "shell-pin-regex-no-end-anchor",
+    "file": "fixtures/shell-pin-regex-no-end-anchor/negative/scripts/pins.sh",
+    "positive": false
+  },
+  {
+    "rule": "python-url-like-selector",
+    "file": "fixtures/python-url-like-selector/positive/ops/pr_supply.py",
+    "positive": true
+  },
+  {
+    "rule": "python-url-like-selector",
+    "file": "fixtures/python-url-like-selector/negative/ops/pr_supply.py",
+    "positive": false
+  },
+  {
+    "rule": "python-failure-to-skip",
+    "file": "fixtures/python-failure-to-skip/positive/ops/smoke.py",
+    "positive": true
+  },
+  {
+    "rule": "python-failure-to-skip",
+    "file": "fixtures/python-failure-to-skip/negative/ops/smoke.py",
+    "positive": false
+  },
+  {
+    "rule": "python-narrow-json-except",
+    "file": "fixtures/python-narrow-json-except/positive/ops/snapshot_reader.py",
+    "positive": true
+  },
+  {
+    "rule": "python-narrow-json-except",
+    "file": "fixtures/python-narrow-json-except/negative/ops/snapshot_reader.py",
+    "positive": false
+  },
+  {
+    "rule": "php-validated-numeric-cast",
+    "file": "fixtures/php-validated-numeric-cast/positive/app/UpdateTransfer.php",
+    "positive": true
+  },
+  {
+    "rule": "php-validated-numeric-cast",
+    "file": "fixtures/php-validated-numeric-cast/negative/app/UpdateTransfer.php",
+    "positive": false
+  },
+  {
+    "rule": "migration-hardcoded-number",
+    "file": "fixtures/migration-hardcoded-number/positive/scripts/import.py",
+    "positive": true
+  },
+  {
+    "rule": "migration-hardcoded-number",
+    "file": "fixtures/migration-hardcoded-number/negative/scripts/import.py",
+    "positive": false
+  },
+  {
+    "rule": "migration-order-equality",
+    "file": "fixtures/migration-order-equality/positive/tests/migration_order.py",
+    "positive": true
+  },
+  {
+    "rule": "migration-order-equality",
+    "file": "fixtures/migration-order-equality/negative/tests/migration_order.py",
+    "positive": false
+  },
+  {
+    "rule": "php-json-where-index-proof",
+    "file": "fixtures/php-json-where-index-proof/positive/app/Export.php",
+    "positive": true
+  },
+  {
+    "rule": "php-json-where-index-proof",
+    "file": "fixtures/php-json-where-index-proof/negative/app/Export.php",
+    "positive": false
+  },
+  {
+    "rule": "db-read-then-write",
+    "file": "fixtures/db-read-then-write/positive/src/store.sql",
+    "positive": true
+  },
+  {
+    "rule": "db-read-then-write",
+    "file": "fixtures/db-read-then-write/negative/src/store.sql",
+    "positive": false
+  },
+  {
+    "rule": "php-claim-before-queue",
+    "file": "fixtures/php-claim-before-queue/positive/app/SendReminder.php",
+    "positive": true,
+    "lines": [1, 2]
+  },
+  {
+    "rule": "php-claim-before-queue",
+    "file": "fixtures/php-claim-before-queue/negative/app/SendReminder.php",
+    "positive": false
+  },
+  {
+    "rule": "db-unconditional-token-consume",
+    "file": "fixtures/db-unconditional-token-consume/positive/src/password-reset-store.sql",
+    "positive": true
+  },
+  {
+    "rule": "db-unconditional-token-consume",
+    "file": "fixtures/db-unconditional-token-consume/negative/src/password-reset-store.sql",
+    "positive": false
+  },
+  {
+    "rule": "db-trigger-lineage",
+    "file": "fixtures/db-trigger-lineage/positive/migrations/0001_lineage.sql",
+    "positive": true
+  },
+  {
+    "rule": "db-trigger-lineage",
+    "file": "fixtures/db-trigger-lineage/negative/migrations/0001_lineage.sql",
+    "positive": false
+  },
+  {
+    "rule": "hydration-copies-grants",
+    "file": "fixtures/hydration-copies-grants/positive/src/hydrate.rs",
+    "positive": true
+  },
+  {
+    "rule": "hydration-copies-grants",
+    "file": "fixtures/hydration-copies-grants/negative/src/hydrate.rs",
+    "positive": false
+  },
+  {
+    "rule": "bearer-token-plaintext-lookup",
+    "file": "fixtures/bearer-token-plaintext-lookup/positive/src/reset-store.ts",
+    "positive": true
+  },
+  {
+    "rule": "bearer-token-plaintext-lookup",
+    "file": "fixtures/bearer-token-plaintext-lookup/negative/src/reset-store.ts",
+    "positive": false
+  },
+  {
+    "rule": "security-prose-prefix-exemption",
+    "file": "fixtures/security-prose-prefix-exemption/positive/ops/risk_lanes.py",
+    "positive": true
+  },
+  {
+    "rule": "security-prose-prefix-exemption",
+    "file": "fixtures/security-prose-prefix-exemption/negative/ops/risk_lanes.py",
+    "positive": false
+  },
+  {
+    "rule": "security-rust-debug-secret",
+    "file": "fixtures/security-rust-debug-secret/positive/src/session.rs",
+    "positive": true
+  },
+  {
+    "rule": "security-rust-debug-secret",
+    "file": "fixtures/security-rust-debug-secret/negative/src/session.rs",
+    "positive": false
+  },
+  {
+    "rule": "security-rust-first-only-redaction",
+    "file": "fixtures/security-rust-first-only-redaction/positive/src/newznab.rs",
+    "positive": true
+  },
+  {
+    "rule": "security-rust-first-only-redaction",
+    "file": "fixtures/security-rust-first-only-redaction/negative/src/newznab.rs",
+    "positive": false
+  },
+  {
+    "rule": "security-secret-console-sink",
+    "file": "fixtures/security-secret-console-sink/positive/src/logger.ts.fixture",
+    "positive": true
+  },
+  {
+    "rule": "security-secret-console-sink",
+    "file": "fixtures/security-secret-console-sink/negative/src/logger.ts.fixture",
+    "positive": false
+  },
+  {
+    "rule": "security-cache-card-body",
+    "file": "fixtures/security-cache-card-body/positive/hooks/cache.ts",
+    "positive": true
+  },
+  {
+    "rule": "security-cache-card-body",
+    "file": "fixtures/security-cache-card-body/negative/hooks/cache.ts",
+    "positive": false
+  },
+  {
+    "rule": "security-branch-only-trust",
+    "file": "fixtures/security-branch-only-trust/positive/.github/workflows/trust.yml",
+    "positive": true
+  },
+  {
+    "rule": "security-branch-only-trust",
+    "file": "fixtures/security-branch-only-trust/negative/.github/workflows/trust.yml",
+    "positive": false
+  }
+]

@@ -1,0 +1,134 @@
+name: review-rules reusable
+# ci-policy: non-required -- shadow signals, no new required check in this rollout.
+on:
+  workflow_call:
+    inputs:
+      packs:
+        description: Comma-separated rust,ts,python-shell-ci,php,security packs
+        type: string
+        default: rust,ts,python-shell-ci,php,security
+      mode:
+        description: warn or enforce; no rule is promoted initially
+        type: string
+        default: warn
+      runs-on-json:
+        description: Optional existing runner labels as JSON; private defaults to two-selfhosted
+        type: string
+        default: ''
+permissions:
+  contents: read
+jobs:
+  scan:
+    name: scan changed files
+    runs-on: ${{ fromJSON(inputs.runs-on-json != '' && inputs.runs-on-json || (github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]')) }}
+    timeout-minutes: 20
+    env:
+      RR_PACKS: ${{ inputs.packs }}
+      RR_MODE: ${{ inputs.mode }}
+    steps:
+      - name: Allocate isolated receipt directory
+        id: output
+        continue-on-error: true
+        shell: bash
+        run: |
+          report_dir=$(mktemp -d "$RUNNER_TEMP/review-rules.XXXXXX")
+          printf 'path=%s\n' "$report_dir" >> "$GITHUB_OUTPUT"
+      - name: Fetch immutable trusted engine
+        id: engine
+        continue-on-error: true
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: TogetherWeOwn/.github
+          # Engine assets are a separate reviewed commit, never the target PR.
+          ref: 60af368600e9dc3aa19f6a3947b0421eba0b99e8
+          path: review-rules-engine
+          persist-credentials: false
+          sparse-checkout: review-rules
+      - name: Fetch target history as data only
+        id: source
+        continue-on-error: true
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: review-rules-source
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - name: Pull immutable scanner
+        id: image
+        continue-on-error: true
+        shell: bash
+        run: docker pull semgrep/semgrep@sha256:fca58525689355641019c05ab49dcc5bc3a1eb7e044f35014ee39594b5aa4fc1
+      - name: Scan changed Git blobs with central rules
+        id: scan
+        if: ${{ steps.output.outcome == 'success' && steps.engine.outcome == 'success' && steps.source.outcome == 'success' && steps.image.outcome == 'success' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          RR_OUTPUT: ${{ steps.output.outputs.path }}
+        run: |
+          python3 -I "$GITHUB_WORKSPACE/review-rules-engine/review-rules/scripts/run.py" \
+            --repo "$GITHUB_WORKSPACE/review-rules-source" \
+            --event "$GITHUB_EVENT_PATH" --packs "$RR_PACKS" --mode "$RR_MODE" \
+            --output "$RR_OUTPUT"
+      - name: Preserve incomplete receipt on infrastructure failure
+        id: receipt
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          RR_OUTPUT: ${{ steps.output.outputs.path }}
+        run: |
+          python3 -I - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          output = os.environ.get('RR_OUTPUT', '')
+          if not output:
+              print('::warning title=review-rules incomplete::Receipt directory unavailable; no coverage claim.')
+              raise SystemExit(1)
+          path = Path(output) / 'review-rules.json'
+          try:
+              report = json.loads(path.read_text())
+              valid = report.get('schema_version') == 1 and report.get('status') in {'complete', 'incomplete'}
+          except (OSError, ValueError, AttributeError):
+              valid = False
+          if not valid:
+              report = {'schema_version': 1, 'mode': os.environ['RR_MODE'], 'status': 'incomplete',
+                        'head': '', 'base': '', 'promoted_rules': [], 'findings': [],
+                        'errors': ['Checkout, scanner or receipt failed; no complete coverage claim.'],
+                        'stats': {'changed_files': 0, 'scanned_targets': 0}}
+              path.write_text(json.dumps(report, indent=2) + '\n')
+              message = '## review-rules\n\nCoverage: **incomplete**. Infrastructure failed; no clean verdict.\n'
+              (Path(output) / 'review-rules.md').write_text(message)
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
+                  stream.write(message)
+              print('::warning title=review-rules incomplete::Infrastructure failed; see incomplete receipt.')
+          PY
+      - name: Upload sanitized rule receipt
+        id: artifact
+        if: ${{ always() && steps.output.outputs.path != '' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: review-rules
+          path: |
+            ${{ steps.output.outputs.path }}/review-rules.json
+            ${{ steps.output.outputs.path }}/review-rules.md
+          retention-days: 7
+          if-no-files-found: error
+      - name: Resolve shadow or explicit enforcement outcome
+        if: always()
+        shell: bash
+        env:
+          RR_OUTCOMES: ${{ steps.output.outcome }},${{ steps.engine.outcome }},${{ steps.source.outcome }},${{ steps.image.outcome }},${{ steps.scan.outcome }},${{ steps.receipt.outcome }},${{ steps.artifact.outcome }}
+        run: |
+          if [[ "$RR_OUTCOMES" != 'success,success,success,success,success,success,success' ]]; then
+            printf '%s\n' '::warning title=review-rules incomplete::One or more engine or delivery steps did not succeed.'
+            if [[ "$RR_MODE" == 'enforce' ]]; then
+              exit 1
+            fi
+          fi
+          # Warn is deliberately successful, including infrastructure failures.
+          exit 0

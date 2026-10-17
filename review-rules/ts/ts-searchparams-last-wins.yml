@@ -1,0 +1,16 @@
+rules:
+- id: ts-searchparams-last-wins
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-006: Object.fromEntries(searchParams) is last-wins; use getAll with an explicit duplicate-key
+    contract.'
+  severity: ERROR
+  metadata:
+    examples:
+    - two-web-next#846 events-dup-param-last-wins
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern: Object.fromEntries($P.searchParams)

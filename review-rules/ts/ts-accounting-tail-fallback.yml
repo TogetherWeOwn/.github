@@ -1,0 +1,21 @@
+rules:
+- id: ts-accounting-tail-fallback
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-013: accounting OR fallback can override full-stream missing values with capped-tail data;
+    keep missing sticky.'
+  severity: WARNING
+  metadata:
+    examples:
+    - paperclip#58 capped-tail-overrides-missing-accounting
+    - paperclip#49 merge-cost-prefers-truncated-control
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: $A || $B
+  - metavariable-regex:
+      metavariable: $A
+      regex: (?i).*(costUsd|usageComplete|missingCost|missingUsage).*

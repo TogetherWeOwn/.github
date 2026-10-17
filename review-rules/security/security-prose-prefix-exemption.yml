@@ -1,0 +1,19 @@
+rules:
+- id: security-prose-prefix-exemption
+  languages:
+  - python
+  message: 'SEC-AUTH-02A: prose basename-prefix exemption also exempts README.yml/NOTICE.tf; pin exact
+    extension and directory.'
+  severity: ERROR
+  metadata:
+    examples:
+    - paperclip-ops-tooling#938 readme-prefix-exempts-token-scan
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: $NAME.startswith($PREFIXES)
+  - metavariable-regex:
+      metavariable: $PREFIXES
+      regex: (?s).*README.*LICENSE.*NOTICE.*

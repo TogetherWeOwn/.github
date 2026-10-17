@@ -1,0 +1,18 @@
+rules:
+- id: python-url-like-selector
+  languages:
+  - python
+  message: 'PYCI-05a: LIKE on a PR URL may match PR 7 as 70; escape and enforce URL/head identity boundaries.'
+  severity: WARNING
+  metadata:
+    examples:
+    - paperclip-ops-tooling#798 pr-supply-owner-match-unanchored
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: $Q.like($PAT)
+  - metavariable-regex:
+      metavariable: $PAT
+      regex: (?i).*(url|pull|pr_pattern).*
