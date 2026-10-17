@@ -308,6 +308,11 @@ class TextChecks(unittest.TestCase):
                 'ci.yml', 'run: echo ${{ toJSON(needs) }}\n' + 'grep ' * 32000)),
             ('workflow git show repeats on one line', lambda: checks.workflow_checks(
                 'ci.yml', 'run: gitleaks detect\n' + 'git show ' * 64000)),
+            ('workflow gitleaks then blank run', lambda: checks.workflow_checks(
+                '.github/workflows/a.yml', 'gitleaks\n' + '\n' * 80000 + 'x: 1\n')),
+            ('workflow lxc if: then blank run', lambda: checks.workflow_checks(
+                'ci.yml', 'steps:\n  - run: lxc init images:ubuntu c1\n  - if:\n'
+                + '\n' * 20000 + '      success()\n    run: lxc delete c1 --force\n')),
             ('select( repeats on one gh line', lambda: checks.shell_checks(
                 'a.sh', 'gh api x .[0] ' + 'select(' * 64000)),
             ('dump inventory after long identifier', lambda: checks.repo_checks(
@@ -412,6 +417,14 @@ class TextChecks(unittest.TestCase):
         self.assertNotIn('security-suppression-source', {x['rule_id'] for x in checks.workflow_checks(
             '.github/workflows/leaks.yml',
             'steps:\n  - run: |\n      git show\n        origin/main:.gitleaksignore > base.ignore\n'
+            '      rm -f .gitleaksignore\n      gitleaks detect --gitleaks-ignore-path base.ignore\n')})
+        # Blank lines skipped by the cross-newline search do not break a
+        # `git`/`show` split across them, nor the blank-line `if:` case
+        # above: the searches still cross from the non-blank line before
+        # the run to the next non-blank line.
+        self.assertNotIn('security-suppression-source', {x['rule_id'] for x in checks.workflow_checks(
+            '.github/workflows/leaks.yml',
+            'steps:\n  - run: |\n      git\n\n\n        show origin/main:.gitleaksignore > base.ignore\n'
             '      rm -f .gitleaksignore\n      gitleaks detect --gitleaks-ignore-path base.ignore\n')})
         # The `on:` trigger block ends at the first significant line at
         # or below its indent: the token on that breaker line itself (or

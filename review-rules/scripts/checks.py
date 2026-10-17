@@ -106,6 +106,16 @@ def has_after_on_line(text: str, first: str, second: str,
             if hit and second_re.search(line, hit.end()):
                 return True
             continue
+        # A blank line can never return True here: both cross_newline
+        # callers' `first` patterns start with a non-whitespace literal
+        # (`if:`, `git\s+show\s+`), so no match can start on a blank
+        # line, and a match wholly on the next non-blank line is found
+        # when that line is visited. Skipping blank lines is what keeps
+        # blank runs scanned once overall: without it, every blank line
+        # walks the rest of its run computing `follow` and rescans the
+        # next non-blank line in the spanning search below (quadratic).
+        if not line.strip():
+            continue
         # Search the line plus its break: a `first` ending the line may
         # need the break itself to complete (`git show` at end of line,
         # whose trailing whitespace run is the newline in the original
