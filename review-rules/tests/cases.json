@@ -521,12 +521,12 @@
   },
   {
     "rule": "security-secret-console-sink",
-    "file": "fixtures/security-secret-console-sink/positive/src/logger.ts",
+    "file": "fixtures/security-secret-console-sink/positive/src/logger.ts.fixture",
     "positive": true
   },
   {
     "rule": "security-secret-console-sink",
-    "file": "fixtures/security-secret-console-sink/negative/src/logger.ts",
+    "file": "fixtures/security-secret-console-sink/negative/src/logger.ts.fixture",
     "positive": false
   },
   {

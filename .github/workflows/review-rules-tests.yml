@@ -28,14 +28,15 @@ jobs:
         run: docker pull semgrep/semgrep@sha256:fca58525689355641019c05ab49dcc5bc3a1eb7e044f35014ee39594b5aa4fc1
       - name: Validate every Semgrep rule
         # Validation alone fetches Semgrep's rule-lint registry. Scans below
-        # disable network; no credentials or source checkout mount is needed here.
+        # disable network. Mount only rules at /src: the CLI's Docker preflight
+        # refuses an empty /src even for validation (otherwise silently exit 2).
         run: |
           docker run --rm --cap-drop ALL --security-opt no-new-privileges \
             -e SEMGREP_SEND_METRICS=off -e SEMGREP_ENABLE_VERSION_CHECK=0 \
-            --mount "type=bind,source=$GITHUB_WORKSPACE/review-rules,target=/rules,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/review-rules,target=/src,readonly" \
             semgrep/semgrep@sha256:fca58525689355641019c05ab49dcc5bc3a1eb7e044f35014ee39594b5aa4fc1 \
-            semgrep --validate --config /rules/rust --config /rules/ts \
-              --config /rules/python-shell-ci --config /rules/php --config /rules/security
+            semgrep --validate --config /src/rust --config /src/ts \
+              --config /src/python-shell-ci --config /src/php --config /src/security
       - name: Positive and negative fixtures for every rule
         run: python3 -I review-rules/tests/selftest.py --semgrep
       - name: Lint changed workflow family

@@ -403,7 +403,19 @@ def fixture_test() -> int:
     for ident in ids:
         if {case['positive'] for case in cases if case['rule'] == ident} != {True, False}:
             raise AssertionError('missing positive/negative fixture: ' + ident)
-    result = engine.docker_scan(ROOT / 'tests/fixtures', ALL)
+    # Deliberately vulnerable samples can be stored as *.fixture data, so
+    # repository-wide security tools do not mistake them for shipped code. Only
+    # this isolated test tree restores the intended language extension; the
+    # vulnerable bytes and positive expectation remain unchanged.
+    with tempfile.TemporaryDirectory(prefix='review-rules-fixtures-') as temp:
+        staging = Path(temp)
+        (staging / '.semgrepignore').write_text('# Include every fixture.\n')
+        for case in cases:
+            source = ROOT / 'tests' / case['file']
+            target = staging / case['file'].removeprefix('fixtures/').removesuffix('.fixture')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+        result = engine.docker_scan(staging, ALL)
     if result.get('errors'):
         raise AssertionError('Semgrep fixture parse errors: ' + str(len(result['errors'])))
     scanned = set(result.get('paths', {}).get('scanned', []))
@@ -411,7 +423,7 @@ def fixture_test() -> int:
         raise AssertionError('Semgrep scanned no fixtures')
     failures = []
     for case in cases:
-        path = case['file'].removeprefix('fixtures/')
+        path = case['file'].removeprefix('fixtures/').removesuffix('.fixture')
         if path not in scanned:
             failures.append((case['rule'], 'fixture not scanned', path))
         hits = [hit for hit in result['results'] if hit['check_id'] == case['rule'] and hit['path'] == path]
