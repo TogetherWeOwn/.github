@@ -169,7 +169,37 @@ test("live error-rate gates run the gate script with the promoted version and ex
     const next = rest.indexOf("\n    - name: ");
     return next < 0 ? rest : rest.slice(0, next);
   };
-  for (const pct of [5, 50, 100]) {
+  // Each smoke gate records when it finished, 1s past the finish: a
+  // whole-second stamp would round down, and the analytics lower bound
+  // is inclusive, so probes sent in the final second would still count.
+  // The error-rate gate starts its judged window there, so the stage's
+  // own probes never count. The stamp must fail closed: an empty value
+  // would read as "no recorded start" and revive the trailing window.
+  assert.equal(
+    (
+      action.match(
+        /finished_at=\$\(node -e "process\.stdout\.write\(new Date\(Date\.now\(\) \+ 1000\)\.toISOString\(\)\)"\)/g,
+      ) ?? []
+    ).length,
+    3,
+  );
+  assert.equal(
+    (
+      action.match(
+        /if \[ -z "\$finished_at" \]; then echo "::error::could not stamp the smoke finish time" >&2; exit 1; fi/g,
+      ) ?? []
+    ).length,
+    3,
+  );
+  assert.equal(
+    (action.match(/echo "finished-at=\$finished_at" >> "\$GITHUB_OUTPUT"/g) ?? []).length,
+    3,
+  );
+  for (const [pct, smoke] of [
+    [5, "smoke-5"],
+    [50, "smoke-50"],
+    [100, "smoke-100"],
+  ]) {
     const block = stepBlock(`Live error-rate gate at ${pct} percent`);
     // Trailing newline pins the whole line: `... && false` must not match.
     assert.ok(block.includes("if: inputs.error-rate-gate == 'true'\n"), `gate ${pct} if guard`);
@@ -187,6 +217,7 @@ test("live error-rate gates run the gate script with the promoted version and ex
       "ERROR_RATE_MIN_REQUESTS: ${{ inputs.error-rate-min-requests }}",
       "ERROR_RATE_WINDOW_MINUTES: ${{ inputs.error-rate-window-minutes }}",
       "ERROR_RATE_SOAK_SECONDS: ${{ inputs.error-rate-soak-seconds }}",
+      `ERROR_RATE_WINDOW_START: \${{ steps.${smoke}.outputs.finished-at }}`,
     ]) {
       assert.ok(block.includes(envLine), `gate ${pct} env: ${envLine}`);
     }
