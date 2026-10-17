@@ -40,7 +40,7 @@ jobs:
         with:
           repository: TogetherWeOwn/.github
           # Engine assets are a separate reviewed commit, never the target PR.
-          ref: 35a0946a8e06f39524f9e0b0548b87d9442962be
+          ref: 60af368600e9dc3aa19f6a3947b0421eba0b99e8
           path: review-rules-engine
           persist-credentials: false
           sparse-checkout: review-rules
