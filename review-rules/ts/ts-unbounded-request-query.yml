@@ -13,10 +13,13 @@ rules:
     category: correctness
     proof: Advisory static signal; confirm with the named behavioral test before promotion.
   patterns:
-  - pattern: $Q.findMany($OPTS)
-  - metavariable-regex:
-      metavariable: $OPTS
-      regex: (?is)^(?!.*(?:limit|take)).*$
+  - pattern-either:
+    - pattern: $Q.findMany()
+    - patterns:
+      - pattern: $Q.findMany($OPTS)
+      - metavariable-regex:
+          metavariable: $OPTS
+          regex: (?is)^(?!.*(?:limit|take)).*$
   paths:
     include:
     - '**/src/routes/**'

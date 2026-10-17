@@ -147,6 +147,96 @@ def supply_checks(path: str, text: str) -> list[dict]:
     return out
 
 
+def collapse_substitutions(line: str) -> str:
+    """Replace each balanced `>(...)`, `<(...)` and `$(...)` with one word.
+
+    Quote- and nesting-aware, so a substitution whose body contains quoted
+    parentheses or a nested `$(...)` still collapses to a single token
+    instead of leaking its interior words to the tokenizer. An unbalanced
+    opening is left as literal text.
+    """
+    out = []
+    index = 0
+    quote = ''
+    while index < len(line):
+        char = line[index]
+        if quote == "'":
+            out.append(char)
+            quote = '' if char == "'" else quote
+            index += 1
+            continue
+        if char == '\\' and index + 1 < len(line):
+            out.append(line[index:index + 2])
+            index += 2
+            continue
+        if char == '"':
+            quote = '' if quote == '"' else (quote or '"')
+            out.append(char)
+            index += 1
+            continue
+        if char == "'" and not quote:
+            quote = "'"
+            out.append(char)
+            index += 1
+            continue
+        if line.startswith(('>(', '<(', '$('), index) and (not quote or char == '$'):
+            depth = 0
+            inner_quote = ''
+            end = index + 1
+            while end < len(line):
+                inner = line[end]
+                if inner_quote == "'":
+                    inner_quote = '' if inner == "'" else inner_quote
+                elif inner == '\\' and inner_quote != "'":
+                    end += 1
+                elif inner_quote == '"':
+                    inner_quote = '' if inner == '"' else inner_quote
+                elif inner in {'"', "'"}:
+                    inner_quote = inner
+                elif inner == '(':
+                    depth += 1
+                elif inner == ')':
+                    depth -= 1
+                    if not depth:
+                        break
+                end += 1
+            if end >= len(line):
+                out.append(char)
+                index += 1
+                continue
+            out.append('__substitution__')
+            index = end + 1
+            continue
+        out.append(char)
+        index += 1
+    return ''.join(out)
+
+
+def exec_first_command(line: str) -> str:
+    """`exec` arguments up to the first unquoted shell command separator.
+
+    Substitutions become a placeholder word first, so
+    `exec > >(tee "$log") 2>&1` tokenizes as redirections only, while a
+    command word after the substitution is still visible to the caller.
+    """
+    line = collapse_substitutions(line)
+    quote = ''
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+        elif char == '\\' and quote != "'":
+            escaped = True
+        elif quote:
+            if char == quote:
+                quote = ''
+        elif char in {'"', "'"}:
+            quote = char
+        elif char in ';|' or line.startswith('&&', index):
+            return line[:index]
+    return line
+
+
 def shell_checks(path: str, text: str) -> list[dict]:
     out = []
     # Strip comment-only lines, not quoted shell data. These checks are hints;
@@ -166,9 +256,10 @@ def shell_checks(path: str, text: str) -> list[dict]:
             'PYCI-11: provisioned resource has no same-file EXIT cleanup; verify caller-owned cleanup explicitly.'))
     if trap:
         after_trap = code[trap.end():]
-        for execute in re.finditer(r'(?m)^\s*exec\b[^\n]*', after_trap):
+        for execute in re.finditer(r'(?m)^[ \t]*exec\b[^\n]*', after_trap):
             try:
-                words = shlex.split(re.sub(r'^\s*exec\b', '', execute[0], count=1), comments=True)
+                words = shlex.split(exec_first_command(
+                    re.sub(r'^[ \t]*exec\b', '', execute[0], count=1)), comments=True)
             except ValueError:
                 words = ['<unparsed>']
             has_command = False

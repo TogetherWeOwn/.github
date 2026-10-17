@@ -61,6 +61,9 @@ TEXT_CASES = [
     ('shell-trap-exec', 'scripts/run.sh',
      'trap \'rm -rf "$tmp"\' EXIT\nexec grype .',
      'trap \'rm -rf "$tmp"\' EXIT\ngrype .'),
+    ('shell-trap-exec', 'scripts/run.sh',
+     'trap \'rm -rf "$tmp"\' EXIT\nexec > >(tee "$log") grype .',
+     'trap \'rm -rf "$tmp"\' EXIT\nexec > >(tee "$log") 2>&1'),
     ('workflow-cancel-cleanup', '.github/workflows/branch.yml',
      'steps:\n  - run: pscale branch create db test',
      'steps:\n  - run: pscale branch create db test\n  - if: always()\n    run: pscale branch delete db test'),
@@ -165,6 +168,19 @@ class TextChecks(unittest.TestCase):
             'trap cleanup EXIT\nexec -a logger')})
         self.assertIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
             'trap cleanup EXIT\nexec >log grype .')})
+        self.assertNotIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'trap cleanup EXIT\nexec >log 2>&1; echo hi')})
+        self.assertNotIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'trap cleanup EXIT\nexec > >(tee -a "$log") 2>&1')})
+        self.assertNotIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'trap cleanup EXIT\nexec > >(tee "$log-$(date +%F)") 2>&1')})
+        self.assertNotIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'trap cleanup EXIT\nexec > >(tee "a(b)") 2>&1')})
+
+    def test_shell_trap_exec_reports_exec_line(self):
+        text = '#!/bin/sh\nset -eu\ntmp=x\ntrap cleanup EXIT\n\n\nexec grype .'
+        hits = [x for x in checks.shell_checks('a.sh', text) if x['rule_id'] == 'shell-trap-exec']
+        self.assertEqual([7], [x['line'] for x in hits])
 
 
 class FakeRepo:
@@ -512,11 +528,20 @@ def fixture_test() -> int:
             target = staging / case['file'].removeprefix('fixtures/').removesuffix('.fixture')
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(source.read_bytes())
-        for target in sorted(staging.rglob('*.ts')):
+        # `node --check` ignores --experimental-strip-types, so this is a
+        # JavaScript-syntax check, not a TypeScript parse. It applies only to
+        # fixtures authored as plain .ts files, which must therefore stay in
+        # the JS subset (no TypeScript-only syntax); it catches defects such
+        # as a raw newline inside a string literal. Corpus excerpts stored as
+        # *.ts.fixture may use full TypeScript and are parsed by Semgrep.
+        for case in cases:
+            if not case['file'].endswith('.ts'):
+                continue
+            target = staging / case['file'].removeprefix('fixtures/')
             parsed = subprocess.run(['node', '--experimental-strip-types', '--check', str(target)],
                                     capture_output=True, text=True)
             if parsed.returncode:
-                raise AssertionError(f'TypeScript fixture syntax error ({target.relative_to(staging)}): {parsed.stderr.strip()}')
+                raise AssertionError(f'TypeScript fixture is not valid JavaScript syntax ({target.relative_to(staging)}): {parsed.stderr.strip()}')
         result = engine.docker_scan(staging, ALL)
     if result.get('errors'):
         raise AssertionError('Semgrep fixture parse errors: ' + str(len(result['errors'])))

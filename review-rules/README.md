@@ -131,6 +131,11 @@ The second command is the equivalent of `semgrep --test`: all shipped IDs must
 have positive and negative entries in `tests/cases.json`; every fixture must be
 scanned; expectations are matched by exact rule ID and path; parser errors fail.
 It also requires Node.js 22+ to syntax-check the TypeScript fixtures.
+`node --check` does not strip types, so that check applies only to fixtures
+authored as plain `.ts` files and only proves they stay in the
+JavaScript-syntax subset (no TypeScript-only syntax); it is not a TypeScript
+parse. Corpus excerpts stored as `*.ts.fixture` may use full TypeScript and
+are parsed by Semgrep instead.
 The same digest and isolation options as production are used. The Semgrep tier
 also runs real PR and merge-group event scans with nested malicious ignores and
 an independently scanned sibling; the vulnerable target must still be detected.

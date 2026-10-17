@@ -14,7 +14,10 @@ rules:
     category: correctness
     proof: Advisory static signal; confirm with the named behavioral test before promotion.
   patterns:
-  - pattern: $Q->update([$FIELD => $V]); ... Mail::queue(...);
+  - pattern-either:
+    - pattern: $Q->update([$FIELD => $V]); ... Mail::queue(...);
+    - pattern: $Q->update([$FIELD => $V, ...]); ... Mail::queue(...);
+    - pattern: $Q->update([..., $FIELD => $V, ...]); ... Mail::queue(...);
   - metavariable-regex:
       metavariable: $FIELD
       regex: .*(sent_at|claimed_at|processed_at).*
