@@ -3,12 +3,14 @@
 // Ships inside the shared composite action next to gradual-promote.mjs,
 // which holds the pure query/parse/evaluate helpers. This file owns the
 // network: after a soak it asks the Cloudflare GraphQL Analytics API for
-// the promoted version's invocation errors and requests over a trailing
-// window (`workersInvocationsAdaptive`, filtered by scriptVersion) and
-// exits non-zero when the rate is over threshold, so the action's
-// existing failure-driven rollback steps restore the pre-promote
-// version. Query or parse failures also exit non-zero (fail closed)
-// after the configured attempts. An insufficient live sample retries
+// the promoted version's invocation errors and requests over the window
+// since the stage's smoke gate finished (ERROR_RATE_WINDOW_START,
+// capped by the configured lookback; `workersInvocationsAdaptive`,
+// filtered by scriptVersion), so the smoke probes themselves never
+// count, and exits non-zero when the rate is over threshold, so the
+// action's existing failure-driven rollback steps restore the
+// pre-promote version. Query or parse failures also exit non-zero
+// (fail closed) after the configured attempts. An insufficient sample retries
 // while analytics aggregates catch up, then passes with a warning: the
 // per-stage smoke gate has already probed the new version directly, and
 // a quiet window must not strand a promotion forever.
@@ -23,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import {
   assertErrorRateIdentifiers,
   buildErrorRateQuery,
+  errorRateWindowSince,
   evaluateErrorRate,
   parseErrorRateResponse,
 } from "./gradual-promote.mjs";
@@ -77,7 +80,11 @@ export async function runErrorRateGate(config, deps = {}) {
   let last = { requests: 0, errors: 0, rate: 0, verdict: "error" };
   for (let attempt = 1; attempt <= config.attempts; attempt += 1) {
     const until = now();
-    const since = new Date(until.getTime() - config.windowMinutes * 60_000);
+    const since = errorRateWindowSince({
+      windowStartIso: config.windowStartIso,
+      until,
+      windowMinutes: config.windowMinutes,
+    });
     try {
       const body = buildErrorRateQuery({
         accountId: config.accountId,
@@ -111,7 +118,7 @@ export async function runErrorRateGate(config, deps = {}) {
 
   if (last.verdict === "insufficient") {
     log(
-      "::warning::error-rate gate passing on an insufficient live sample; " +
+      "::warning::error-rate gate passing on an insufficient post-smoke sample; " +
         "the smoke gate already probed the new version directly",
     );
     return { code: 0, attempts: config.attempts, ...last };
@@ -148,6 +155,10 @@ export function configFromEnv(env) {
   // typo (threshold 5 for 5 percent, an empty id) surfaces in seconds
   // instead of after the soak and retry sleeps.
   assertErrorRateIdentifiers({ accountId, scriptName, versionId });
+  const windowStartIso = env.ERROR_RATE_WINDOW_START || undefined;
+  if (windowStartIso !== undefined && !Number.isFinite(Date.parse(windowStartIso))) {
+    throw new Error("ERROR_RATE_WINDOW_START must be an ISO timestamp");
+  }
   return {
     accountId,
     scriptName,
@@ -157,6 +168,7 @@ export function configFromEnv(env) {
     threshold: numberFromEnv(env, "ERROR_RATE_THRESHOLD", 0.05, { max: 1 }),
     minRequests: numberFromEnv(env, "ERROR_RATE_MIN_REQUESTS", 20, { integer: true, min: 1 }),
     windowMinutes: numberFromEnv(env, "ERROR_RATE_WINDOW_MINUTES", 10, { integer: true, min: 1 }),
+    windowStartIso,
     soakSeconds: numberFromEnv(env, "ERROR_RATE_SOAK_SECONDS", 60, { integer: true }),
     attempts: numberFromEnv(env, "ERROR_RATE_ATTEMPTS", 3, { integer: true, min: 1 }),
     retrySeconds: numberFromEnv(env, "ERROR_RATE_RETRY_SECONDS", 60, { integer: true }),
