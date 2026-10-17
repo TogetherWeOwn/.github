@@ -75,6 +75,48 @@ def line_counter(text: str):
     return line_of
 
 
+def has_after_on_line(text: str, first: str, second: str) -> bool:
+    """True when `second` matches after `first` on some single line.
+
+    Two-step replacement for text-wide `first[^\\n]*second` / `first.*second`
+    regexes, which backtrack from every `first` on a long line when `second`
+    never follows (quadratic in line length). Existence is equivalent: if
+    some `first` is followed by `second` on a line, the leftmost `first`
+    on that line is too.
+    """
+    first_re = re.compile(first)
+    second_re = re.compile(second)
+    for line in text.split('\n'):
+        hit = first_re.search(line)
+        if hit and second_re.search(line, hit.end()):
+            return True
+    return False
+
+
+def select_filters_identity(line: str) -> bool:
+    """True for select(.head.sha == ...) / select(.number == ...) on `line`.
+
+    Linear replacement for `select\\([^)]*\\.(?:head\\.sha|number)\\s*==`:
+    that regex rescans to the end of the line from every `select(` when no
+    `)` follows. Here each parenthesised segment is searched at most once:
+    a `select(` inside an already-searched segment has a subset segment.
+    """
+    identity = re.compile(r'\.(?:head\.sha|number)\s*==')
+    searched_until = -1
+    pos = 0
+    while (start := line.find('select(', pos)) >= 0:
+        inner = start + len('select(')
+        if inner > searched_until:
+            end = line.find(')', inner)
+            if end < 0:
+                end = len(line)
+            if identity.search(line, inner, end):
+                return True
+            searched_until = end
+        pos = inner
+    return False
+
+
 def workflow_steps(text: str) -> list[tuple[int, str]]:
     """Split block-style steps; flow-style workflows remain a reported limitation.
 
@@ -314,16 +356,34 @@ def shell_checks(path: str, text: str) -> list[dict]:
         `second` never follows, which is quadratic in line length. Existence
         per line is equivalent: if some `first` is followed by `second`, the
         leftmost `first` is too. At most one yield per line, as with ^.* .
+        One exception: the old regexes let a `\\s` in `second` cross a
+        newline, which is real shell when the line ends with `||` (the
+        command continues), so that case is retried on the joined lines.
         """
         first_re = re.compile(first)
         second_re = re.compile(second)
+        lines = code.split('\n')
         offset = 0
-        for line in code.split('\n'):
+        for index, line in enumerate(lines):
             start = offset
             offset += len(line) + 1
             hit = first_re.search(line)
-            if hit and second_re.search(line, hit.end()):
+            if not hit:
+                continue
+            if second_re.search(line, hit.end()):
                 yield start, line
+                continue
+            # A trailing `||` continues the command on the next line (a
+            # scanner masked as `cmd ||` + newline + `true` must still
+            # flag). Joining at most one line per line keeps it linear.
+            # The joined match must span the newline, as the old regex's
+            # `\s` did: a `second` found wholly on the next line belongs
+            # to the continued command, not to this line's `first`.
+            if index + 1 < len(lines) and line.rstrip().endswith('||'):
+                joined = line + '\n' + lines[index + 1]
+                spanning = second_re.search(joined, hit.end())
+                if spanning and '\n' in spanning[0]:
+                    yield start, joined
 
     checked_starts = [m.start() for m in re.finditer(r'\bsha256sum\s+(?:--check|-c)\b', code)]
     execute_starts = [m.start() for m in re.finditer(
@@ -338,8 +398,10 @@ def shell_checks(path: str, text: str) -> list[dict]:
     # [ \t]* after ^ in the trap/set searches below: ^\s* crosses newlines,
     # so every blank line start rescans the rest of a blank run (quadratic).
     # Only .end() of these matches is used, and it is unchanged: the first
-    # matching line anchors at its own start either way.
-    trap = re.search(r'(?m)^[ \t]*trap\s+[^\n]*\bEXIT\b', code)
+    # matching line anchors at its own start either way. `trap(?=\s)`, not
+    # `trap\s+`: \s+ and [^\n]* overlap on whitespace, so each backoff of
+    # \s+ rescans the rest of a long whitespace run (quadratic again).
+    trap = re.search(r'(?m)^[ \t]*trap(?=\s)[^\n]*\bEXIT\b', code)
     provision = re.search(r'\b(?:mktemp|lxc\s+(?:init|launch)|pscale\s+branch\s+create)\b', code)
     if provision and not trap and not re.search(r'#\s*sourced-cleanup:\s*\S+', text):
         out.append(finding('shell-provision-cleanup', path, line_of(provision.start()),
@@ -447,7 +509,7 @@ def shell_checks(path: str, text: str) -> list[dict]:
             out.append(finding('shell-scan-proves-work', path, line_of(match.start()),
                 'PYCI-07b: scanner success alone does not prove a nonempty range; assert a positive scanned count.'))
     for start, line in lines_matching(r'\bgh\s+(?:api|pr\s+list)\b', r'\.\[0\]'):
-        if not re.search(r'select\([^)]*\.(?:head\.sha|number)\s*==', line):
+        if not select_filters_identity(line):
             out.append(finding('shell-pr-first-match', path, line_of(start),
                 'PYCI-05a: first PR result is not an identity match; select full PR/head identity before indexing.'))
     for match in re.finditer(r'--match-head-commit\b([^\n]*)', code):
@@ -467,7 +529,11 @@ def pagination_checks(path: str, text: str) -> list[dict]:
             lines = text.splitlines()
             functions = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
             regions = [(n.lineno, '\n'.join(lines[n.lineno - 1:n.end_lineno])) for n in functions] or regions
-        except (SyntaxError, RecursionError):
+        except (SyntaxError, RecursionError, MemoryError, ValueError):
+            # MemoryError: the parser reports stack overflow on very long
+            # lines that way; ValueError: NUL bytes in the source. Either
+            # way untrusted input must fall back to whole-text scanning,
+            # not abort the scan.
             pass
     out = []
     for first, body in regions:
@@ -510,18 +576,18 @@ def workflow_checks(path: str, text: str) -> list[dict]:
             out.append(finding('workflow-artifact-scrub', path, first,
                 'PYCI-04b/SEC-AUTH-03A: sensitive report upload has no swept==true gate; green and failed runs both need scrubbing (including embedded index.html).', 'ERROR'))
     if re.search(r'\b(?:lxc\s+(?:init|launch)|pscale\s+branch\s+create)\b', text):
-        cleanups = [b for _, b in steps if re.search(r'if:\s*.*(?:always\(\)|cancelled\(\))', b)
+        cleanups = [b for _, b in steps if has_after_on_line(b, r'if:', r'(?:always\(\)|cancelled\(\))')
                     and re.search(r'\b(?:delete|destroy)\b', b)]
         if not cleanups:
             out.append(finding('workflow-cancel-cleanup', path, 1,
                 'PYCI-11: external resource has no visible owning-step always/cancelled cleanup; a grandchild trap is insufficient.'))
-    if re.search(r'toJSON\(needs\)', text) and re.search(r'''grep[^\n]*["']result["']:["']failure''', text):
+    if re.search(r'toJSON\(needs\)', text) and has_after_on_line(text, r'grep', r'''["']result["']:["']failure'''):
         out.append(finding('workflow-required-aggregator', path, 1,
             'PYCI-12: compact-text grep does not parse pretty toJSON(needs); simulate a failed dependency with a JSON parser.', 'ERROR'))
     if 'gitleaks' in text:
         # File-invariant; located once instead of per run block below.
         removes = re.search(r'rm\s+-f\s+(?:--\s+)?\.?/?\.gitleaksignore', text)
-        base = re.search(r'git\s+show\s+[^\n]*:\.gitleaksignore', text)
+        base = has_after_on_line(text, r'git\s+show\s+', r':\.gitleaksignore')
         for first, script in workflow_runs(text):
             if not re.search(r'\bgitleaks\s+(?:git|detect|dir)\b', script):
                 continue
@@ -614,10 +680,13 @@ def repo_checks(repo, changed: list[str], packs: set[str], migration_ref: str | 
             for path in changed:
                 if not path.endswith(('.ts', '.js', '.mjs', '.svelte')) or is_test(path):
                     continue
+                # line_counter, not line_at: recounting newlines from the
+                # start for every match is quadratic on match-dense input.
+                line_of = line_counter(read(path))
                 for match in re.finditer(r'''(?:process\.env\.|import\.meta\.env\.)([A-Z][A-Z0-9_]*)|(?:process\.env\[|Deno\.env\.get\()["']([A-Z][A-Z0-9_]*)["']''', read(path)):
                     name = match[1] or match[2]
                     if re.search(r'(?:KEY|TOKEN|SECRET|PASSWORD)', name) and name not in entries:
-                        out.append(finding('ts-secret-denylist-parity', path, line_at(read(path), match.start()),
+                        out.append(finding('ts-secret-denylist-parity', path, line_of(match.start()),
                             'TS-001/SEC-AUTH-08: credential env read is absent from the literal redaction inventory; verify dynamic injection parity.', 'ERROR'))
         for path in changed:
             if not path.endswith('+page.server.ts'):
@@ -641,7 +710,54 @@ def repo_checks(repo, changed: list[str], packs: set[str], migration_ref: str | 
         dump = 'crates/core/src/backup/dump_file.rs'
         if dump in changed:
             old, new = repo.text(dump, repo.base, missing=True), read(dump)
-            inventory = lambda s: set(re.findall(r'''["']([a-z][a-z0-9_]*)["']''', '\n'.join(re.findall(r'(?s)(?:DUMP_TABLES|\w+_ADDED_TABLES)[^=]*=\s*&?\[(.*?)\]', s))))
+            def inventory(s):
+                # Linear replacement for a text-wide
+                # `(?:DUMP_TABLES|\w+_ADDED_TABLES)[^=]*=\s*&?\[(.*?)\]`
+                # regex: `\w+` is tried at every offset of a long identifier
+                # and `[^=]*` rescans from every candidate. Candidates are
+                # located by literal substring search instead, and the `=`
+                # / `]` positions are indexed once and bisected per
+                # candidate. Only a candidate's end offset matters below,
+                # so `_ADDED_TABLES` preceded by a word character stands in
+                # for `\w+_ADDED_TABLES`.
+                candidates = []
+                for needle in ('DUMP_TABLES', '_ADDED_TABLES'):
+                    at = s.find(needle)
+                    while at >= 0:
+                        if needle == 'DUMP_TABLES' or (at > 0 and (s[at - 1].isalnum() or s[at - 1] == '_')):
+                            candidates.append((at, at + len(needle)))
+                        at = s.find(needle, at + 1)
+                candidates.sort()
+                equals = [m.start() for m in re.finditer('=', s)]
+                closes = [m.start() for m in re.finditer(r'\]', s)]
+                names = set()
+                seen = set()
+                consumed_until = -1
+                for start, end in candidates:
+                    # The regex this replaces resumed after each match's
+                    # `]`, so candidates inside an extracted segment do
+                    # not start a new match.
+                    if start < consumed_until:
+                        continue
+                    at = bisect_left(equals, end)
+                    if at >= len(equals):
+                        break
+                    if equals[at] in seen:
+                        continue
+                    seen.add(equals[at])
+                    pos = equals[at] + 1
+                    while pos < len(s) and s[pos].isspace():
+                        pos += 1
+                    if pos < len(s) and s[pos] == '&':
+                        pos += 1
+                    if pos >= len(s) or s[pos] != '[':
+                        continue
+                    close = bisect_left(closes, pos)
+                    if close >= len(closes):
+                        break
+                    consumed_until = closes[close] + 1
+                    names.update(re.findall(r'''["']([a-z][a-z0-9_]*)["']''', s[pos + 1:closes[close]]))
+                return names
             version = lambda s: re.search(r'DUMP_VERSION\s*:\s*\w+\s*=\s*(\d+)', s)
             before, after = version(old), version(new)
             if inventory(new) - inventory(old):

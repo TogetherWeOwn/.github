@@ -270,6 +270,28 @@ class TextChecks(unittest.TestCase):
                 'a.sh', '--limit 1\n' * 20000)),
             ('many tar excludes', lambda: checks.check_text(
                 'a.ts', "'--exclude', 'x'\n" * 30000, {'ts'})),
+            ('trap then long whitespace run', lambda: checks.shell_checks(
+                'a.sh', 'trap' + ' ' * 40000 + 'x\nmktemp -d')),
+            ('workflow if: repeats on one step line', lambda: checks.workflow_checks(
+                'ci.yml', 'steps:\n  - run: lxc init x\n    if: ' + 'if: ' * 32000)),
+            ('workflow grep repeats on one line', lambda: checks.workflow_checks(
+                'ci.yml', 'run: echo ${{ toJSON(needs) }}\n' + 'grep ' * 32000)),
+            ('workflow git show repeats on one line', lambda: checks.workflow_checks(
+                'ci.yml', 'run: gitleaks detect\n' + 'git show ' * 64000)),
+            ('select( repeats on one gh line', lambda: checks.shell_checks(
+                'a.sh', 'gh api x .[0] ' + 'select(' * 64000)),
+            ('dump inventory after long identifier', lambda: checks.repo_checks(
+                FakeRepo({'crates/core/src/backup/dump_file.rs':
+                          'const DUMP_VERSION: u32 = 6;\n' + 'a' * 80000 +
+                          '\nconst DUMP_TABLES: &[&str] = &["users", "events"];'},
+                         old={'crates/core/src/backup/dump_file.rs':
+                              'const DUMP_VERSION: u32 = 5;\nconst DUMP_TABLES: &[&str] = &["users"];'}),
+                ['crates/core/src/backup/dump_file.rs'], {'rust'}, None)),
+            ('long python line', lambda: checks.pagination_checks('a.py', 'x ' * 60000)),
+            ('many env reads on one ts line', lambda: checks.repo_checks(
+                FakeRepo({'src/a.ts': 'process.env.X_KEY; ' * 60000,
+                          'src/secret-env-redaction.ts': '["A_KEY"]'}),
+                ['src/a.ts'], {'ts'}, None)),
         ]
         for label, run in cases:
             with self.subTest(label=label):
@@ -293,6 +315,23 @@ class TextChecks(unittest.TestCase):
             'a.sh', 'echo /main/a.tgz\ncurl -O https://h/x')})
         self.assertIn('shell-pr-first-match', {x['rule_id'] for x in checks.shell_checks(
             'a.sh', 'gh api x --jq .[0] ' * 500)})
+        # A scanner masked by `||` at a line break still flags: shell
+        # continues the command on the next line, and the text-wide regex
+        # lines_matching replaced let its `\s*` cross that newline. Without
+        # the trailing `||` the next line is a separate command: no flag.
+        self.assertIn('shell-tool-failure-hidden', {x['rule_id'] for x in checks.shell_checks(
+            'a.sh', 'gitleaks detect --source . ||\n  true')})
+        self.assertIn('shell-tool-failure-hidden', {x['rule_id'] for x in checks.shell_checks(
+            'a.sh', 'trivy fs . ||\n  exit 0')})
+        self.assertNotIn('shell-tool-failure-hidden', {x['rule_id'] for x in checks.shell_checks(
+            'a.sh', 'gitleaks detect --source .\n  true')})
+        # select() identity filtering still suppresses the first-match
+        # finding, including when an earlier select() filters on something
+        # else; a non-identity select() does not suppress it.
+        self.assertNotIn('shell-pr-first-match', {x['rule_id'] for x in checks.shell_checks(
+            'a.sh', 'gh api x .[0] select(.state == 1) select(.head.sha == $s)')})
+        self.assertIn('shell-pr-first-match', {x['rule_id'] for x in checks.shell_checks(
+            'a.sh', 'gh api x .[0] select(.state == 1)')})
 
 
 class FakeRepo:
