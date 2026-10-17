@@ -222,18 +222,24 @@ def exec_first_command(line: str) -> str:
     line = collapse_substitutions(line)
     quote = ''
     escaped = False
+    prev = ''
     for index, char in enumerate(line):
         if escaped:
             escaped = False
-        elif char == '\\' and quote != "'":
+            prev = ''
+            continue
+        if char == '\\' and quote != "'":
             escaped = True
         elif quote:
             if char == quote:
                 quote = ''
         elif char in {'"', "'"}:
             quote = char
-        elif char in ';|' or line.startswith('&&', index):
+        # `>|` (and `2>|`, `>>|`) is the clobber redirection, not a pipe:
+        # only a `|` whose previous unescaped char is not `>` separates.
+        elif char == ';' or (char == '|' and prev != '>') or line.startswith('&&', index):
             return line[:index]
+        prev = char
     return line
 
 

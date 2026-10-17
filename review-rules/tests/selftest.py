@@ -64,6 +64,9 @@ TEXT_CASES = [
     ('shell-trap-exec', 'scripts/run.sh',
      'trap \'rm -rf "$tmp"\' EXIT\nexec > >(tee "$log") grype .',
      'trap \'rm -rf "$tmp"\' EXIT\nexec > >(tee "$log") 2>&1'),
+    ('shell-trap-exec', 'scripts/run.sh',
+     'trap cleanup EXIT\nexec >|log grype .',
+     'trap cleanup EXIT\nexec >|log 2>&1'),
     ('workflow-cancel-cleanup', '.github/workflows/branch.yml',
      'steps:\n  - run: pscale branch create db test',
      'steps:\n  - run: pscale branch create db test\n  - if: always()\n    run: pscale branch delete db test'),
@@ -176,6 +179,10 @@ class TextChecks(unittest.TestCase):
             'trap cleanup EXIT\nexec > >(tee "$log-$(date +%F)") 2>&1')})
         self.assertNotIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
             'trap cleanup EXIT\nexec > >(tee "a(b)") 2>&1')})
+        self.assertIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'trap cleanup EXIT\nexec 2>|log grype .')})
+        self.assertNotIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'trap cleanup EXIT\nexec >log | grype .')})
 
     def test_shell_trap_exec_reports_exec_line(self):
         text = '#!/bin/sh\nset -eu\ntmp=x\ntrap cleanup EXIT\n\n\nexec grype .'
