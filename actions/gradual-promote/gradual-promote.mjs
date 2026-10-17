@@ -159,6 +159,41 @@ export function assertErrorRateIdentifiers({ accountId, scriptName, versionId })
   assertRollbackVersionId(versionId);
 }
 
+const WINDOW_START_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+// Strict on purpose: Date.parse alone reads a timezone-less timestamp in
+// the runner's local timezone (judging the wrong interval) and rolls
+// impossible calendar dates over (Feb 31 becomes Mar 3).
+export function parseWindowStartIso(windowStartIso) {
+  const match =
+    typeof windowStartIso === "string" ? WINDOW_START_PATTERN.exec(windowStartIso) : null;
+  if (!match) {
+    throw new Error("error-rate window start must be an ISO timestamp with a timezone");
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth[month - 1] ||
+    Number(match[4]) > 23 ||
+    Number(match[5]) > 59 ||
+    Number(match[6]) > 59
+  ) {
+    throw new Error("error-rate window start must be a valid calendar date and time");
+  }
+  const start = Date.parse(windowStartIso);
+  if (!Number.isFinite(start)) {
+    throw new Error("error-rate window start must be an ISO timestamp with a timezone");
+  }
+  return start;
+}
+
 // The judged window starts when the stage's smoke gate finished
 // (windowStartIso, recorded by the action), so that stage's own probes —
 // version-pinned Worker invocations — never satisfy the minimum sample
@@ -174,11 +209,7 @@ export function errorRateWindowSince({ windowStartIso, until, windowMinutes }) {
   }
   const floor = until.getTime() - windowMinutes * 60_000;
   if (windowStartIso === undefined || windowStartIso === "") return new Date(floor);
-  const start = Date.parse(windowStartIso);
-  if (!Number.isFinite(start)) {
-    throw new Error("error-rate window start must be an ISO timestamp");
-  }
-  return new Date(Math.max(start, floor));
+  return new Date(Math.max(parseWindowStartIso(windowStartIso), floor));
 }
 
 export function buildErrorRateQuery({ accountId, scriptName, versionId, sinceIso, untilIso }) {

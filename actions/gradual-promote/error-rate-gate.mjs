@@ -28,6 +28,7 @@ import {
   errorRateWindowSince,
   evaluateErrorRate,
   parseErrorRateResponse,
+  parseWindowStartIso,
 } from "./gradual-promote.mjs";
 
 const GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql";
@@ -156,8 +157,12 @@ export function configFromEnv(env) {
   // instead of after the soak and retry sleeps.
   assertErrorRateIdentifiers({ accountId, scriptName, versionId });
   const windowStartIso = env.ERROR_RATE_WINDOW_START || undefined;
-  if (windowStartIso !== undefined && !Number.isFinite(Date.parse(windowStartIso))) {
-    throw new Error("ERROR_RATE_WINDOW_START must be an ISO timestamp");
+  if (windowStartIso !== undefined) {
+    try {
+      parseWindowStartIso(windowStartIso);
+    } catch (error) {
+      throw new Error(`ERROR_RATE_WINDOW_START is invalid: ${error.message}`);
+    }
   }
   return {
     accountId,

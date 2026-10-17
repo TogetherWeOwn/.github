@@ -169,14 +169,30 @@ test("live error-rate gates run the gate script with the promoted version and ex
     const next = rest.indexOf("\n    - name: ");
     return next < 0 ? rest : rest.slice(0, next);
   };
-  // Each smoke gate records when it finished; the error-rate gate starts
-  // its judged window there, so the stage's own probes never count.
+  // Each smoke gate records when it finished, 1s past the finish: a
+  // whole-second stamp would round down, and the analytics lower bound
+  // is inclusive, so probes sent in the final second would still count.
+  // The error-rate gate starts its judged window there, so the stage's
+  // own probes never count. The stamp must fail closed: an empty value
+  // would read as "no recorded start" and revive the trailing window.
   assert.equal(
     (
       action.match(
-        /echo "finished-at=\$\(date -u \+%Y-%m-%dT%H:%M:%SZ\)" >> "\$GITHUB_OUTPUT"/g,
+        /finished_at=\$\(node -e "process\.stdout\.write\(new Date\(Date\.now\(\) \+ 1000\)\.toISOString\(\)\)"\)/g,
       ) ?? []
     ).length,
+    3,
+  );
+  assert.equal(
+    (
+      action.match(
+        /if \[ -z "\$finished_at" \]; then echo "::error::could not stamp the smoke finish time" >&2; exit 1; fi/g,
+      ) ?? []
+    ).length,
+    3,
+  );
+  assert.equal(
+    (action.match(/echo "finished-at=\$finished_at" >> "\$GITHUB_OUTPUT"/g) ?? []).length,
     3,
   );
   for (const [pct, smoke] of [

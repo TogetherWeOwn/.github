@@ -281,6 +281,27 @@ test("error-rate window starts at the smoke finish, capped by the lookback", () 
     () => errorRateWindowSince({ windowStartIso: "soon", until, windowMinutes: 10 }),
     /window start/,
   );
+  // No timezone: Date.parse would read it in the runner's local timezone,
+  // judging the wrong interval.
+  assert.throws(
+    () => errorRateWindowSince({ windowStartIso: "2026-10-17T00:08:00", until, windowMinutes: 10 }),
+    /window start/,
+  );
+  // Not a calendar date: Date.parse rolls Feb 31 into March.
+  assert.throws(
+    () =>
+      errorRateWindowSince({ windowStartIso: "2026-02-31T00:08:00Z", until, windowMinutes: 10 }),
+    /window start/,
+  );
+  // An explicit offset is fine and names the same instant as its Z form.
+  assert.equal(
+    errorRateWindowSince({
+      windowStartIso: "2026-10-17T02:08:00+02:00",
+      until,
+      windowMinutes: 10,
+    }).toISOString(),
+    "2026-10-17T00:08:00.000Z",
+  );
 });
 
 test("error-rate query refuses untrusted identifiers and inverted windows", () => {
@@ -508,6 +529,14 @@ test("gate config rejects static misconfiguration before any soak", () => {
   assert.equal(configFromEnv({ ...base, ERROR_RATE_WINDOW_START: "" }).windowStartIso, undefined);
   assert.throws(
     () => configFromEnv({ ...base, ERROR_RATE_WINDOW_START: "soon" }),
+    /ERROR_RATE_WINDOW_START/,
+  );
+  assert.throws(
+    () => configFromEnv({ ...base, ERROR_RATE_WINDOW_START: "2026-10-17T00:08:00" }),
+    /ERROR_RATE_WINDOW_START/,
+  );
+  assert.throws(
+    () => configFromEnv({ ...base, ERROR_RATE_WINDOW_START: "2026-02-31T00:08:00Z" }),
     /ERROR_RATE_WINDOW_START/,
   );
   assert.throws(
