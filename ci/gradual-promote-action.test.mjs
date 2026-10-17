@@ -31,13 +31,16 @@ test("shared gradual action promotes 5-50-100 with per-stage gates and auto-roll
     "Resolve promoted version id",
     "Promote to 5 percent",
     "Health and SLO gate at 5 percent",
+    "Live error-rate gate at 5 percent",
     "Automatic rollback after 5 percent gate failure",
     "Promote to 50 percent",
     "Health and SLO gate at 50 percent",
+    "Live error-rate gate at 50 percent",
     "Automatic rollback after 50 percent gate failure",
     "Promote to 100 percent",
     "Health and SLO gate at 100 percent (new version)",
     "Health and SLO gate at 100 percent (live traffic)",
+    "Live error-rate gate at 100 percent",
     "Automatic rollback after 100 percent gate failure",
   ];
   let at = -1;
@@ -142,6 +145,55 @@ test("rollback stand-down retries promote failures, cancellations and failed res
   for (const [label, restored5, restored50, run50, run100] of cases) {
     assert.equal(wouldRun50(restored5 ?? ""), run50, label);
     assert.equal(wouldRun100(restored5 ?? "", restored50 ?? ""), run100, label);
+  }
+});
+
+test("live error-rate gates run the gate script with the promoted version and exact env", () => {
+  // The integration this action delivers: each gate runs between its smoke
+  // gate and rollback (order pinned above), only when enabled, judging the
+  // PROMOTED version with the env names configFromEnv parses. Without
+  // these pins, deleting a gate step, renaming an env var, pointing
+  // NEW_VERSION at the rollback target, or appending `&& false` to the
+  // guard all leave the suites green while the promotion goes ungated.
+  const action = readFileSync(
+    new URL("../actions/gradual-promote/action.yml", import.meta.url),
+    "utf8",
+  );
+  assert.equal((action.match(/- name: Live error-rate gate at \d+ percent/g) ?? []).length, 3);
+  // The rehearsal fixture override is never wired into the action.
+  assert.ok(!action.includes("ERROR_RATE_FIXTURE"));
+  const stepBlock = (name) => {
+    const start = action.indexOf(`    - name: ${name}\n`);
+    assert.ok(start >= 0, `step missing: ${name}`);
+    const rest = action.slice(start + 1);
+    const next = rest.indexOf("\n    - name: ");
+    return next < 0 ? rest : rest.slice(0, next);
+  };
+  for (const pct of [5, 50, 100]) {
+    const block = stepBlock(`Live error-rate gate at ${pct} percent`);
+    // Trailing newline pins the whole line: `... && false` must not match.
+    assert.ok(block.includes("if: inputs.error-rate-gate == 'true'\n"), `gate ${pct} if guard`);
+    // Same whole-line pin: a trailing `|| true` must not match.
+    assert.ok(
+      block.includes('run: node "${{ github.action_path }}/error-rate-gate.mjs"\n'),
+      `gate ${pct} runs the gate script`,
+    );
+    for (const envLine of [
+      "WORKER_NAME: ${{ inputs.worker-name }}",
+      "NEW_VERSION: ${{ steps.promoted-version.outputs.id }}",
+      "CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}",
+      "CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}",
+      "ERROR_RATE_THRESHOLD: ${{ inputs.error-rate-threshold }}",
+      "ERROR_RATE_MIN_REQUESTS: ${{ inputs.error-rate-min-requests }}",
+      "ERROR_RATE_WINDOW_MINUTES: ${{ inputs.error-rate-window-minutes }}",
+      "ERROR_RATE_SOAK_SECONDS: ${{ inputs.error-rate-soak-seconds }}",
+    ]) {
+      assert.ok(block.includes(envLine), `gate ${pct} env: ${envLine}`);
+    }
+    // The gate judges the promoted version, never the rollback target.
+    assert.ok(!block.includes("rollback-target"), `gate ${pct} must not read the rollback target`);
+    // A swallowed failure would never reach the rollback step.
+    assert.ok(!block.includes("continue-on-error"), `gate ${pct} must not swallow its failure`);
   }
 });
 
