@@ -148,7 +148,40 @@ class ParserTests(unittest.TestCase):
     def test_claims_strict_and_duplicate(self):
         self.assertIn("claim_shape_invalid", self.issues(body().replace("- C1:", "- behavior:")))
         self.assertIn("claim_duplicate", self.issues(body().replace("### Tests", "- C1: Same id.\n### Tests")))
-        self.assertIn("claim_shape_invalid", self.issues(body().replace("Rejects invalid input", "TODO")))
+
+    def test_real_prose_with_brackets_and_placeholder_words_is_meaningful(self):
+        replacements = (
+            "Rejects invalid input without changing valid input behavior.",
+            "python3 -m unittest; red before, green after",
+            "Checked relevant cases; remaining paths not applicable to this diff.",
+            "test_guard |",
+        )
+        for value in ("parse returns Option<String>", "returns Result<Vec<u8>, Error> on bad input",
+                      "asserts a < b and c > d", "latency <= 5ms and > 0", "renders <div>",
+                      "Removes TODO markers", "Documents TBD and REPLACE_ME tokens"):
+            for old in replacements:
+                with self.subTest(value=value, field=old):
+                    new = value + " |" if old == "test_guard |" else value
+                    self.assertEqual(self.issues(body().replace(old, new)), [])
+            with self.subTest(value=value, field="no_tests_reason"):
+                text = body("T2").replace("Documentation-only; no behavior changed.", value)
+                self.assertEqual(self.issues(text, [file("README.md")]), [])
+
+    def test_bare_placeholder_values_remain_invalid(self):
+        fields = (
+            ("Rejects invalid input without changing valid input behavior.", "claim_shape_invalid"),
+            ("python3 -m unittest; red before, green after", "test_shape_invalid"),
+            ("Checked relevant cases; remaining paths not applicable to this diff.", "checklist_shape_invalid"),
+            ("test_guard |", "test_path_invalid"),
+        )
+        for value in ("TODO", "tbd", "REPLACE_ME", "<describe behavior>", "  <proof>  "):
+            for old, issue in fields:
+                with self.subTest(value=value, field=old):
+                    new = value + " |" if old == "test_guard |" else value
+                    self.assertIn(issue, self.issues(body().replace(old, new)))
+            with self.subTest(value=value, field="no_tests_reason"):
+                text = body("T2").replace("Documentation-only; no behavior changed.", value)
+                self.assertIn("no_tests_reason_invalid", self.issues(text, [file("README.md")]))
 
     def test_tests_cover_every_claim(self):
         self.assertIn("claim_without_test", self.issues(body().replace("### Tests", "- C2: Other behavior.\n### Tests")))

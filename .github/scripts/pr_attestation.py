@@ -42,7 +42,7 @@ TEST = re.compile(
     r"- (C[1-9][0-9]*) \| test=([^|]+) \| failed_before=(yes|no|not-run) \| proof=(.+)"
 )
 CHECK = re.compile(r"- \[([ xX])\] (D[1-8]): (.+)")
-PLACEHOLDER = re.compile(r"(?:<[^>]+>|\b(?:TODO|TBD|REPLACE_ME)\b)", re.I)
+PLACEHOLDER = re.compile(r"(?:<[^<>]+>|TODO|TBD|REPLACE_ME)", re.I)
 SHA = re.compile(r"[a-f0-9]{40}")
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
@@ -52,7 +52,8 @@ class ObservationError(Exception):
 
 
 def meaningful(text):
-    return bool(text.strip()) and not PLACEHOLDER.search(text)
+    value = text.strip()
+    return bool(value) and not PLACEHOLDER.fullmatch(value)
 
 
 def valid_path(path):
