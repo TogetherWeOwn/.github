@@ -1,0 +1,67 @@
+[
+  {
+    "rule": "security-rust-debug-secret",
+    "file": "fixtures/corpus/session-generics.rs.fixture",
+    "positive": true,
+    "lines": [1, 6]
+  },
+  {
+    "rule": "ts-flash-delete-before-model",
+    "file": "fixtures/corpus/flash-arrow.ts.fixture",
+    "positive": true,
+    "lines": [2]
+  },
+  {
+    "rule": "ts-flash-delete-before-model",
+    "file": "fixtures/corpus/flash-separated.ts.fixture",
+    "positive": false
+  },
+  {
+    "rule": "security-rust-debug-secret",
+    "file": "fixtures/corpus/session.rs.fixture",
+    "positive": true,
+    "lines": [1],
+    "source": "TogetherWeOwn/nntunev2@779f39ad063b2e0793cb11b918fd6f5a90e33ea8:workers/api/src/session.rs:84-88"
+  },
+  {
+    "rule": "rust-buffer-before-cap",
+    "file": "fixtures/corpus/ingest.rs.fixture",
+    "positive": true,
+    "lines": [6, 44],
+    "source": "TogetherWeOwn/nntunev2@3e668275ee4e08abcf6d8b8f2db11314020f397a:workers/ingest/src/lib.rs:241-335"
+  },
+  {
+    "rule": "ts-flash-delete-before-model",
+    "file": "fixtures/corpus/kit-events.ts.fixture",
+    "positive": true,
+    "lines": [60],
+    "source": "TogetherWeOwn/two-web-next@dbc7e184fb15bea72db50c0dcc386379edd77437:src/kit-events.ts:249-348"
+  },
+  {
+    "rule": "security-cache-card-body",
+    "file": "fixtures/corpus/card-cache.mjs.fixture",
+    "positive": true,
+    "lines": [14],
+    "source": "TogetherWeOwn/paperclip-ops@2d8cba9dae6a7ec8ec0bc14487c5def623dac040:hooks/disposition-stop-guard/disposition-stop-guard.mjs:272-291"
+  },
+  {
+    "rule": "security-rust-debug-secret",
+    "file": "fixtures/corpus/session-safe.rs.fixture",
+    "positive": false
+  },
+  {
+    "rule": "rust-buffer-before-cap",
+    "file": "fixtures/corpus/ingest-safe.rs.fixture",
+    "positive": false
+  },
+  {
+    "rule": "ts-flash-delete-before-model",
+    "file": "fixtures/corpus/kit-events-safe.ts.fixture",
+    "positive": false
+  },
+  {
+    "rule": "security-cache-card-body",
+    "file": "fixtures/corpus/card-cache-safe.mjs.fixture",
+    "positive": false
+  }
+]

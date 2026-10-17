@@ -1,0 +1,95 @@
+async fn search(req: &mut Request, ctx: &RouteContext<()>) -> Result<Response> {
+    let declared = content_length(req);
+    if declared.is_some_and(|len| len > MAX_SEARCH_BODY_BYTES) {
+        return json_error("request body too large", 413);
+    }
+    let text = match req.text().await {
+        Ok(text) => text,
+        Err(_) => return json_error("failed to read request body", 400),
+    };
+    if let Err(message) = check_body_cap(text.len(), declared, MAX_SEARCH_BODY_BYTES) {
+        return json_error(message, 413);
+    }
+    let parsed = match parse_search(&text) {
+        Ok(parsed) => parsed,
+        Err(message) => return json_error(message, 400),
+    };
+    if let Err(message) = check_search(&parsed) {
+        return json_error(message, 400);
+    }
+    let q = parsed.query.trim().to_string();
+    let msg = match dispatch::build_search_dispatch(
+        &parsed.user_id,
+        &q,
+        &parsed.indexer_ref,
+        &parsed.categories,
+        parsed.limit,
+        parsed.page,
+    ) {
+        Ok(msg) => msg,
+        Err(message) => return json_error(message, 400),
+    };
+    console_log!("ingest search q_len={} job={}", q.len(), msg.job_id);
+    let queued = try_enqueue(&ctx.env, &msg).await;
+    queued_envelope(&msg, "indexer_search", queued, serde_json::json!({}))
+}
+
+/// Validate an NZB upload and enqueue it; the consumer parses with
+/// `nntune-core`, probes the pool DO, and verifies before matching.
+async fn upload_nzb(req: &mut Request, ctx: &RouteContext<()>) -> Result<Response> {
+    let declared = content_length(req);
+    if declared.is_some_and(|len| len > MAX_UPLOAD_BODY_BYTES) {
+        return json_error("request body too large", 413);
+    }
+    let text = match req.text().await {
+        Ok(text) => text,
+        Err(_) => return json_error("failed to read request body", 400),
+    };
+    if let Err(message) = check_body_cap(text.len(), declared, MAX_UPLOAD_BODY_BYTES) {
+        return json_error(message, 413);
+    }
+    let parsed = match parse_upload(&text) {
+        Ok(parsed) => parsed,
+        Err(message) => return json_error(message, 400),
+    };
+    if let Err(message) = check_upload(&parsed) {
+        return json_error(message, 400);
+    }
+    match estimate_nzb(&parsed.nzb_xml) {
+        Err(IntakeRejection::Empty) => json_error("nzb_xml must not be empty", 400),
+        Err(IntakeRejection::TooLarge) => json_error("nzb_xml exceeds 2 MiB", 413),
+        Err(IntakeRejection::NotNzb) => json_error("nzb_xml is not an NZB document", 400),
+        Err(IntakeRejection::TooManyFiles) => json_error("nzb has too many files", 413),
+        Err(IntakeRejection::TooManySegments) => json_error("nzb has too many segments", 413),
+        Ok(est) => {
+            let msg = match dispatch::build_upload_dispatch(&parsed.user_id, &parsed.nzb_xml) {
+                Ok(msg) => msg,
+                Err(message) => return json_error(message, 400),
+            };
+            // The bytes must be durably stored before the job exists: an
+            // enqueued job without retrievable bytes can never run.
+            let payload_ref = msg.payload_ref.clone().unwrap_or_default();
+            if payload_ref.is_empty()
+                || !store_upload_payload(&ctx.env, &payload_ref, &parsed.nzb_xml).await
+            {
+                return service_unavailable("payload store unavailable; nothing was accepted");
+            }
+            console_log!(
+                "ingest upload files={} segments={} job={}",
+                est.file_count,
+                est.segment_count,
+                msg.job_id
+            );
+            let queued = try_enqueue(&ctx.env, &msg).await;
+            queued_envelope(
+                &msg,
+                "nzb_upload",
+                queued,
+                serde_json::json!({
+                    "file_count": est.file_count,
+                    "segment_count": est.segment_count,
+                }),
+            )
+        }
+    }
+}

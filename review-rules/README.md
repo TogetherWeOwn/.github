@@ -41,7 +41,10 @@ rollout decision. Flipping `mode` alone does not promote the heuristic packs.
 All Semgrep rules have `id`, severity, a defect-class message and corpus citations
 in `metadata.examples`. Script-rule citations are in `scripts/checks.py:EXAMPLES`.
 A citation records the motivating review case, not independent proof that this
-rule correctly detects every variant. Fixtures are synthetic, not corpus source.
+rule correctly detects every variant. The paired synthetic fixtures are supplemented
+by `tests/corpus-cases.json`: exact source excerpts pinned to repository, commit,
+path and line range, plus repaired negatives. Corpus positives assert exact finding
+lines, not merely another match elsewhere in the file.
 
 | Pack | Static signals (55 rules total) |
 |---|---|
@@ -101,8 +104,12 @@ PR-controlled Python modules, or trusting target Semgrep config/ignore files.
 changed source and central rules, no credentials, `.git`, host Docker socket or
 network. Its Docker image is digest-pinned with read-only mounts/filesystem,
 nonroot runner UID, dropped capabilities and bounded CPU/memory/PIDs/time.
-`nosemgrep` suppression is disabled. Timeout cleanup removes only the uniquely
-named scanner created by that invocation.
+`nosemgrep` suppression is disabled. All PR files named `.semgrepignore` are
+excluded at every directory depth; only the trusted root ignore file is staged.
+The scanner's returned paths must cover the eligible staged-target manifest,
+including extracted Svelte/workflow scripts. Any missing target makes the receipt
+incomplete even when other files scanned successfully. Timeout cleanup removes
+only the uniquely named scanner created by that invocation.
 
 `review-rules.json` records `rule_id`, `file`, `line`, `severity`, `message`,
 coverage/errors, evaluated head/base and target counts. It never includes source
@@ -123,9 +130,12 @@ python3 -I review-rules/tests/selftest.py --semgrep
 The second command is the equivalent of `semgrep --test`: all shipped IDs must
 have positive and negative entries in `tests/cases.json`; every fixture must be
 scanned; expectations are matched by exact rule ID and path; parser errors fail.
-The same digest and isolation options as production are used. Unit tests pair
-positive/negative script cases and exercise real Git conflict-resolution history,
-source isolation, event refs, warn/enforce outcomes and timeout cleanup.
+The same digest and isolation options as production are used. The Semgrep tier
+also runs real PR and merge-group event scans with nested malicious ignores and
+an independently scanned sibling; the vulnerable target must still be detected.
+Unit tests pair positive/negative script cases and exercise real Git conflict-
+resolution history, source isolation, partial target omissions, extraction
+manifests, event refs, warn/enforce outcomes and timeout cleanup.
 
 The non-required `review-rules-tests` CI job also runs `semgrep --validate` and
 SHA/digest-pinned actionlint. Semgrep 1.128.1 validation downloads its own rule-lint

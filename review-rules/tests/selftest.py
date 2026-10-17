@@ -324,6 +324,8 @@ class GitTests(unittest.TestCase):
         base = self.git('rev-parse', 'HEAD').strip()
         self.write('src/new.ts', 'console.log(apiKey); // nosemgrep')
         self.write('.semgrepignore', '**')
+        self.write('src/.semgrepignore', '**')
+        self.write('src/deep/.semgrepignore', '**')
         self.commit('new source')
         captured = []
         def scanner(root, packs):
@@ -333,6 +335,64 @@ class GitTests(unittest.TestCase):
         with patch.object(engine, 'docker_scan', side_effect=scanner), contextlib.redirect_stdout(io.StringIO()):
             engine.main(['--repo', str(self.root), '--base', base, '--output', str(self.root / 'report')])
         self.assertEqual({'.semgrepignore', 'src/new.ts'}, set(captured))
+
+
+class ScannerIntegrationTests(unittest.TestCase):
+    # Opt-in real Docker scan; the normal unit tier remains hermetic.
+    def setUp(self):
+        GitTests.setUp(self)
+        self.git('update-ref', 'refs/remotes/origin/main', self.base)
+
+    git = GitTests.git
+    write = GitTests.write
+    commit = GitTests.commit
+
+    @unittest.skipUnless('--semgrep' in sys.argv, 'requires digest-pinned scanner')
+    def test_nested_ignores_cannot_hide_findings_in_pr_or_merge_group(self):
+        self.write('src/deep/vulnerable.rs',
+                   'fn allowed(host: &str) -> bool { host.starts_with("http://localhost") }\n')
+        self.write('other.rs', 'fn independently_scanned() {}\n')
+        self.write('.semgrepignore', '**\n')
+        self.write('src/.semgrepignore', '**\n')
+        self.write('src/deep/.semgrepignore', '**\n')
+        self.commit('malicious nested ignores')
+        for kind in ('pull_request', 'merge_group'):
+            event = {'repository': {'default_branch': 'main'}}
+            event[kind] = ({'base': {'sha': self.base}} if kind == 'pull_request'
+                           else {'base_sha': self.base})
+            event_path = self.root / 'event.json'
+            event_path.write_text(json.dumps(event))
+            output = self.root / ('report-' + kind)
+            with self.subTest(event=kind), contextlib.redirect_stdout(io.StringIO()):
+                code = engine.main(['--repo', str(self.root), '--event', str(event_path),
+                                    '--packs', 'rust', '--output', str(output)])
+                report = json.loads((output / 'review-rules.json').read_text())
+                self.assertEqual(0, code)
+                self.assertEqual('complete', report['status'], report['errors'])
+                self.assertEqual(2, report['stats']['scanned_targets'])
+                self.assertIn(('rust-localhost-prefix-allow', 'src/deep/vulnerable.rs', 1),
+                              {(x['rule_id'], x['file'], x['line']) for x in report['findings']})
+
+    def test_partial_omission_receipt_is_incomplete_for_both_events(self):
+        self.write('src/hidden.rs', 'fn hidden() {}\n')
+        self.write('other.rs', 'fn independently_scanned() {}\n')
+        self.commit('two source files')
+        result = {'results': [], 'errors': [], 'paths': {'scanned': ['other.rs']}}
+        for kind in ('pull_request', 'merge_group'):
+            event = {'repository': {'default_branch': 'main'}}
+            event[kind] = ({'base': {'sha': self.base}} if kind == 'pull_request'
+                           else {'base_sha': self.base})
+            event_path = self.root / 'event.json'
+            event_path.write_text(json.dumps(event))
+            output = self.root / ('report-' + kind)
+            with self.subTest(event=kind), patch.object(engine, 'docker_scan', return_value=result), contextlib.redirect_stdout(io.StringIO()):
+                code = engine.main(['--repo', str(self.root), '--event', str(event_path),
+                                    '--packs', 'rust', '--output', str(output)])
+                report = json.loads((output / 'review-rules.json').read_text())
+                self.assertEqual(0, code)
+                self.assertEqual('incomplete', report['status'])
+                self.assertEqual(1, report['stats']['scanned_targets'])
+                self.assertTrue(report['errors'])
 
 
 class ReceiptTests(unittest.TestCase):
@@ -358,6 +418,28 @@ class ReceiptTests(unittest.TestCase):
         repo = FakeRepo({'ci.yml': 'name: ci'})
         with patch.object(engine, 'docker_scan', side_effect=AssertionError('scanner should not run')):
             self.assertEqual(([], [], 0), engine.scan(repo, ['ci.yml'], {'rust'}))
+
+    def test_svelte_and_workflow_extractions_are_in_coverage_manifest(self):
+        repo = FakeRepo({'page.svelte': '<script>const n = 1;</script>',
+                         '.github/workflows/ci.yml': 'steps:\n  - run: echo ok\n'})
+        for packs, scanned in [({'ts'}, ['page.svelte.ts']),
+                               ({'python-shell-ci'}, ['__review_rules_runs__/1-0.sh'])]:
+            with self.subTest(packs=packs):
+                result = {'results': [], 'errors': [], 'paths': {'scanned': scanned}}
+                with patch.object(engine, 'docker_scan', return_value=result):
+                    self.assertEqual(([], [], 1), engine.scan(repo, list(repo.data), packs))
+                result['paths']['scanned'] = []
+                with patch.object(engine, 'docker_scan', return_value=result):
+                    self.assertTrue(engine.scan(repo, list(repo.data), packs)[1])
+
+    def test_partial_target_omission_is_incomplete_even_with_scanner_work(self):
+        repo = FakeRepo({'src/hidden.rs': 'fn hidden() {}', 'other.rs': 'fn other() {}'})
+        result = {'results': [], 'errors': [], 'paths': {'scanned': ['other.rs']}}
+        with patch.object(engine, 'docker_scan', return_value=result):
+            hits, errors, count = engine.scan(repo, list(repo.data), {'rust'})
+        self.assertEqual([], hits)
+        self.assertEqual(1, count)
+        self.assertTrue(errors, 'partial omission must not produce a complete receipt')
 
     def test_event_base_pr_and_merge_group(self):
         sha = 'a' * 40
@@ -391,7 +473,8 @@ class ReceiptTests(unittest.TestCase):
 
 
 def fixture_test() -> int:
-    cases = json.loads((ROOT / 'tests/cases.json').read_text())
+    cases = (json.loads((ROOT / 'tests/cases.json').read_text())
+             + json.loads((ROOT / 'tests/corpus-cases.json').read_text()))
     ids = set()
     for pack in engine.PACKS:
         for path in (ROOT / pack).glob('*.yml'):
@@ -429,6 +512,8 @@ def fixture_test() -> int:
         hits = [hit for hit in result['results'] if hit['check_id'] == case['rule'] and hit['path'] == path]
         if bool(hits) != case['positive']:
             failures.append((case['rule'], 'positive' if case['positive'] else 'negative', path))
+        if 'lines' in case and sorted({hit['start']['line'] for hit in hits}) != case['lines']:
+            failures.append((case['rule'], 'exact finding location mismatch', path))
     if failures:
         for failure in failures:
             print('FAIL', *failure)
@@ -439,5 +524,8 @@ def fixture_test() -> int:
 
 if __name__ == '__main__':
     if '--semgrep' in sys.argv:
-        raise SystemExit(fixture_test())
+        fixture_status = fixture_test()
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(ScannerIntegrationTests)
+        integration = unittest.TextTestRunner(verbosity=2).run(suite)
+        raise SystemExit(fixture_status or int(not integration.wasSuccessful()))
     unittest.main()

@@ -1,0 +1,101 @@
+export async function loadEventsPage(
+  args: KitEventsLoadArgs,
+): Promise<KitEventsLoadData | { queryTooLong: true; appUrl: string }> {
+  const {
+    env,
+    url,
+    method,
+    island,
+    request,
+    setHeaders,
+    deleteJoinCookie,
+    dbForFn,
+    sessionForFn,
+    journeyForFn,
+    modelForFn = loadCalendarPageModel,
+    discordForFn,
+    now = new Date(),
+  } = args;
+  const vary = "Cookie, X-Two-Island";
+  const input = calendarInputOf(url);
+  if (input.queryTooLong) {
+    setHeaders({
+      "cache-control": "no-store, private",
+      vary,
+      [TOO_LONG_MARKER]: "true",
+    });
+    // The app URL rides along so the notice page keeps the Hono canonical
+    // without echoing the overlong query anywhere.
+    return { queryTooLong: true as const, appUrl: env.APP_URL };
+  }
+
+  let db: Db | null;
+  try {
+    db = await dbForFn({ env });
+  } catch {
+    setHeaders({ "cache-control": "private, no-store", vary });
+    throw eventsUnavailable();
+  }
+  if (!db) {
+    setHeaders({ "cache-control": "private, no-store", vary });
+    throw eventsUnavailable();
+  }
+
+  let session: KitEventsSession | null;
+  try {
+    session = await sessionForFn(request);
+  } catch {
+    session = null;
+  }
+  // Island fragment swaps must not consume the flash: the banner renders
+  // outside the swapped zones, so a fragment would eat it without displaying
+  // it — the pending value survives for the next full load.
+  let joinResult: JoinResult | null = null;
+  if (!island) {
+    try {
+      joinResult = await journeyForFn(request);
+    } catch {
+      joinResult = null;
+    }
+    if (method !== "GET") joinResult = null;
+  }
+
+  let model: CalendarPageModel;
+  try {
+    model = await modelForFn({
+      db,
+      input,
+      includeDrafts: session?.moderator ?? false,
+      discord: discordForFn(env),
+      now,
+    });
+  } catch {
+    setHeaders({ "cache-control": "private, no-store", vary });
+    throw eventsUnavailable();
+  }
+
+  if (!island && joinResult && method === "GET") deleteJoinCookie();
+
+  const cacheControl =
+    session || input.searching || joinResult ? "private, no-store" : "public, max-age=60";
+  const headers: Record<string, string> = {
+    "cache-control": cacheControl,
+    vary,
+    [CACHEABLE_MARKER]: String(cacheControl.startsWith("public")),
+  };
+  if (model.robots !== undefined) headers["x-robots-tag"] = model.robots;
+  setHeaders(headers);
+
+  return {
+    ...model,
+    now,
+    member: session?.member ?? false,
+    moderator: session?.moderator ?? false,
+    inviteUrl: inviteDestination(env.DISCORD_INVITE_URL),
+    appUrl: env.APP_URL,
+    canonical: canonicalUrl(env.APP_URL, "/events"),
+    loginReturnTo: url.pathname + url.search,
+    joinResult,
+    queryTooLong: false,
+  };
+}

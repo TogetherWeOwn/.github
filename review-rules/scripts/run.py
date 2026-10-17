@@ -196,7 +196,7 @@ def scan(repo: Git, changed: list[str], packs: set[str]) -> tuple[list[dict], li
         # Never copy the PR's ignore/config, including malicious nosem comments.
         (root / '.semgrepignore').write_text('# Scan all staged source, including tests.\n')
         for index, path in enumerate(changed):
-            if path == '.semgrepignore':
+            if PurePosixPath(path).name == '.semgrepignore':
                 continue
             try:
                 text = repo.text(path)
@@ -234,7 +234,10 @@ def scan(repo: Git, changed: list[str], packs: set[str]) -> tuple[list[dict], li
         if total > MAX_TOTAL:
             return findings, errors, 0
         eligible_extensions = set().union(*(EXTENSIONS[p] for p in packs))
-        eligible = any(p.suffix in eligible_extensions for p in root.rglob('*') if p.is_file())
+        # Account for every staged target, including extracted scripts. A single
+        # scanned sibling is not evidence that the vulnerable file was scanned.
+        eligible = {p.relative_to(root).as_posix() for p in root.rglob('*')
+                    if p.is_file() and p.suffix in eligible_extensions}
         if not eligible:
             return findings, errors, 0
         data = docker_scan(root, packs)
@@ -247,10 +250,11 @@ def scan(repo: Git, changed: list[str], packs: set[str]) -> tuple[list[dict], li
                 int(item['start']['line']) + offset, item['extra']['message'], item['extra']['severity']))
         for _ in data.get('errors', []):
             errors.append('Semgrep parse/timeout error; static coverage is incomplete')
-        count = len(data.get('paths', {}).get('scanned', []))
-        if eligible and count == 0:
-            errors.append('Semgrep scanned zero eligible changed targets')
-        return findings, errors, count
+        scanned = {p.removeprefix('./') for p in data.get('paths', {}).get('scanned', [])}
+        missing = eligible - scanned
+        if missing:
+            errors.append(f'Semgrep omitted {len(missing)} eligible changed target(s); static coverage is incomplete')
+        return findings, errors, len(scanned)
 
 
 def escaped(value: str, prop: bool = False) -> str:

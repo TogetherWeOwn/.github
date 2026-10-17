@@ -16,3 +16,20 @@ rules:
   pattern-either:
   - pattern: 'writeCardCache({... , body: $CARD.body, ...})'
   - pattern: '$FS.writeFile($PATH, JSON.stringify({..., body: $CARD.body, ...}), ...)'
+  - patterns:
+    - pattern-inside: |
+        function $CACHE(...) { ... }
+    - metavariable-regex:
+        metavariable: $CACHE
+        regex: (?i)^.*cache.*$
+    - pattern: |
+        const $PAYLOAD = { ..., card: $CARD, ... };
+        ...
+        $SINK($PATH, <... JSON.stringify($PAYLOAD, ...) ...>, ...);
+    - metavariable-regex:
+        metavariable: $CARD
+        regex: ^[A-Za-z_$][A-Za-z0-9_$]*$
+    - metavariable-regex:
+        metavariable: $SINK
+        regex: ^(?:[A-Za-z_$][A-Za-z0-9_$]*\.)?writeFileSync$
+    - focus-metavariable: $SINK

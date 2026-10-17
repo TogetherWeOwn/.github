@@ -14,7 +14,26 @@ rules:
     category: correctness
     proof: Advisory static signal; confirm with the named behavioral test before promotion.
   patterns:
-  - pattern: $DELETE(...); ... await $MODEL(...);
+  - pattern-either:
+    - pattern-inside: |
+        function $FUNCTION(...) { ... }
+    - pattern-inside: |
+        (...) => { ... }
+  - pattern-either:
+    - pattern: $DELETE(...); ... await $MODEL(...);
+    - pattern: |
+        if (...) {
+          ...
+          if (...) $DELETE(...);
+          ...
+        }
+        ...
+        try {
+          ...
+          $VALUE = await $MODEL(...);
+          ...
+        } catch { ... }
+  - focus-metavariable: $DELETE
   - metavariable-regex:
       metavariable: $DELETE
       regex: ^delete\w*Cookie$

@@ -1,0 +1,10 @@
+async fn search(req: &mut Request, ctx: &RouteContext<()>) -> Result<Response> {
+    let declared = content_length(req);
+    let mut text = Vec::new();
+    let mut bounded = req.stream()?.take((MAX_SEARCH_BODY_BYTES + 1) as u64);
+    bounded.read_to_end(&mut text).await?;
+    if let Err(message) = check_body_cap(text.len(), declared, MAX_SEARCH_BODY_BYTES) {
+        return json_error(message, 413);
+    }
+    Response::from_json(&parse_search(&text)?)
+}
