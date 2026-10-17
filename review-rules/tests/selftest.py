@@ -292,6 +292,14 @@ class TextChecks(unittest.TestCase):
                 FakeRepo({'src/a.ts': 'process.env.X_KEY; ' * 60000,
                           'src/secret-env-redaction.ts': '["A_KEY"]'}),
                 ['src/a.ts'], {'ts'}, None)),
+            ('flash consumer search on one long word', lambda: checks.repo_checks(
+                FakeRepo({'src/routes/+page.server.ts':
+                          'consume' * 20000 + '\nconst f = getFlashCookie(cookies);'}),
+                ['src/routes/+page.server.ts'], {'ts'}, None)),
+            ('nested run blocks', lambda: checks.check_text(
+                '.github/workflows/ci.yml',
+                ''.join(' ' * (3 * k) + '- run: |\n' + ' ' * (3 * k + 3) + 'echo level\n'
+                        for k in range(400)), ALL)),
         ]
         for label, run in cases:
             with self.subTest(label=label):
@@ -325,6 +333,32 @@ class TextChecks(unittest.TestCase):
             'a.sh', 'trivy fs . ||\n  exit 0')})
         self.assertNotIn('shell-tool-failure-hidden', {x['rule_id'] for x in checks.shell_checks(
             'a.sh', 'gitleaks detect --source .\n  true')})
+        # Blank lines between a trailing `||` and `true`/`exit 0` are also
+        # skipped by the shell, so the masking still flags. And a second
+        # `||` wholly on the continuation line is that command's own
+        # masking, not the scanner's: the joined match must span the
+        # newline.
+        self.assertIn('shell-tool-failure-hidden', {x['rule_id'] for x in checks.shell_checks(
+            'a.sh', 'gitleaks detect --source . ||\n\n  true')})
+        self.assertIn('shell-tool-failure-hidden', {x['rule_id'] for x in checks.shell_checks(
+            'a.sh', 'trivy fs . ||\n\n\n  exit 0')})
+        self.assertNotIn('shell-tool-failure-hidden', {x['rule_id'] for x in checks.shell_checks(
+            'a.sh', 'gitleaks detect --source . ||\n  echo x || true')})
+        # A workflow `if:` value on the next line is valid YAML and the
+        # old text-wide regex saw it (`\s*` crossed the newline): the
+        # cleanup step must not be reported missing.
+        self.assertNotIn('workflow-cancel-cleanup', {x['rule_id'] for x in checks.workflow_checks(
+            'ci.yml', 'steps:\n  - run: lxc init images:ubuntu c1\n'
+                      '  - if:\n      always()\n    run: lxc delete c1 --force\n')})
+        self.assertIn('workflow-cancel-cleanup', {x['rule_id'] for x in checks.workflow_checks(
+            'ci.yml', 'steps:\n  - run: lxc init images:ubuntu c1\n'
+                      '  - if:\n      success()\n    run: lxc delete c1 --force\n')})
+        # A `run:` line inside a block-scalar body is script text, not a
+        # second key: bodies stay disjoint.
+        nested = '- run: |\n   echo a\n   - run: |\n      echo b\n'
+        runs = checks.workflow_runs(nested)
+        self.assertEqual(1, len(runs))
+        self.assertIn('echo b', runs[0][1])
         # select() identity filtering still suppresses the first-match
         # finding, including when an earlier select() filters on something
         # else; a non-identity select() does not suppress it.
@@ -381,6 +415,15 @@ class RepoChecks(unittest.TestCase):
         self.assertIn('ts-flash-consumer', self.hits(files, [path]))
         files[path] += '\ndeleteJoinCookie(cookies);'
         self.assertNotIn('ts-flash-consumer', self.hits(files, [path]))
+        # The other consumer forms suppress too, including a keyword
+        # starting mid-word (the original regex had no leading \b); a
+        # name that merely contains Cookie before more letters does not.
+        for call in ('consumeFlash(cookies);', 'applyFlashConsumption(cookies);',
+                     'xdeleteCookie(cookies);'):
+            files[path] = 'const flash = readJoinResultCookie(cookies);\n' + call
+            self.assertNotIn('ts-flash-consumer', self.hits(files, [path]), call)
+        files[path] = 'const flash = readJoinResultCookie(cookies);\ndeleteCookieJar(cookies);'
+        self.assertIn('ts-flash-consumer', self.hits(files, [path]))
 
     def test_dump_positive_negative_and_inventory_content_not_line_count(self):
         path = 'crates/core/src/backup/dump_file.rs'

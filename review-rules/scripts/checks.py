@@ -82,14 +82,54 @@ def has_after_on_line(text: str, first: str, second: str) -> bool:
     regexes, which backtrack from every `first` on a long line when `second`
     never follows (quadratic in line length). Existence is equivalent: if
     some `first` is followed by `second` on a line, the leftmost `first`
-    on that line is too.
+    on that line is too. One exception: a `first\\s*.*second` form (the
+    workflow `if:` search) let its `\\s*` cross a newline, which is real
+    YAML when the value sits on the next line (`if:` then indented
+    `always()`), so when the rest of `first`'s line is blank the next
+    non-blank line is searched too. Blank runs are scanned once overall:
+    only the line before a run can reach the continuation search.
     """
     first_re = re.compile(first)
     second_re = re.compile(second)
-    for line in text.split('\n'):
+    lines = text.split('\n')
+    for index, line in enumerate(lines):
         hit = first_re.search(line)
-        if hit and second_re.search(line, hit.end()):
+        if not hit:
+            continue
+        if second_re.search(line, hit.end()):
             return True
+        if not line[hit.end():].strip():
+            follow = index + 1
+            while follow < len(lines) and not lines[follow].strip():
+                follow += 1
+            if follow < len(lines) and second_re.search(lines[follow]):
+                return True
+    return False
+
+
+def has_flash_consumer(body: str) -> bool:
+    """True for a delete*Cookie( / consume*Flash( / apply*FlashConsumption( call.
+
+    Linear replacement for `(?:delete\\w*Cookie|consume\\w*Flash|...)\\s*\\(`:
+    without a leading `\\b` that regex starts a `\\w*` scan at every keyword
+    occurrence inside a long word (quadratic in word length). Here each
+    `\\w+` word followed by `(` is visited once and tested with find +
+    endswith, which is the same match: the regex's suffix had to end the
+    word (the next character is whitespace or `(`), and its prefix could
+    start anywhere in the word with only word characters between.
+    """
+    pairs = (('delete', 'Cookie'), ('consume', 'Flash'),
+             ('apply', 'FlashConsumption'))
+    paren = re.compile(r'\s*\(')
+    for match in re.finditer(r'\w+', body):
+        if not paren.match(body, match.end()):
+            continue
+        word = match[0]
+        for prefix, suffix in pairs:
+            start = word.find(prefix)
+            if start >= 0 and word.endswith(suffix) \
+                    and start + len(prefix) <= len(word) - len(suffix):
+                return True
     return False
 
 
@@ -144,15 +184,19 @@ def workflow_runs(text: str) -> list[tuple[int, str]]:
     """Extract block-style run bodies; preserve original line numbers for findings."""
     lines = text.splitlines(keepends=True)
     result = []
-    for i, line in enumerate(lines):
+    i = 0
+    while i < len(lines):
+        line = lines[i]
         match = re.match(r'^(\s*)(?:-\s+)?run:\s*(.*)', line)
         if not match:
+            i += 1
             continue
         # For '- run:' the key itself is two spaces deeper than the dash.
         indent = len(match[1]) + (2 if line.lstrip().startswith('- ') else 0)
         value = match[2].strip()
         if value and value[0] not in '|>':
             result.append((i + 1, value.strip("\"'")))
+            i += 1
             continue
         body = []
         j = i + 1
@@ -164,6 +208,11 @@ def workflow_runs(text: str) -> list[tuple[int, str]]:
         nonempty = [len(s) - len(s.lstrip()) for s in body if s.strip()]
         trim = min(nonempty, default=0)
         result.append((i + 2, ''.join(s[trim:] if s.strip() else '\n' for s in body)))
+        # A `run:` line inside a consumed block-scalar body is literal
+        # script text, not a key. Resuming at j keeps bodies disjoint;
+        # re-extracting nested bodies made check_text re-scan overlapping
+        # suffixes of the file (cubic on deeply indented run blocks).
+        i = j
     return result
 
 
@@ -378,12 +427,19 @@ def shell_checks(path: str, text: str) -> list[dict]:
             # flag). Joining at most one line per line keeps it linear.
             # The joined match must span the newline, as the old regex's
             # `\s` did: a `second` found wholly on the next line belongs
-            # to the continued command, not to this line's `first`.
-            if index + 1 < len(lines) and line.rstrip().endswith('||'):
-                joined = line + '\n' + lines[index + 1]
-                spanning = second_re.search(joined, hit.end())
-                if spanning and '\n' in spanning[0]:
-                    yield start, joined
+            # to the continued command, not to this line's `first`. Shell
+            # also skips blank lines after `||`, so join the next
+            # non-blank line; blank runs are scanned once overall because
+            # only the line before a run can end in `||` and reach here.
+            if line.rstrip().endswith('||'):
+                follow = index + 1
+                while follow < len(lines) and not lines[follow].strip():
+                    follow += 1
+                if follow < len(lines):
+                    joined = line + '\n' + lines[follow]
+                    spanning = second_re.search(joined, hit.end())
+                    if spanning and '\n' in spanning[0]:
+                        yield start, joined
 
     checked_starts = [m.start() for m in re.finditer(r'\bsha256sum\s+(?:--check|-c)\b', code)]
     execute_starts = [m.start() for m in re.finditer(
@@ -700,7 +756,7 @@ def repo_checks(repo, changed: list[str], packs: set[str], migration_ref: str | 
             if guarded and db and (not parent or parent.start() > db.start()):
                 out.append(finding('ts-kit-parent-guard', path, line_at(body, db.start()),
                     'TS-010: guarded route has a DB call before visible await parent(); verify real load ordering with a deferred-parent test.', 'ERROR'))
-            consumer = re.search(r'(?:delete\w*Cookie|consume\w*Flash|apply\w*FlashConsumption)\s*\(', body)
+            consumer = has_flash_consumer(body)
             line_of = line_counter(body)
             for match in re.finditer(r'\b(?:read|get)(\w*Flash|JoinResult)Cookie\s*\(', body):
                 if not consumer:
