@@ -192,6 +192,8 @@ test("live error-rate gates run the gate script with the promoted version and ex
     }
     // The gate judges the promoted version, never the rollback target.
     assert.ok(!block.includes("rollback-target"), `gate ${pct} must not read the rollback target`);
+    // A swallowed failure would never reach the rollback step.
+    assert.ok(!block.includes("continue-on-error"), `gate ${pct} must not swallow its failure`);
   }
 });
 
