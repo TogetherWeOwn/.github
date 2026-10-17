@@ -9,7 +9,7 @@ from __future__ import annotations
 import ast
 import re
 import shlex
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from pathlib import PurePosixPath
 
 # Provenance is centralized so script findings have the same evidence contract as
@@ -75,34 +75,70 @@ def line_counter(text: str):
     return line_of
 
 
-def has_after_on_line(text: str, first: str, second: str) -> bool:
+def has_after_on_line(text: str, first: str, second: str,
+                      cross_newline: bool = False) -> bool:
     """True when `second` matches after `first` on some single line.
 
     Two-step replacement for text-wide `first[^\\n]*second` / `first.*second`
     regexes, which backtrack from every `first` on a long line when `second`
     never follows (quadratic in line length). Existence is equivalent: if
     some `first` is followed by `second` on a line, the leftmost `first`
-    on that line is too. One exception: a `first\\s*.*second` form (the
-    workflow `if:` search) let its `\\s*` cross a newline, which is real
-    YAML when the value sits on the next line (`if:` then indented
-    `always()`), so when the rest of `first`'s line is blank the next
-    non-blank line is searched too. Blank runs are scanned once overall:
-    only the line before a run can reach the continuation search.
+    on that line is too. Callers whose original regex let whitespace
+    between the tokens cross a newline (the workflow `if:` value on the
+    next line is real YAML; a wrapped `git show` ref) pass cross_newline:
+    when the rest of `first`'s line is blank, the next non-blank line is
+    searched too. Blank runs are scanned once overall: only the line
+    before a run can reach the continuation search. One residual
+    difference from the original regexes: a `first` split by more than
+    one line break (`git` / `show` / ref on three lines) is not
+    matched; without a shell continuation those are separate commands,
+    not one invocation. Callers whose original form could not cross a
+    newline (the `grep` aggregator check) must not pass cross_newline:
+    a line merely ending in `grep` followed by the failure JSON on the
+    next line never matched that regex.
     """
     first_re = re.compile(first)
     second_re = re.compile(second)
     lines = text.split('\n')
     for index, line in enumerate(lines):
-        hit = first_re.search(line)
-        if not hit:
+        if not cross_newline:
+            hit = first_re.search(line)
+            if hit and second_re.search(line, hit.end()):
+                return True
             continue
-        if second_re.search(line, hit.end()):
+        # Search the line plus its break: a `first` ending the line may
+        # need the break itself to complete (`git show` at end of line,
+        # whose trailing whitespace run is the newline in the original
+        # regex). One finditer pass yields the leftmost match (enough
+        # for the same-line search) and the last match (the only one
+        # that can end the line; earlier ones have its text after them).
+        first_hit = last_hit = None
+        for match in first_re.finditer(line + '\n'):
+            if first_hit is None:
+                first_hit = match
+            last_hit = match
+        if first_hit is not None and first_hit.end() <= len(line) \
+                and second_re.search(line, first_hit.end()):
             return True
-        if not line[hit.end():].strip():
-            follow = index + 1
-            while follow < len(lines) and not lines[follow].strip():
-                follow += 1
-            if follow < len(lines) and second_re.search(lines[follow]):
+        follow = index + 1
+        while follow < len(lines) and not lines[follow].strip():
+            follow += 1
+        if follow >= len(lines):
+            continue
+        if last_hit is not None and (last_hit.end() > len(line)
+                                     or not line[last_hit.end():].strip()) \
+                and second_re.search(lines[follow]):
+            return True
+        # Whitespace inside `first` itself may be the line break
+        # (`git` / `show` split across lines): a match that starts on
+        # this line and ends on the next counts, with `second` after
+        # it there. A match wholly on the next line is found when
+        # that line is visited.
+        for match in first_re.finditer(line + '\n' + lines[follow]):
+            if match.start() > len(line):
+                break
+            if match.end() > len(line) and second_re.search(
+                    lines[follow], match.end() - len(line) - 1):
                 return True
     return False
 
@@ -167,7 +203,15 @@ def workflow_steps(text: str) -> list[tuple[int, str]]:
     starts = [(i, len(m[1])) for i, line in enumerate(lines)
               if (m := re.match(r'^(\s*)-\s+(?:name|id|uses|run|if|shell|working-directory):', line))]
     result = []
+    consumed = 0
     for i, indent in starts:
+        # A step-looking line inside a consumed step body is nested
+        # content (script text, a `with:` list), not a sibling step:
+        # block sequence entries share one indent. Skipping it keeps
+        # bodies disjoint; re-extracting nested starts made each step
+        # re-join a suffix of the file (quadratic on increasing indents).
+        if i < consumed:
+            continue
         end = i + 1
         while end < len(lines):
             line = lines[end]
@@ -177,6 +221,7 @@ def workflow_steps(text: str) -> list[tuple[int, str]]:
                     break
             end += 1
         result.append((i + 1, ''.join(lines[i:end])))
+        consumed = end
     return result
 
 
@@ -198,6 +243,25 @@ def workflow_runs(text: str) -> list[tuple[int, str]]:
             result.append((i + 1, value.strip("\"'")))
             i += 1
             continue
+        if not value:
+            # An empty-valued `run:` whose indented children start with a
+            # mapping key or `- ` item is a mapping key itself (a job id
+            # literally named `run`), not a scalar: consuming its children
+            # as one body would swallow every real step script under it
+            # and merge them for the shell checks. Block scalars (`|`/`>`)
+            # never reach here and keep the resume-at-j below; a plain
+            # multi-line scalar (next line is script text) still collects
+            # a body. The peek is amortized linear: blank lines it scans
+            # are then walked once by the outer loop without matching.
+            nxt = i + 1
+            while nxt < len(lines) and not lines[nxt].strip():
+                nxt += 1
+            if nxt < len(lines) \
+                    and len(lines[nxt]) - len(lines[nxt].lstrip()) > indent \
+                    and re.match(r'''^(?:-\s|["']?[\w.-]+["']?\s*:(?:\s|$))''',
+                                 lines[nxt].lstrip()):
+                i += 1
+                continue
         body = []
         j = i + 1
         while j < len(lines):
@@ -610,18 +674,38 @@ def workflow_checks(path: str, text: str) -> list[dict]:
     # Trigger recognition includes quoted on, flow list and zero-indent list.
     # Restrict to workflow files; prose mentions and run-body strings are not triggers.
     lines = text.splitlines()
-    for i, line in enumerate(lines):
+    # Each `on:` block ends at the first following significant line (not
+    # blank, not `-`/`#` led) at or below its indent. Scanning forward
+    # from every `on:` and joining the block is quadratic when indents
+    # strictly increase (every block is a file suffix). Instead walk the
+    # lines once from the end keeping the suffix-minima chain of breaker
+    # depths: candidates ordered far-to-near with strictly increasing
+    # depths, each breaker pushed and popped at most once, so a block end
+    # is one bisect. Token existence in the block is a prefix-count
+    # difference; per-line search is equivalent because the token cannot
+    # span the newline a join would insert.
+    depths = [len(s) - len(s.lstrip()) for s in lines]
+    token_prefix = [0]
+    for s in lines:
+        token_prefix.append(token_prefix[-1]
+                              + bool(re.search(r'\bpull_request_target\b', s)))
+    chain_depths: list[int] = []
+    chain_index: list[int] = []
+    for i in range(len(lines) - 1, -1, -1):
+        line = lines[i]
         if re.match(r'''\s*["']?on["']?\s*:''', line):
-            indent = len(line) - len(line.lstrip())
-            block = [line]
-            for following in lines[i + 1:]:
-                depth = len(following) - len(following.lstrip())
-                if following.strip() and depth <= indent and not following.lstrip().startswith(('-', '#')):
-                    break
-                block.append(following)
-            if re.search(r'\bpull_request_target\b', '\n'.join(block)):
+            k = bisect_right(chain_depths, depths[i])
+            end = chain_index[k - 1] if k else len(lines)
+            if token_prefix[end] - token_prefix[i]:
                 out.append(finding('workflow-pull-request-target', path, i + 1,
                     'SEC-AUTH-07: privileged pull_request_target trigger requires a separate trust review; suppression comments do not make it safe.', 'ERROR'))
+        if line.strip() and not line.lstrip().startswith(('-', '#')):
+            while chain_depths and chain_depths[-1] >= depths[i]:
+                chain_depths.pop()
+                chain_index.pop()
+            chain_depths.append(depths[i])
+            chain_index.append(i)
+    out.reverse()
     steps = workflow_steps(text)
     for first, block in steps:
         if 'actions/upload-artifact@' not in block:
@@ -632,7 +716,7 @@ def workflow_checks(path: str, text: str) -> list[dict]:
             out.append(finding('workflow-artifact-scrub', path, first,
                 'PYCI-04b/SEC-AUTH-03A: sensitive report upload has no swept==true gate; green and failed runs both need scrubbing (including embedded index.html).', 'ERROR'))
     if re.search(r'\b(?:lxc\s+(?:init|launch)|pscale\s+branch\s+create)\b', text):
-        cleanups = [b for _, b in steps if has_after_on_line(b, r'if:', r'(?:always\(\)|cancelled\(\))')
+        cleanups = [b for _, b in steps if has_after_on_line(b, r'if:', r'(?:always\(\)|cancelled\(\))', cross_newline=True)
                     and re.search(r'\b(?:delete|destroy)\b', b)]
         if not cleanups:
             out.append(finding('workflow-cancel-cleanup', path, 1,
@@ -643,7 +727,7 @@ def workflow_checks(path: str, text: str) -> list[dict]:
     if 'gitleaks' in text:
         # File-invariant; located once instead of per run block below.
         removes = re.search(r'rm\s+-f\s+(?:--\s+)?\.?/?\.gitleaksignore', text)
-        base = has_after_on_line(text, r'git\s+show\s+', r':\.gitleaksignore')
+        base = has_after_on_line(text, r'git\s+show\s+', r':\.gitleaksignore', cross_newline=True)
         for first, script in workflow_runs(text):
             if not re.search(r'\bgitleaks\s+(?:git|detect|dir)\b', script):
                 continue

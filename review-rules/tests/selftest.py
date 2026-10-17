@@ -151,6 +151,25 @@ class TextChecks(unittest.TestCase):
         text = 'steps:\n  - name: install\n    run: |\n      echo one\n      echo two\n  - run: echo three\n'
         self.assertEqual([(4, 'echo one\necho two\n'), (6, 'echo three')], checks.workflow_runs(text))
 
+    def test_workflow_runs_job_named_run(self):
+        # A job id literally named `run` is a mapping key, not a scalar:
+        # the steps under it keep their own bodies instead of merging
+        # into one pseudo-body (which also merged them for shell checks).
+        text = ('jobs:\n  run:\n    runs-on: ubuntu-latest\n    steps:\n'
+                '      - run: d=$(mktemp -d)\n'
+                "      - run: trap 'rm -rf x' EXIT\n"
+                '      - run: exec grype .\n')
+        self.assertEqual([(5, 'd=$(mktemp -d)'), (6, "trap 'rm -rf x' EXIT"),
+                          (7, 'exec grype .')], checks.workflow_runs(text))
+        # The trap in the second step must not satisfy the first step's
+        # provision cleanup once the bodies are separate again.
+        hits = [x for x in checks.check_text('.github/workflows/a.yml', text, ALL)
+                if x['rule_id'] == 'shell-provision-cleanup']
+        self.assertEqual([5], [x['line'] for x in hits])
+        # A plain multi-line scalar under an empty `run:` is still a body.
+        self.assertEqual([(3, 'echo hi\n')],
+                         checks.workflow_runs('steps:\n  - run:\n      echo hi\n'))
+
     def test_svelte_line_mapping(self):
         text = '<h1>Hello</h1>\n<script lang="ts">\nconst x = 1;\n</script>\n<p>{x}</p>'
         result = engine.svelte_scripts(text)
@@ -159,6 +178,14 @@ class TextChecks(unittest.TestCase):
         self.assertNotIn('<h1>', result)
         with self.assertRaises(ValueError):
             engine.svelte_scripts('<script>broken')
+        # An open inside a block body (here in a string) is still an
+        # error, as the counted-regex version had it; a `<script` with no
+        # `>` after it is markup text, not an open.
+        with self.assertRaises(ValueError):
+            engine.svelte_scripts('<script>const s = "<script>";</script>')
+        self.assertNotIn('const', engine.svelte_scripts('<p>x</p>\n<script broken'))
+        two = engine.svelte_scripts('<script>a</script>\n<script>b</script>')
+        self.assertEqual(['a', 'b'], [s.strip() for s in two.splitlines() if s.strip()])
 
     def test_document_mentions_and_pack_selection(self):
         self.assertFalse(checks.check_text('docs/a.md', 'uses: actions/checkout@v4\npull_request_target\n.gitleaksignore', ALL))
@@ -254,6 +281,9 @@ class TextChecks(unittest.TestCase):
         # 2-18s at these sizes (^\s* rescanning blank runs, ^.*X[^\n]*Y
         # backtracking on one long line, per-match newline recounts). A
         # revert to those shapes fails here instead of passing slowly.
+        def unterminated_svelte():
+            with contextlib.suppress(ValueError):
+                engine.svelte_scripts('<script>' * 20000)
         cases = [
             ('trap then blank run', lambda: checks.shell_checks(
                 'a.sh', 'trap cleanup EXIT\n' + '\n' * 80000)),
@@ -300,6 +330,13 @@ class TextChecks(unittest.TestCase):
                 '.github/workflows/ci.yml',
                 ''.join(' ' * (3 * k) + '- run: |\n' + ' ' * (3 * k + 3) + 'echo level\n'
                         for k in range(400)), ALL)),
+            ('unterminated svelte scripts', unterminated_svelte),
+            ('svelte opens without >', lambda: engine.svelte_scripts('<script a' * 20000)),
+            ('workflow on: at increasing indents', lambda: checks.workflow_checks(
+                '.github/workflows/ci.yml',
+                ''.join(' ' * k + 'on:\n' for k in range(2000)) + 'jobs:\n')),
+            ('workflow steps at increasing indents', lambda: checks.workflow_steps(
+                ''.join(' ' * k + '- run: echo hi\n' for k in range(4000)))),
         ]
         for label, run in cases:
             with self.subTest(label=label):
@@ -353,12 +390,51 @@ class TextChecks(unittest.TestCase):
         self.assertIn('workflow-cancel-cleanup', {x['rule_id'] for x in checks.workflow_checks(
             'ci.yml', 'steps:\n  - run: lxc init images:ubuntu c1\n'
                       '  - if:\n      success()\n    run: lxc delete c1 --force\n')})
+        # The same holds with a blank line between `if:` and its value.
+        self.assertNotIn('workflow-cancel-cleanup', {x['rule_id'] for x in checks.workflow_checks(
+            'ci.yml', 'steps:\n  - run: lxc init images:ubuntu c1\n'
+                      '  - if:\n\n      always()\n    run: lxc delete c1 --force\n')})
+        # The `grep` aggregator search never crossed a newline in the
+        # regex it replaced: a comment merely ending in `grep`, with the
+        # failure JSON only on the next line, is a jq consumer, not an
+        # aggregator. Same line still flags (TEXT_CASES covers it too).
+        self.assertNotIn('workflow-required-aggregator', {x['rule_id'] for x in checks.workflow_checks(
+            'ci.yml', "steps:\n  - run: echo '${{ toJSON(needs) }}' > needs.json\n"
+                      '  # parse needs.json with jq, never with grep\n'
+                      '  # "result":"failure" is the pretty-printed shape jq reads\n'
+                      '  - run: jq -e . needs.json\n')})
+        self.assertIn('workflow-required-aggregator', {x['rule_id'] for x in checks.workflow_checks(
+            'ci.yml', 'run: echo ${{ toJSON(needs) }}\nrun: grep -q \'"result":"failure"\' n.json\n')})
+        # The `git show` base-blob search keeps crossing a line wrap (its
+        # original regex let the whitespace cross the newline): a wrapped
+        # ref still satisfies the suppression-source check. Flipping this
+        # call site's cross_newline flag would fail here.
+        self.assertNotIn('security-suppression-source', {x['rule_id'] for x in checks.workflow_checks(
+            '.github/workflows/leaks.yml',
+            'steps:\n  - run: |\n      git show\n        origin/main:.gitleaksignore > base.ignore\n'
+            '      rm -f .gitleaksignore\n      gitleaks detect --gitleaks-ignore-path base.ignore\n')})
+        # The `on:` trigger block ends at the first significant line at
+        # or below its indent: the token on that breaker line itself (or
+        # after it) is outside the block; a `- ` item line inside the
+        # block is not a breaker and its token counts.
+        self.assertNotIn('workflow-pull-request-target', {x['rule_id'] for x in checks.workflow_checks(
+            '.github/workflows/a.yml', 'on:\n  push:\njobs: {} # pull_request_target\n')})
+        self.assertIn('workflow-pull-request-target', {x['rule_id'] for x in checks.workflow_checks(
+            '.github/workflows/a.yml', 'on:\n- push\n- pull_request_target\njobs: {}\n')})
         # A `run:` line inside a block-scalar body is script text, not a
         # second key: bodies stay disjoint.
         nested = '- run: |\n   echo a\n   - run: |\n      echo b\n'
         runs = checks.workflow_runs(nested)
         self.assertEqual(1, len(runs))
         self.assertIn('echo b', runs[0][1])
+        # A step-looking line inside a step body is nested content, not a
+        # sibling step (block sequence entries share one indent): it gets
+        # no block of its own, while the real sibling still does.
+        steps = checks.workflow_steps(
+            'steps:\n  - name: outer\n    run: |\n      - name: not-a-step\n'
+            '      echo x\n  - name: sibling\n    run: echo y\n')
+        self.assertEqual([2, 6], [first for first, _ in steps])
+        self.assertIn('- name: not-a-step', steps[0][1])
         # select() identity filtering still suppresses the first-match
         # finding, including when an earlier select() filters on something
         # else; a non-identity select() does not suppress it.

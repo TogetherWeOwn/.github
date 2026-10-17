@@ -142,13 +142,31 @@ def svelte_scripts(text: str) -> str:
     This is intentionally not a Svelte compiler. Unterminated scripts fail
     incomplete; templates/markup are not claimed as JavaScript coverage.
     """
-    opens = list(re.finditer(r'<script\b[^>]*>', text, flags=re.I))
-    blocks = list(re.finditer(r'<script\b[^>]*>(.*?)</script\s*>', text, flags=re.I | re.S))
-    if len(opens) != len(blocks):
-        raise ValueError('unterminated Svelte script')
+    # Single linear pass. Pairing two finditer lists was quadratic: each
+    # `<script` without a following `>` (or close) rescanned to end of
+    # text, so `<script>` repeated to the 2 MiB file cap approached the
+    # 20-minute job timeout. Semantics are the counted-regex ones: an
+    # open is `<script` up to the next `>` (a `<script` with no `>` after
+    # it is not an open, and none later can be either), a block runs to
+    # the first close, and an open inside a block body (say in a string)
+    # is still an error -- the close tag's `>` always made the old
+    # `[^>]*>` count it, so the counts differed.
+    start_re = re.compile(r'<script\b', re.I)
+    close_re = re.compile(r'</script\s*>', re.I)
     out = ['\n' if c == '\n' else ' ' for c in text]
-    for match in blocks:
-        out[match.start(1):match.end(1)] = match[1]
+    pos = 0
+    while True:
+        start = start_re.search(text, pos)
+        if not start:
+            break
+        tag_end = text.find('>', start.end())
+        if tag_end < 0:
+            break
+        close = close_re.search(text, tag_end + 1)
+        if not close or start_re.search(text, tag_end + 1, close.start()):
+            raise ValueError('unterminated Svelte script')
+        out[tag_end + 1:close.start()] = text[tag_end + 1:close.start()]
+        pos = close.end()
     return ''.join(out)
 
 
