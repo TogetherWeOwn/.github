@@ -94,6 +94,26 @@ def group_api():
     return FakeAPI(responses)
 
 
+def rewritten_group_api(method="squash", associations=True, titles=True):
+    # Neither original PR head survives squash/rebase. The association endpoint
+    # returns PR objects, including the head snapshot, not just PR numbers.
+    api = group_api()
+    first = "e" * 40
+    commits = [(first, 1), (GROUP, 2)]
+    if method == "rebase":
+        commits.insert(1, ("f" * 40, 1))
+    suffix = f"compare/{BASE}...{GROUP}"
+    api.responses[f"{suffix}?per_page=1&page=1"] = {"total_commits": len(commits)}
+    api.responses[f"{suffix}?per_page=100&page=1"] = {"commits": [
+        {"sha": s, "commit": {"message": f"fix: queued change (#{n})" if titles else "fix: queued change"}}
+        for s, n in commits
+    ]}
+    for s, n in commits:
+        api.responses[f"commits/{s}/pulls?per_page=100&page=1"] = (
+            [copy.deepcopy(api.responses[f"pulls/{n}"])] if associations else [])
+    return api
+
+
 class ParserTests(unittest.TestCase):
     def issues(self, text, files=None):
         return a.validate(text, files or [file()])["issues"]
@@ -389,6 +409,61 @@ class APITests(unittest.TestCase):
         api.responses["pulls/1"]["body"] = "missing"
         self.assertEqual(a.evaluate(api, "merge_group", group_event())["verdict"], "invalid")
 
+    def test_rewritten_queue_commits_resolve_all_prs_from_associations(self):
+        for method in ("squash", "rebase"):
+            with self.subTest(method=method):
+                api = rewritten_group_api(method, titles=False)
+                result = a.evaluate(api, "merge_group", group_event())
+                self.assertEqual(result["verdict"], "valid")
+                self.assertEqual([r["pr"] for r in result["observations"]], [1, 2])
+                self.assertEqual([r["head_sha"] for r in result["observations"]], [HEAD, SECOND])
+                api.responses["pulls/2"]["body"] = "missing attestation"
+                self.assertEqual(a.evaluate(api, "merge_group", group_event())["verdict"], "invalid")
+
+    def test_squash_titles_resolve_all_prs_without_associations(self):
+        api = rewritten_group_api(associations=False)
+        result = a.evaluate(api, "merge_group", group_event())
+        self.assertEqual(result["verdict"], "valid")
+        self.assertEqual([r["pr"] for r in result["observations"]], [1, 2])
+
+    def test_single_squash_commit_can_resolve_from_queue_ref(self):
+        api = rewritten_group_api(associations=False, titles=False)
+        suffix = f"compare/{BASE}...{GROUP}"
+        api.responses[f"{suffix}?per_page=1&page=1"] = {"total_commits": 1}
+        api.responses[f"{suffix}?per_page=100&page=1"] = {"commits": [{"sha": GROUP}]}
+        result = a.evaluate(api, "merge_group", group_event())
+        self.assertEqual(result["verdict"], "valid")
+        self.assertEqual([r["pr"] for r in result["observations"]], [1])
+
+    def test_queue_ref_alone_cannot_hide_unresolved_group_members(self):
+        with self.assertRaisesRegex(a.ObservationError, "merge_group_prs_unresolved"):
+            a.evaluate(rewritten_group_api(associations=False, titles=False), "merge_group", group_event())
+
+    def test_rewritten_queue_association_head_change_is_stale(self):
+        api = rewritten_group_api(titles=False)
+        api.responses["pulls/2"]["head"]["sha"] = "9" * 40
+        with self.assertRaisesRegex(a.ObservationError, "merge_group_candidate_head_unresolved"):
+            a.evaluate(api, "merge_group", group_event())
+
+    def test_rewritten_queue_closed_or_retargeted_members_are_stale(self):
+        for associations in (True, False):
+            for state, ref in (("closed", "main"), ("open", "release")):
+                with self.subTest(associations=associations, state=state, ref=ref):
+                    api = rewritten_group_api(associations=associations, titles=not associations)
+                    api.responses["pulls/2"]["state"] = state
+                    api.responses["pulls/2"]["base"]["ref"] = ref
+                    with self.assertRaisesRegex(a.ObservationError, "merge_group_candidate_state_or_base_stale"):
+                        a.evaluate(api, "merge_group", group_event())
+
+    def test_squash_title_hints_only_use_trailing_number_on_first_line(self):
+        for message in ("fix: queued change\n\nFixes (#2)", "fix: (#2) is only an example"):
+            with self.subTest(message=message):
+                api = rewritten_group_api(associations=False)
+                commits = api.responses[f"compare/{BASE}...{GROUP}?per_page=100&page=1"]["commits"]
+                commits[1]["commit"]["message"] = message
+                with self.assertRaisesRegex(a.ObservationError, "merge_group_membership_incomplete"):
+                    a.evaluate(api, "merge_group", group_event())
+
     def test_merge_group_association_pagination(self):
         api = group_api()
         key = f"commits/{HEAD}/pulls?per_page=100&page=1"
@@ -437,8 +512,9 @@ class APITests(unittest.TestCase):
         for state, ref in (("closed", "main"), ("open", "release")):
             with self.subTest(state=state, ref=ref):
                 api = group_api()
-                api.responses[f"commits/{HEAD}/pulls?per_page=100&page=1"].append({"number": 3})
                 api.responses["pulls/3"] = pr(3, "e" * 40, state=state, ref=ref)
+                api.responses[f"commits/{HEAD}/pulls?per_page=100&page=1"].append(
+                    copy.deepcopy(api.responses["pulls/3"]))
                 result = a.evaluate(api, "merge_group", group_event())
                 self.assertEqual(result["verdict"], "valid")
                 self.assertEqual([r["pr"] for r in result["observations"]], [1, 2])
@@ -537,6 +613,24 @@ class CLITests(unittest.TestCase):
             self.assertNotIn("local module executed", result.stdout + result.stderr)
             self.assertIn("would_fail=true", (p / "output").read_text())
             self.assertIn("NOT verified", (p / "summary").read_text())
+
+    def test_rewritten_merge_group_reports_valid_and_exits_zero(self):
+        for method in ("squash", "rebase"):
+            with self.subTest(method=method), tempfile.TemporaryDirectory() as directory:
+                output_file = Path(directory) / "output"
+                summary_file = Path(directory) / "summary"
+                with mock.patch.object(a, "GitHub", return_value=rewritten_group_api(method, titles=False)), \
+                     mock.patch.dict(os.environ, {"GITHUB_EVENT_PATH": "unused", "GITHUB_EVENT_NAME": "merge_group",
+                                                  "GITHUB_OUTPUT": str(output_file),
+                                                  "GITHUB_STEP_SUMMARY": str(summary_file)}), \
+                     mock.patch.object(Path, "read_text", return_value=json.dumps(group_event())), \
+                     mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+                    self.assertEqual(a.main(), 0)
+                report = json.loads(output.getvalue().splitlines()[0])
+                self.assertEqual(report["verdict"], "valid")
+                self.assertEqual([r["pr"] for r in report["observations"]], [1, 2])
+                self.assertIn("verdict=valid\nwould_fail=false", output_file.read_text())
+                self.assertIn("No enforcement", summary_file.read_text())
 
     def test_stale_merge_group_warns_and_exits_zero(self):
         for state, ref in (("closed", "main"), ("open", "release")):

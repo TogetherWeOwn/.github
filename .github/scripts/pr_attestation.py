@@ -350,37 +350,68 @@ def group_pulls(api, event):
     commit_shas = {sha(row.get("sha")) for row in commits}
     if len(commits) != total or len(commit_shas) != total or head not in commit_shas:
         raise ObservationError("merge_group_commits_incomplete")
-    candidates = set()
-    # A synthetic head's association may cover just the last PR. Walk EVERY
-    # compared commit and EVERY association page, never pulls[0] or branch-name
-    # inference alone. Each candidate is refreshed through the pulls API below.
-    for commit in sorted(commit_shas):
-        for row in api.pages(f"commits/{commit}/pulls"):
-            candidates.add(number(row.get("number")))
+    ref = group.get("head_ref", "")
+    queue_ref = rf"refs/heads/gh-readonly-queue/{re.escape(base_ref[len('refs/heads/'):])}/pr-([1-9][0-9]*)-[a-f0-9]+"
+    leading = re.fullmatch(queue_ref, ref) if isinstance(ref, str) else None
+    leading_number = int(leading[1]) if leading else None
+    candidates, titled = set(), set()
+    association_heads, associated_commits = {}, {}
+    commit_candidates = {s: set() for s in commit_shas}
+    # Squash/rebase queues rewrite PR heads. Walk EVERY compared commit and
+    # association page. Bind associations to their PR head snapshot; a trailing
+    # squash-title (#N) is a fallback when GitHub supplies no association.
+    for commit in commits:
+        s = commit["sha"]
+        detail = commit.get("commit")
+        message = detail.get("message") if isinstance(detail, dict) else None
+        title_pr = re.search(r"\(#([1-9][0-9]*)\)\s*$", message.partition("\n")[0]) if isinstance(message, str) else None
+        if title_pr:
+            n = int(title_pr[1])
+            candidates.add(n)
+            titled.add(n)
+            commit_candidates[s].add(n)
+        for row in api.pages(f"commits/{s}/pulls"):
+            n = number(row.get("number"))
+            candidates.add(n)
+            commit_candidates[s].add(n)
+            associated_commits.setdefault(n, set()).add(s)
+            if "head" in row:
+                detail = row["head"]
+                association_heads.setdefault(n, set()).add(sha(detail.get("sha") if isinstance(detail, dict) else None))
+    # A lone rewritten commit can use the queue ref, but the leading number
+    # alone cannot enumerate a multi-commit group with unresolved members.
+    ref_only = not candidates and total == 1 and leading_number is not None
+    if ref_only:
+        candidates.add(leading_number)
+    prs = {n: pull(api, n) for n in sorted(candidates)}
+    original_heads = {pr["head"]["sha"] for pr in prs.values()} & commit_shas
     result = []
-    for n in sorted(candidates):
-        pr = pull(api, n)
-        head_in_group = pr["head"]["sha"] in commit_shas
+    for n, pr in prs.items():
+        current_head = pr["head"]["sha"]
+        head_in_group = current_head in commit_shas
+        snapshots = association_heads.get(n, set())
+        if snapshots and snapshots != {current_head}:
+            raise ObservationError("merge_group_candidate_head_unresolved")
         compatible = pr.get("state") == "open" and pr["base"].get("ref") == base_ref[len("refs/heads/"):]
-        if head_in_group and not compatible:
-            # A non-leading member may close or retarget after queue creation.
-            # Its code remains in the compared group: never drop it and report
-            # a clean observation for only the remaining compatible members.
-            raise ObservationError("merge_group_candidate_state_or_base_stale")
-        if compatible:
-            if not head_in_group:
-                # Could be a stale queued PR or a stacked PR sharing commits.
-                # Ambiguity is an error observation, never silent exclusion.
-                raise ObservationError("merge_group_candidate_head_unresolved")
-            result.append(pr)
+        # Associations can also mention an unrelated closed/other-base PR that
+        # shares another member's original head. Do not mistake that overlap
+        # for a stale member, but never discard a rewritten member silently.
+        overlap_only = bool(associated_commits.get(n)) and associated_commits[n] <= original_heads
+        explicit_member = head_in_group or n in titled or n == leading_number
+        if not compatible:
+            if explicit_member or (snapshots and not overlap_only):
+                raise ObservationError("merge_group_candidate_state_or_base_stale")
+            continue
+        if not (head_in_group or snapshots or n in titled or ref_only):
+            raise ObservationError("merge_group_candidate_head_unresolved")
+        result.append(pr)
     if not result:
         raise ObservationError("merge_group_prs_unresolved")
-    # GitHub's queue ref identifies at least its leading PR. It is only a
-    # completeness cross-check, never the authority for enumerating all PRs.
-    ref = group.get("head_ref", "")
-    leading = re.search(r"/pr-([1-9][0-9]*)-", ref) if isinstance(ref, str) else None
-    if leading and int(leading[1]) not in {pr["number"] for pr in result}:
+    resolved = {pr["number"] for pr in result}
+    if leading_number is not None and leading_number not in resolved:
         raise ObservationError("merge_group_leading_pr_unresolved")
+    if not original_heads and not ref_only and any(not (members & resolved) for members in commit_candidates.values()):
+        raise ObservationError("merge_group_membership_incomplete")
     return result
 
 
