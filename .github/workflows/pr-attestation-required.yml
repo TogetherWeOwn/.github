@@ -1,0 +1,48 @@
+# Future org-ruleset entry point: required workflows need PR/merge_group triggers.
+# No callers in application repos are needed when this wrapper is later selected
+# as an org required workflow. Do NOT select it yet: this phase is SHADOW only.
+# The bare pr-attestation check is always green, even when observations fail.
+# No promotion until measured false-alarm <=5% and a separately reviewed change.
+# Pin to a commit carrying the reusable; update after each reusable change.
+name: PR attestation (required entry point, shadow)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  merge_group: {}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-attestation-required-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  observation:
+    if: always()
+    uses: TogetherWeOwn/.github/.github/workflows/pr-attestation.yml@80c0e518a834127ab2db1ab0b9c0576f1bef222f
+    with:
+      runs-on-json: ${{ github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]' }}
+
+  pr-attestation:
+    name: pr-attestation
+    runs-on: ${{ fromJSON(github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    continue-on-error: true
+    needs: [observation]
+    if: always()
+    steps:
+      - name: Publish shadow observation as a non-blocking bare check
+        env:
+          RESULT: ${{ needs.observation.result }}
+          VERDICT: ${{ needs.observation.outputs.verdict }}
+        run: |
+          case "$VERDICT" in valid|invalid|error) ;; *) VERDICT=error ;; esac
+          if [ "$RESULT" != success ]; then VERDICT=error; fi
+          if [ "$VERDICT" != valid ]; then
+            printf '%s\n' '::warning::PR attestation shadow observation needs attention; this is not an enforced gate.'
+          fi
+          printf '## PR attestation (shadow / WARN)\n\nObservation: **%s**.\n\nNo enforcement; no rule or required-check change.\n' "$VERDICT" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
