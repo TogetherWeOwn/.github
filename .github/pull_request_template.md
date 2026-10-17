@@ -33,11 +33,25 @@ or describe the problem and motivation here. No internal tracker identifiers. --
 
 <!-- SHADOW / WARN only. Fill every field; retain the exact heading/field/bullet syntax.
 T0 = critical paths, T1 = standard changes, T2 = docs-only. Declaring a higher risk is OK.
-T0 paths: migrations/**, sql/**, **/auth/**, **/session*, billing/**,
-.github/workflows/deploy*, wrangler*, crates/cutover/**, **/voice/**, crypto/vault.
-**/ includes the root; session* includes descendants; crypto/vault includes descendants.
+T0 directories at any depth: migrations, sql, db, database, drizzle.
+T0 directory/module words: auth, authn, authz, authentication, authorization, oauth,
+session, sessions, billing, gateway, voice, crypto, vault, secret, secrets,
+backup, backups, dump, dumps, grant, grants, role, roles, erasure, ingest.
+Words are case-insensitive and split at punctuation, snake_case, kebab-case, and CamelCase
+boundaries (auth.rs, gateway_backoff.rs, member-erasure.ts, SessionController.php).
+The words also match directory names/descendants. Prose filenames ending .md/.rst/.txt
+are not modules, but still inherit any critical directory floor. Substrings such as
+names in authors.py, voices/, and roleplay.ts do not match those critical words.
+Also T0: .github/workflows/deploy*, root wrangler*, crates/cutover/**.
 Renames inspect both old and new paths; deleting a T0 file is still T0.
-T2 currently means only root or docs/ .md/.rst/.txt files, never .github/ files or code.
+T2 requires only root or docs/ .md/.rst files or explicitly allowlisted text basenames:
+README.txt, LICENSE.txt, NOTICE.txt, CHANGELOG.txt, CONTRIBUTING.txt, CODE_OF_CONDUCT.txt,
+SECURITY.txt, SUPPORT.txt, AUTHORS.txt (case-insensitive). Critical directory floors win.
+Never T2: .github/ files, code, arbitrary .txt, CMakeLists.txt, or requirements/constraints
+manifests (including requirements.txt, requirements-dev.txt, and docs/requirements.txt).
+Path names are only a risk floor, not proof that other code is non-critical; declare T0
+for critical behavior even when its path does not match. Ingest is conservatively T0
+because filenames cannot prove whether a body route requires authentication.
 
 Claims: one behavior claim per C-number. For docs, state the documentation-only claim.
 Tests: one line per claim/test mapping; repository-relative path, optional ::test_name.

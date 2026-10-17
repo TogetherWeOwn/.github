@@ -203,16 +203,69 @@ class RiskTests(unittest.TestCase):
                 self.assertEqual(a.classify({path}), "T0")
 
     def test_risk_prefix_boundary(self):
-        for path in ("authors.py", "src/oauth_notes.rs", "billings/demo.ts", "crypto/vault_notes.md",
-                     "src/voices/handler.rs", "docs/wrangler.md", "migrations_backup/01.sql"):
+        for path in ("authors.py", "src/authority.rs", "billings/demo.ts", "docs/vault_notes.md",
+                     "src/voices/handler.rs", "docs/wrangler.md", "migrations_archive/01.sql",
+                     "src/roleplay.ts", "src/grandfather.rs", "src/voicemail.rs", "src/dumpster.py",
+                     "src/ingestion_notes.txt", "docs/auth-guide.md", "docs/cryptography.rst",
+                     "app/Services/AuthorController.php", "packages/sqlite/client.py"):
             with self.subTest(path=path):
                 self.assertFalse(a.is_t0(path))
 
     def test_docs_is_conservative(self):
-        for path in ("README.md", "docs/guide.rst", "docs/sub/notes.txt"):
+        for path in ("README.md", "docs/guide.rst", "docs/sub/README.txt"):
             self.assertEqual(a.classify({path}), "T2")
-        for path in ("docs/script.py", ".github/pull_request_template.md", "src/readme.md", "foo.yml"):
+        for path in ("docs/script.py", ".github/pull_request_template.md", "src/readme.md", "foo.yml",
+                     "docs/sub/notes.txt"):
             self.assertEqual(a.classify({path}), "T1")
+
+    def test_build_manifests_cannot_claim_docs_only_without_tests(self):
+        for path in ("requirements.txt", "CMakeLists.txt", "docs/requirements.txt",
+                     "docs/build/CMakeLists.txt", "docs/requirements-dev.txt",
+                     "docs/constraints.txt", "docs/notes.txt"):
+            with self.subTest(path=path):
+                report = a.validate(body("T2"), [file(path)])
+                self.assertEqual(report["path_tier"], "T1")
+                self.assertEqual(report["verdict"], "invalid")
+                self.assertIn("risk_tier_understated", report["issues"])
+
+    def test_allowlisted_text_documentation_can_claim_no_tests(self):
+        for path in ("README.txt", "LICENSE.txt", "NOTICE.txt", "docs/README.txt",
+                     "docs/reference/CHANGELOG.txt"):
+            with self.subTest(path=path):
+                self.assertEqual(a.validate(body("T2"), [file(path)])["verdict"], "valid")
+
+    def test_real_critical_modules_reject_standard_attestations(self):
+        # Paths verified against target-repository trees, not just idealized auth/ layouts.
+        for path in (
+            "workers/api/src/auth.rs", "workers/api/src/vault.rs",
+            "workers/stream/src/grant.rs", "apps/web/src/lib/billing/plans.ts",
+            "crates/bot/src/gateway.rs", "crates/bot/src/gateway_backoff.rs",
+            "crates/bot/src/voice_cold_authority_tests.rs", "crates/core/src/secret.rs",
+            "crates/core/src/backup/dump.rs", "crates/core/src/database_roles.rs",
+            "src/member-erasure.ts", "src/roles.ts", "bin/db-backup.sh",
+            "src/db/connection.ts", "drizzle/1022_web-sessions-oauth-journeys.sql",
+            "database/migrations/0001_01_01_000000_create_users_table.php",
+            "app/Http/Controllers/Settings/SessionController.php",
+            "app/Http/Controllers/Settings/TwoFactorAuthenticationController.php",
+            "app/Services/Webhooks/RotateWebhookSecret.php",
+        ):
+            with self.subTest(path=path):
+                report = a.validate(body().replace("[x] D2", "[ ] D2"), [file(), file(path)])
+                self.assertEqual(report["path_tier"], "T0")
+                self.assertEqual(report["verdict"], "invalid")
+                self.assertIn("risk_tier_understated", report["issues"])
+                self.assertIn("high_risk_checklist_unchecked", report["issues"])
+
+    def test_all_specified_critical_families_have_nested_fixtures(self):
+        for path in ("packages/api/migrations/01.sql", "lib/crypto/cipher.rs",
+                     "lib/vault/key.rs", "lib/secret_keys.rs", "src/backup.rs",
+                     "tools/dump_data.py", "src/grants.rs", "src/role_policy.ts",
+                     "src/erasure/handler.rs", "src/ingest/body.rs", "src/ingest.rs",
+                     "src/authz.rs", "src/oauth/token.rs", "src/session_keys.rs",
+                     "packages/api/sql/schema.sql", "src/billing/charge.rs",
+                     "crypto/vault_notes.md", "migrations_backup/01.sql", "src/oauth_notes.rs"):
+            with self.subTest(path=path):
+                self.assertEqual(a.classify({path}), "T0")
 
     def test_understatement_and_overstatement(self):
         self.assertIn("risk_tier_understated", a.validate(body(), [file(), file("auth/login.rs")])["issues"])
@@ -313,6 +366,45 @@ class APITests(unittest.TestCase):
         with self.assertRaisesRegex(a.ObservationError, "candidate_head_unresolved"):
             a.evaluate(api, "merge_group", group_event())
 
+    def test_merge_group_closed_nonleading_pr_is_not_silently_dropped(self):
+        api = group_api()
+        api.responses["pulls/2"]["state"] = "closed"
+        with self.assertRaisesRegex(a.ObservationError, "merge_group_candidate_state_or_base_stale"):
+            a.evaluate(api, "merge_group", group_event())
+
+    def test_merge_group_retargeted_nonleading_pr_is_not_silently_dropped(self):
+        api = group_api()
+        api.responses["pulls/2"]["base"]["ref"] = "release"
+        with self.assertRaisesRegex(a.ObservationError, "merge_group_candidate_state_or_base_stale"):
+            a.evaluate(api, "merge_group", group_event())
+
+    def test_merge_group_unrelated_closed_or_other_base_pr_can_be_excluded(self):
+        for state, ref in (("closed", "main"), ("open", "release")):
+            with self.subTest(state=state, ref=ref):
+                api = group_api()
+                api.responses[f"commits/{HEAD}/pulls?per_page=100&page=1"].append({"number": 3})
+                api.responses["pulls/3"] = pr(3, "e" * 40, state=state, ref=ref)
+                result = a.evaluate(api, "merge_group", group_event())
+                self.assertEqual(result["verdict"], "valid")
+                self.assertEqual([r["pr"] for r in result["observations"]], [1, 2])
+
+    def test_merge_group_retarget_during_file_fetch_is_stale_even_at_same_sha(self):
+        api = group_api()
+        original_get = api.get
+        calls = 0
+        def get(suffix):
+            nonlocal calls
+            data = original_get(suffix)
+            if suffix == "pulls/2":
+                calls += 1
+                if calls > 1:
+                    data["base"]["ref"] = "release"
+            return data
+        api.get = get
+        result = a.evaluate(api, "merge_group", group_event())
+        self.assertEqual(result["verdict"], "error")
+        self.assertEqual(result["observations"][1]["issues"], ["pr_snapshot_changed"])
+
     def test_merge_group_incomplete_compare_is_error(self):
         api = group_api()
         api.responses[f"compare/{BASE}...{GROUP}?per_page=1&page=1"] = {"total_commits": 4}
@@ -326,10 +418,10 @@ class APITests(unittest.TestCase):
         with self.assertRaisesRegex(a.ObservationError, "prs_unresolved"):
             a.evaluate(api, "merge_group", group_event())
 
-    def test_merge_group_wrong_base_is_not_selected(self):
+    def test_merge_group_wrong_base_is_stale(self):
         api = group_api()
         api.responses["pulls/1"]["base"]["ref"] = "release"
-        with self.assertRaisesRegex(a.ObservationError, "leading_pr_unresolved"):
+        with self.assertRaisesRegex(a.ObservationError, "candidate_state_or_base_stale"):
             a.evaluate(api, "merge_group", group_event())
 
     def test_bad_event_and_shapes(self):
@@ -390,6 +482,29 @@ class CLITests(unittest.TestCase):
             self.assertNotIn("local module executed", result.stdout + result.stderr)
             self.assertIn("would_fail=true", (p / "output").read_text())
             self.assertIn("NOT verified", (p / "summary").read_text())
+
+    def test_stale_merge_group_warns_and_exits_zero(self):
+        for state, ref in (("closed", "main"), ("open", "release")):
+            with self.subTest(state=state, ref=ref), tempfile.TemporaryDirectory() as directory:
+                api = group_api()
+                api.responses["pulls/2"]["state"] = state
+                api.responses["pulls/2"]["base"]["ref"] = ref
+                output_file = Path(directory) / "output"
+                summary_file = Path(directory) / "summary"
+                with mock.patch.object(a, "GitHub", return_value=api), \
+                     mock.patch.dict(os.environ, {"GITHUB_EVENT_PATH": "unused", "GITHUB_EVENT_NAME": "merge_group",
+                                                  "GITHUB_OUTPUT": str(output_file),
+                                                  "GITHUB_STEP_SUMMARY": str(summary_file)}), \
+                     mock.patch.object(Path, "read_text", return_value=json.dumps(group_event())), \
+                     mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+                    self.assertEqual(a.main(), 0)
+                report = json.loads(output.getvalue().splitlines()[0])
+                self.assertEqual(report["verdict"], "error")
+                self.assertEqual(report["issues"], ["merge_group_candidate_state_or_base_stale"])
+                self.assertEqual(report["observations"], [])
+                self.assertIn("::warning::", output.getvalue())
+                self.assertIn("verdict=error\nwould_fail=true", output_file.read_text())
+                self.assertIn("**error**", summary_file.read_text())
 
     def test_invalid_attestation_is_warning_not_failure(self):
         with mock.patch.object(a, "GitHub", return_value=api_for(pr(text="missing"))), \

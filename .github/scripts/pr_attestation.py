@@ -18,20 +18,25 @@ import urllib.request
 from pathlib import Path
 
 SCHEMA_VERSION = 1
-T0_PATHS = (
-    "migrations/**", "sql/**", "**/auth/**", "**/session*", "billing/**",
-    ".github/workflows/deploy*", "wrangler*", "crates/cutover/**",
-    "**/voice/**", "crypto/vault",
-)
-# Explicit root/nested semantics: **/ may match zero directories; the session
-# family includes descendants of session-prefixed directories. crypto/vault
-# matches the named path and descendants, not unrelated crypto/vault_notes.
+# Central path floor: match real module names as well as directory layouts.
+# Word boundaries (snake/kebab/dot/CamelCase) avoid substrings such as authors,
+# voices, billings, and roleplay. No target-repository policy is executed.
+T0_DIRECTORIES = frozenset({"migrations", "sql", "db", "database", "drizzle"})
+T0_WORDS = frozenset({
+    "auth", "authn", "authz", "authentication", "authorization", "oauth",
+    "session", "sessions", "billing", "gateway", "voice", "crypto", "vault",
+    "secret", "secrets", "backup", "backups", "dump", "dumps",
+    "grant", "grants", "role", "roles", "erasure", "ingest",
+})
 T0_PATTERNS = (
-    r"^(?:migrations|sql|billing)/", r"^(?:.*/)?auth/",
-    r"^(?:.*/)?session[^/]*(?:/.*)?$", r"^\.github/workflows/deploy[^/]*(?:/.*)?$",
+    r"^\.github/workflows/deploy[^/]*(?:/.*)?$",
     r"^wrangler[^/]*(?:/.*)?$", r"^crates/cutover/",
-    r"^(?:.*/)?voice/", r"^crypto/vault(?:/.*)?$",
 )
+DOC_SUFFIXES = (".md", ".rst", ".txt")
+TEXT_DOC_NAMES = frozenset({
+    "readme.txt", "license.txt", "notice.txt", "changelog.txt", "contributing.txt",
+    "code_of_conduct.txt", "security.txt", "support.txt", "authors.txt",
+})
 CLAIM = re.compile(r"- (C[1-9][0-9]*): (.+)")
 TEST = re.compile(
     r"- (C[1-9][0-9]*) \| test=([^|]+) \| failed_before=(yes|no|not-run) \| proof=(.+)"
@@ -56,17 +61,36 @@ def valid_path(path):
             and all(p not in ("", ".", "..") for p in path.split("/")))
 
 
+def path_words(component):
+    # Split both SessionController and OAuthToken before normalizing case.
+    component = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", component)
+    component = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", component)
+    return set(re.split(r"[^a-z0-9]+", component.lower()))
+
+
 def is_t0(path):
-    return any(re.search(pattern, path) for pattern in T0_PATTERNS)
+    if any(re.search(pattern, path) for pattern in T0_PATTERNS):
+        return True
+    parts = path.split("/")
+    directories = parts[:-1]
+    if any(part.lower() in T0_DIRECTORIES for part in directories):
+        return True
+    # Prose named auth-guide.md is not an auth module. Documentation INSIDE a
+    # critical directory still inherits that directory's floor.
+    components = directories if path.lower().endswith(DOC_SUFFIXES) else parts
+    return any(path_words(part) & T0_WORDS for part in components)
 
 
 def docs_only(path):
-    # Deliberately conservative: executable scripts/assets in docs/ are T1.
-    # A caller cannot declare arbitrary .github config/documentation as T2.
-    if path.startswith(".github/"):
+    # Reject build/dependency inputs before matching documentation. In
+    # particular, docs/requirements.txt and CMakeLists.txt are executable policy.
+    name = path.rsplit("/", 1)[-1].lower()
+    if name == "cmakelists.txt" or re.fullmatch(r"(?:requirements|constraints)(?:[._-].*)?", name):
         return False
-    return (path.lower().endswith((".md", ".rst", ".txt"))
-            and ("/" not in path or path.startswith("docs/")))
+    if path.startswith(".github/") or ("/" in path and not path.startswith("docs/")):
+        return False
+    # Arbitrary .txt is not documentation: only these conventional names qualify.
+    return name.endswith((".md", ".rst")) or name in TEXT_DOC_NAMES
 
 
 def classify(paths):
@@ -334,8 +358,15 @@ def group_pulls(api, event):
     result = []
     for n in sorted(candidates):
         pr = pull(api, n)
-        if pr.get("state") == "open" and pr["base"].get("ref") == base_ref[len("refs/heads/"):]:
-            if pr["head"]["sha"] not in commit_shas:
+        head_in_group = pr["head"]["sha"] in commit_shas
+        compatible = pr.get("state") == "open" and pr["base"].get("ref") == base_ref[len("refs/heads/"):]
+        if head_in_group and not compatible:
+            # A non-leading member may close or retarget after queue creation.
+            # Its code remains in the compared group: never drop it and report
+            # a clean observation for only the remaining compatible members.
+            raise ObservationError("merge_group_candidate_state_or_base_stale")
+        if compatible:
+            if not head_in_group:
                 # Could be a stale queued PR or a stacked PR sharing commits.
                 # Ambiguity is an error observation, never silent exclusion.
                 raise ObservationError("merge_group_candidate_head_unresolved")
@@ -376,7 +407,8 @@ def evaluate(api, event_name, event):
             fresh = pull(api, n)
             if (fresh["head"]["sha"] != pr["head"]["sha"] or fresh["base"]["sha"] != pr["base"]["sha"]
                     or fresh.get("body") != pr.get("body") or fresh["changed_files"] != len(files)
-                    or fresh.get("state") != pr.get("state")):
+                    or fresh.get("state") != pr.get("state")
+                    or fresh["base"].get("ref") != pr["base"].get("ref")):
                 raise ObservationError("pr_snapshot_changed")
             report = validate(pr.get("body"), files)
         except ObservationError as exc:
