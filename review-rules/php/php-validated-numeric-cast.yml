@@ -1,0 +1,22 @@
+rules:
+- id: php-validated-numeric-cast
+  languages:
+  - php
+  message: 'R1b: array numeric input into date arithmetic may be a validated string under strict_types;
+    cast or use integer().'
+  severity: ERROR
+  metadata:
+    examples:
+    - kofra#522 update-expiry-days-string-typeerror
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern-either:
+    - pattern: $C->addDays($V[$K])
+    - pattern: $C->addHours($V[$K])
+    - pattern: $C->addMinutes($V[$K])
+    - pattern: $C->addSeconds($V[$K])
+  - pattern-inside: declare(strict_types=1); ...
+  - pattern-not-regex: ->add(?:Days|Hours|Minutes|Seconds)\(\s*\((?:int|float)\)

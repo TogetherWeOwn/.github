@@ -1,0 +1,19 @@
+rules:
+- id: php-json-where-index-proof
+  languages:
+  - php
+  message: 'R3: JSON WHERE predicate needs EXPLAIN evidence; existing covering predicate or generated-column
+    index may suffice.'
+  severity: WARNING
+  metadata:
+    examples:
+    - kofra#536 activity-export-unindexed-json-scope
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: $Q->where($FIELD, ...)
+  - metavariable-regex:
+      metavariable: $FIELD
+      regex: .*meta->.*

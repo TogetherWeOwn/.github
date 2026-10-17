@@ -1,0 +1,19 @@
+rules:
+- id: rust-format-joined-identity-key
+  languages:
+  - rust
+  message: 'RUST-14a: colon-joined identity may collide; use length prefixes or validate components and
+    test collisions.'
+  severity: WARNING
+  metadata:
+    examples:
+    - nntunev2#10 idempotency-key-delimiter-collision
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: format!($FMT, ...)
+  - metavariable-regex:
+      metavariable: $FMT
+      regex: (?s).*\{[^}]*\}.*:.*\{

@@ -1,0 +1,16 @@
+rules:
+- id: hydration-copies-grants
+  languages:
+  - rust
+  - typescript
+  message: 'R10: hydration copies grants; prove blocked principals are excluded and the grant matrix remains
+    valid.'
+  severity: WARNING
+  metadata:
+    examples:
+    - two-bot-next#606 hydrate-grants-ignores-block-list
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-regex: granted(?:\.insert|\s*=\s*[^;\n]*[Gg]rants?)

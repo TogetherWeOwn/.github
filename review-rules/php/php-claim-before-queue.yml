@@ -1,0 +1,20 @@
+rules:
+- id: php-claim-before-queue
+  languages:
+  - php
+  message: 'R5: claim before enqueue needs full-window predicate, affected-row check and release on enqueue
+    failure.'
+  severity: ERROR
+  metadata:
+    examples:
+    - kofra#302 reminder-claim-lost-on-enqueue-failure
+    - kofra#302 reminder-claim-skips-window-recheck
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: $Q->update([$FIELD => $V]); ... Mail::queue(...);
+  - metavariable-regex:
+      metavariable: $FIELD
+      regex: .*(sent_at|claimed_at|processed_at).*

@@ -1,0 +1,21 @@
+rules:
+- id: bearer-token-plaintext-lookup
+  languages:
+  - generic
+  message: 'R11: raw bearer lookup/storage exposes credentials in dumps; use hash, lookup HMAC and pepper_version.'
+  severity: ERROR
+  metadata:
+    examples:
+    - kofra#605 reset-token-plaintext-at-rest
+    - nntunev2#2 api-key-hash-entropy-and-pepper
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-regex: (?i)(?:WHERE\s+token\s*=\s*\?|where\(\s*["']token["']\s*,|sha256\(\s*\$secret)
+  paths:
+    include:
+    - '**/*.php'
+    - '**/*.ts'
+    - '**/*.js'
+    - '**/*.sql'

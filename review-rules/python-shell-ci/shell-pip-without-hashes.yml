@@ -1,0 +1,17 @@
+rules:
+- id: shell-pip-without-hashes
+  languages:
+  - bash
+  message: 'PYCI-02c: pip closure floats without --require-hashes; lock transitives, not just the top-level
+    package.'
+  severity: ERROR
+  metadata:
+    examples:
+    - paperclip-ops-tooling#940 semgrep-install-unpinned-closure
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern-regex: \b(?:pip3?|python3?\s+-m\s+pip)\s+install\b[^\n]*(?:\\\n[^\n]*)*
+  - pattern-not-regex: --require-hashes\b

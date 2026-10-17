@@ -1,0 +1,1 @@
+route.continue({headers: authHeaders});

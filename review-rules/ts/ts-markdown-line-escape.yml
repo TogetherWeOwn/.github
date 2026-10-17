@@ -1,0 +1,23 @@
+rules:
+- id: ts-markdown-line-escape
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-006: per-line Markdown escape needs fences, setext, HTML and CR probes; line-only handling
+    is advisory.'
+  severity: WARNING
+  metadata:
+    examples:
+    - two-web-next#796 mdtext-fence-setext-escape
+    - two-web-next#796 mdtext-bare-cr-line-ending
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern: '$TEXT.split("
+
+    ").$FN(...)'
+  paths:
+    include:
+    - '**/*ai-friendly*'
+    - '**/*md.*'

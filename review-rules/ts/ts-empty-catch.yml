@@ -1,0 +1,21 @@
+rules:
+- id: ts-empty-catch
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-004: catch discards failure/code; preserve the error or log its code and test failing dependency
+    behavior.'
+  severity: ERROR
+  metadata:
+    examples:
+    - two-web-next#541 complete-failure-discards-good-rows
+    - paperclip#121 claim-batch-untested-rethrow-and-break
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-either:
+  - pattern: $P.catch(() => undefined)
+  - pattern: $P.catch(() => [])
+  - pattern: try { ... } catch ($E) { return []; }
+  - pattern: try { ... } catch { return []; }

@@ -1,0 +1,23 @@
+rules:
+- id: ts-flash-delete-before-model
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-007a: deleting flash before awaited model read loses the banner on 503; consume only after
+    success.'
+  severity: ERROR
+  metadata:
+    examples:
+    - two-web-next#848 flash-consumed-before-model-read
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: $DELETE(...); ... await $MODEL(...);
+  - metavariable-regex:
+      metavariable: $DELETE
+      regex: ^delete\w*Cookie$
+  - metavariable-regex:
+      metavariable: $MODEL
+      regex: ^(modelForFn|modelFor|loadModel)$

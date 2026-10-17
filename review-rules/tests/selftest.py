@@ -1,0 +1,431 @@
+#!/usr/bin/env python3
+"""Rule-engine unit tests and equivalent Semgrep positive/negative fixture test.
+
+python3 -I review-rules/tests/selftest.py
+python3 -I review-rules/tests/selftest.py --semgrep
+
+The fixture pass checks both signs for EVERY shipped rule, verifies scanner
+work, and refuses parser/timeout errors. It uses the production digest/options.
+"""
+from __future__ import annotations
+
+import contextlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location('review_rules_runner', ROOT / 'scripts/run.py')
+engine = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(engine)
+checks = engine.checks
+ALL = set(engine.PACKS)
+
+# Each pure-text check has a positive and negative source fixture. Keep these
+# alongside the AST fixtures, not embedded in the production implementation.
+TEXT_CASES = [
+    ('supply-action-pin', '.github/workflows/ci.yml',
+     'steps:\n  - uses: actions/checkout@v4',
+     'steps:\n  - uses: actions/checkout@' + 'a' * 40),
+    ('supply-container-digest', 'Dockerfile',
+     'FROM ubuntu:24.04', 'FROM ubuntu@sha256:' + 'a' * 64 + ' AS build\nFROM build AS next\nFROM scratch'),
+    ('supply-download-integrity', 'scripts/install.sh',
+     'curl -f https://example.invalid/main/tool.tar.gz -o tool.tgz\ntar xf tool.tgz',
+     'curl -f https://example.invalid/archive/' + 'a' * 40 + '.tar.gz -o tool.tgz\nsha256sum -c hashes\ntar xf tool.tgz'),
+    ('workflow-artifact-scrub', '.github/workflows/e2e.yml',
+     'steps:\n  - uses: actions/upload-artifact@' + 'a' * 40 + '\n    if: always()\n    with:\n      path: playwright-report/',
+     'steps:\n  - uses: actions/upload-artifact@' + 'a' * 40 + "\n    if: steps.scrub.outputs.swept == 'true'\n    with:\n      path: playwright-report/"),
+    ('workflow-pull-request-target', '.github/workflows/ci.yml',
+     '"on": [push, pull_request_target]\njobs: {}',
+     'on: [push, pull_request]\njobs: {}\n# docs mention pull_request_target'),
+    ('workflow-required-aggregator', '.github/workflows/ci.yml',
+     '''run: echo '${{ toJSON(needs) }}' | grep -q '"result":"failure"' ''',
+     '''run: echo '${{ toJSON(needs) }}' | jq -e 'all(.[]; .result == "success")' '''),
+    ('security-suppression-change', '.gitleaksignore',
+     'src/auth.ts:leak:1', ''),
+    ('security-suppression-source', '.github/workflows/leaks.yml',
+     'steps:\n  - run: gitleaks detect --gitleaks-ignore-path base.ignore',
+     'steps:\n  - run: |\n      git show origin/main:.gitleaksignore > base.ignore\n      rm -f .gitleaksignore\n      gitleaks detect --gitleaks-ignore-path base.ignore'),
+    ('security-committed-operator-switch', 'wrangler.toml',
+     '[env.staging.vars]\nTWO_EVENTSUB = 1', '[env.staging.vars]\nSAFE = "true"'),
+    ('shell-provision-cleanup', 'scripts/provision.sh',
+     'tmp=$(mktemp -d)', 'tmp=$(mktemp -d)\ntrap \'rm -rf "$tmp"\' EXIT'),
+    ('shell-trap-exec', 'scripts/run.sh',
+     'trap \'rm -rf "$tmp"\' EXIT\nexec grype .',
+     'trap \'rm -rf "$tmp"\' EXIT\ngrype .'),
+    ('workflow-cancel-cleanup', '.github/workflows/branch.yml',
+     'steps:\n  - run: pscale branch create db test',
+     'steps:\n  - run: pscale branch create db test\n  - if: always()\n    run: pscale branch delete db test'),
+    ('api-list-pagination', 'ops/reader.py',
+     'def read():\n    return get("/pulls?per_page=100")',
+     'def read():\n    page = get("/pulls?per_page=100")\n    while next_link(page):\n        page = get(next_link(page))'),
+    ('shell-tool-failure-hidden', 'scripts/fetch.sh',
+     'gh run download 1 || true', 'gh run download 1 || exit 1'),
+    ('shell-scan-proves-work', 'scripts/leaks.sh',
+     'gitleaks git --log-opts "$range"',
+     'gitleaks git --log-opts "$range" 2> log\ngrep -Eq "[1-9][0-9]* commits scanned" log'),
+    ('shell-pr-first-match', 'scripts/pr.sh',
+     "gh api /repos/o/r/pulls --jq '.[0].number'",
+     "gh api /repos/o/r/pulls --jq '[.[] | select(.head.sha == $sha)][0].number'"),
+    ('shell-cli-head-binding', 'scripts/merge.sh',
+     'gh pr merge 1 --match-head-commit --squash',
+     'gh pr merge 1 --match-head-commit "$evaluated_sha" --squash'),
+    ('ts-tar-exclude-flavor', 'src/transfer.ts',
+     'const args = ["--exclude", "./target"];',
+     'const args = tarExcludeFor(local, remote, ["target"]);'),
+    ('rust-sql-list-limit', 'workers/api/src/library.rs',
+     'fn list_statement() -> String { "SELECT * FROM media".into() }',
+     'fn list_statement() -> String { "SELECT * FROM media LIMIT 20".into() }'),
+    ('rust-duplicate-secret-codec', 'src/session.rs',
+     'fn decode_base64(input: &str) {}', 'fn decode_secret(input: &str) { shared::decode(input); }'),
+]
+
+
+class TextChecks(unittest.TestCase):
+    def test_all_positive_negative(self):
+        for rule, path, positive, negative in TEXT_CASES:
+            with self.subTest(rule=rule, sign='positive'):
+                hits = checks.check_text(path, positive, ALL)
+                self.assertIn(rule, {x['rule_id'] for x in hits})
+            with self.subTest(rule=rule, sign='negative'):
+                # A removed suppression file has no positive text to inspect;
+                # prose mentions must not be treated as suppression changes.
+                safe_path = 'docs/security.md' if rule == 'security-suppression-change' else path
+                hits = checks.check_text(safe_path, negative, ALL)
+                self.assertNotIn(rule, {x['rule_id'] for x in hits})
+
+    def test_pin_exact_length_quotes_flow_folded_and_staging(self):
+        for source in ["{uses: 'actions/checkout@v4'}", '  - "uses": "actions/checkout@v4"',
+                       '  - uses: >-\n      actions/checkout@v4',
+                       '  - uses: actions/checkout@' + 'a' * 43]:
+            self.assertIn('supply-action-pin', {x['rule_id'] for x in checks.check_text('ops/sdlc/staging/check.yml', source, ALL)})
+        for source in ['uses: ./local/action', 'uses: docker://alpine@sha256:' + 'a' * 64,
+                       'uses: actions/checkout@' + 'A' * 40 + ' # version']:
+            self.assertFalse(checks.supply_checks('ci.yml', source))
+
+    def test_checksum_must_precede_execution(self):
+        text = 'curl https://example.invalid/main/install.sh | sh\nsha256sum -c hashes'
+        self.assertIn('supply-download-integrity', {x['rule_id'] for x in checks.shell_checks('install.sh', text)})
+
+    def test_checksum_in_other_step_does_not_excuse_download(self):
+        text = 'steps:\n  - run: curl https://example.invalid/main/tool.tar.gz | tar xz\n  - run: sha256sum -c hashes'
+        self.assertIn('supply-download-integrity', {x['rule_id'] for x in checks.check_text('.github/workflows/ci.yml', text, ALL)})
+
+    def test_pagination_in_other_function_not_an_exemption(self):
+        text = 'def correct():\n    return next_link(page)\ndef broken():\n    return get("/pulls?per_page=100")'
+        self.assertEqual(1, len(checks.pagination_checks('ops/read.py', text)))
+
+    def test_trigger_mutants(self):
+        for text in ['on:\n- push\n- pull_request_target\njobs: {}',
+                     '  "on":\n    pull_request_target: {}\n  jobs: {}',
+                     'on: [push, pull_request_target] # zizmor: ignore']:
+            self.assertIn('workflow-pull-request-target', {x['rule_id'] for x in checks.workflow_checks('.github/workflows/a.yml', text)})
+
+    def test_workflow_runs_preserve_line_offsets(self):
+        text = 'steps:\n  - name: install\n    run: |\n      echo one\n      echo two\n  - run: echo three\n'
+        self.assertEqual([(4, 'echo one\necho two\n'), (6, 'echo three')], checks.workflow_runs(text))
+
+    def test_svelte_line_mapping(self):
+        text = '<h1>Hello</h1>\n<script lang="ts">\nconst x = 1;\n</script>\n<p>{x}</p>'
+        result = engine.svelte_scripts(text)
+        self.assertEqual(text.count('\n'), result.count('\n'))
+        self.assertEqual(result.splitlines()[2], 'const x = 1;')
+        self.assertNotIn('<h1>', result)
+        with self.assertRaises(ValueError):
+            engine.svelte_scripts('<script>broken')
+
+    def test_document_mentions_and_pack_selection(self):
+        self.assertFalse(checks.check_text('docs/a.md', 'uses: actions/checkout@v4\npull_request_target\n.gitleaksignore', ALL))
+        self.assertFalse(checks.check_text('.github/workflows/ci.yml', 'uses: actions/checkout@v4', {'rust'}))
+
+    def test_shell_explicit_status_and_sourced_cleanup(self):
+        self.assertFalse(checks.shell_checks('a.sh', 'git diff a b 2>/dev/null\nrc=$?\nexit "$rc"'))
+        self.assertFalse(checks.shell_checks('a.sh', '# sourced-cleanup: parent.sh\ntmp=$(mktemp -d)'))
+        self.assertNotIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'trap cleanup EXIT\nrm -rf "$tmp"\ntrap - EXIT\nexec tool')})
+
+
+class FakeRepo:
+    def __init__(self, files, old=None, main=None):
+        self.data = files
+        self.old = old or {}
+        self.main = main or {}
+        self.base = 'base'
+    def files(self, ref=None):
+        return list(self.main if ref == 'main' else self.data)
+    def text(self, path, ref=None, missing=False):
+        return (self.old if ref == self.base else self.data).get(path, '')
+
+
+class RepoChecks(unittest.TestCase):
+    def hits(self, files, changed, packs=ALL, old=None, main=None):
+        return {x['rule_id'] for x in checks.repo_checks(FakeRepo(files, old, main), changed, packs, 'main')}
+
+    def test_test_inventory_positive_negative(self):
+        files = {'ops/productivity/test_cycle.py': 'def test_case(): pass', '.github/workflows/ci.yml': 'run: true'}
+        self.assertIn('test-inventory-unreferenced', self.hits(files, ['ops/productivity/test_cycle.py']))
+        files['.github/workflows/ci.yml'] = 'run: python3 -m unittest ops.productivity.test_cycle'
+        self.assertNotIn('test-inventory-unreferenced', self.hits(files, ['ops/productivity/test_cycle.py']))
+
+    def test_denylist_positive_negative(self):
+        path = 'server/src/env.ts'
+        files = {path: 'const token = process.env.FUTURE_API_KEY;', 'packages/adapter-utils/src/secret-env-redaction.ts': 'const keys = ["OLD_API_KEY"];'}
+        self.assertIn('ts-secret-denylist-parity', self.hits(files, [path]))
+        files['packages/adapter-utils/src/secret-env-redaction.ts'] += 'const next = "FUTURE_API_KEY";'
+        self.assertNotIn('ts-secret-denylist-parity', self.hits(files, [path]))
+
+    def test_parent_guard_positive_negative_public_and_late_parent(self):
+        path = 'web/src/routes/admin/events/+page.server.ts'
+        files = {path: 'export const load = async () => { const db = dbFor(); };',
+                 'web/src/routes/admin/+layout.server.ts': 'export function load() { requireAdmin(); }'}
+        self.assertIn('ts-kit-parent-guard', self.hits(files, [path]))
+        files[path] = 'export const load = async ({parent}) => { await parent(); const db = dbFor(); };'
+        self.assertNotIn('ts-kit-parent-guard', self.hits(files, [path]))
+        files[path] = 'export const load = async ({parent}) => { const db = dbFor(); await parent(); };'
+        self.assertIn('ts-kit-parent-guard', self.hits(files, [path]))
+        del files['web/src/routes/admin/+layout.server.ts']
+        self.assertNotIn('ts-kit-parent-guard', self.hits(files, [path]))
+
+    def test_flash_positive_negative(self):
+        path = 'web/src/routes/+page.server.ts'
+        files = {path: 'const flash = readJoinResultCookie(cookies);'}
+        self.assertIn('ts-flash-consumer', self.hits(files, [path]))
+        files[path] += '\ndeleteJoinCookie(cookies);'
+        self.assertNotIn('ts-flash-consumer', self.hits(files, [path]))
+
+    def test_dump_positive_negative_and_inventory_content_not_line_count(self):
+        path = 'crates/core/src/backup/dump_file.rs'
+        old = {path: 'const DUMP_VERSION: u32 = 5;\nconst DUMP_TABLES: &[&str] = &["users"];'}
+        files = {path: 'const DUMP_VERSION: u32 = 5;\nconst DUMP_TABLES: &[&str] = &["users", "events"];'}
+        self.assertIn('rust-dump-version-probe', self.hits(files, [path], old=old))
+        files[path] = files[path].replace('= 5;', '= 6;')
+        self.assertIn('rust-dump-version-probe', self.hits(files, [path], old=old))
+        self.assertNotIn('rust-dump-version-probe', self.hits(files, [path, 'scripts/rollback_readiness_probe.py'], old=old))
+
+    def test_migrations_latest_main_and_namespaces(self):
+        path = 'migrations/0002_new.sql'
+        main = {'migrations/0002_existing.sql': '', 'other/migrations/0099_other.sql': ''}
+        self.assertIn('migration-number-collision', self.hits({path: ''}, [path], main=main))
+        self.assertNotIn('migration-number-collision', self.hits({'migrations/0003_new.sql': ''}, ['migrations/0003_new.sql'], main=main))
+        self.assertIn('migration-number-order', self.hits({'migrations/0001_new.sql': ''}, ['migrations/0001_new.sql'], main=main))
+        self.assertNotIn('migration-number-order', self.hits({'migrations/0003_new.sql': ''}, ['migrations/0003_new.sql'], main=main))
+
+    def test_store_parity_positive_negative(self):
+        path = 'src/store.ts'
+        self.assertIn('store-parity-case', self.hits({path: 'update();'}, [path]))
+        files = {path: 'update();', 'tests/store.test.ts': 'test("parity", () => {});'}
+        self.assertNotIn('store-parity-case', self.hits(files, list(files)))
+
+
+class GitTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.git('init', '-q', '-b', 'main')
+        self.git('config', 'user.name', 'Review Rules Fixture')
+        self.git('config', 'user.email', 'fixture@example.invalid')
+        self.write('keep.txt', 'original\n')
+        self.commit('initial')
+        self.base = self.git('rev-parse', 'HEAD').strip()
+
+    def git(self, *args, check=True):
+        p = subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', '-C', str(self.root), *args], capture_output=True, text=True)
+        if check and p.returncode:
+            self.fail('fixture git command failed: ' + p.stderr)
+        return p.stdout
+
+    def write(self, path, value):
+        target = self.root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(value)
+
+    def commit(self, message):
+        self.git('add', '--all')
+        self.git('commit', '-qm', message)
+
+    def test_changed_names_spaces_leading_dash_and_rename(self):
+        self.write('new space.py', 'x = 1')
+        self.write('-option.py', 'x = 2')
+        self.git('mv', 'keep.txt', 'renamed.txt')
+        self.commit('files')
+        repo = engine.Git(self.root)
+        statuses = repo.statuses(self.base, repo.head)
+        self.assertEqual('A', statuses['new space.py'])
+        self.assertEqual('A', statuses['-option.py'])
+        self.assertEqual('D', statuses['keep.txt'])
+        self.assertEqual('original\n', repo.text('renamed.txt'))
+
+    def test_missing_ref_never_clean(self):
+        repo = engine.Git(self.root)
+        with self.assertRaises(RuntimeError):
+            repo.merge_base('does-not-exist', 'HEAD')
+
+    def test_symlink_not_followed(self):
+        (self.root / 'host.py').symlink_to('/etc/passwd')
+        self.commit('symlink')
+        with self.assertRaises(ValueError):
+            engine.Git(self.root).text('host.py')
+
+    def test_modify_delete_merge_positive_and_retained_negative(self):
+        self.git('switch', '-qc', 'feature')
+        self.write('keep.txt', 'important changes\n')
+        self.commit('modify')
+        self.git('switch', '-q', 'main')
+        self.git('rm', 'keep.txt')
+        self.commit('delete')
+        main = self.git('rev-parse', 'HEAD').strip()
+        self.git('switch', '-q', 'feature')
+        self.git('merge', 'main', check=False)
+        self.git('rm', 'keep.txt')
+        self.commit('resolve delete')
+        repo = engine.Git(self.root)
+        repo.base = repo.merge_base(repo.head, main)
+        self.assertEqual(['merge-modify-delete'], [x['rule_id'] for x in checks.merge_audit(repo)])
+        self.git('reset', '--hard', 'HEAD^')
+        self.git('merge', 'main', check=False)
+        self.write('keep.txt', 'important changes\n')
+        self.commit('resolve keep')
+        repo = engine.Git(self.root)
+        repo.base = repo.merge_base(repo.head, main)
+        self.assertFalse(checks.merge_audit(repo))
+
+    def test_invalid_packs_warn_exit_zero_with_artifact(self):
+        output = self.root / 'report'
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = engine.main(['--repo', str(self.root), '--base', self.base,
+                                '--packs', '../../evil', '--output', str(output)])
+        report = json.loads((output / 'review-rules.json').read_text())
+        self.assertEqual(0, code)
+        self.assertEqual('incomplete', report['status'])
+
+    def test_missing_docker_warn_and_enforce_truth_table(self):
+        self.write('code.py', 'x = 1')
+        self.commit('source')
+        for mode, expected in [('warn', 0), ('enforce', 1)]:
+            output = self.root / ('report-' + mode)
+            with patch.object(engine, 'docker_scan', side_effect=FileNotFoundError('missing')), contextlib.redirect_stdout(io.StringIO()):
+                code = engine.main(['--repo', str(self.root), '--base', self.base, '--mode', mode,
+                                    '--output', str(output)])
+            self.assertEqual(expected, code)
+            self.assertEqual('incomplete', json.loads((output / 'review-rules.json').read_text())['status'])
+
+    def test_only_changed_files_are_staged_and_pr_ignores_are_ignored(self):
+        self.write('untouched.rs', 'fn untouched() {}')
+        self.commit('old source')
+        base = self.git('rev-parse', 'HEAD').strip()
+        self.write('src/new.ts', 'console.log(apiKey); // nosemgrep')
+        self.write('.semgrepignore', '**')
+        self.commit('new source')
+        captured = []
+        def scanner(root, packs):
+            captured.extend(str(p.relative_to(root)) for p in root.rglob('*') if p.is_file())
+            self.assertNotIn('**', (root / '.semgrepignore').read_text())
+            return {'results': [], 'errors': [], 'paths': {'scanned': ['src/new.ts']}}
+        with patch.object(engine, 'docker_scan', side_effect=scanner), contextlib.redirect_stdout(io.StringIO()):
+            engine.main(['--repo', str(self.root), '--base', base, '--output', str(self.root / 'report')])
+        self.assertEqual({'.semgrepignore', 'src/new.ts'}, set(captured))
+
+
+class ReceiptTests(unittest.TestCase):
+    def test_publication_failure_stays_warn(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with patch.object(engine, 'publish', side_effect=OSError('disk full')), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, engine.main(['--repo', temp, '--base', 'bad', '--output', temp]))
+                self.assertEqual(1, engine.main(['--repo', temp, '--base', 'bad', '--output', temp, '--mode', 'enforce']))
+
+    def test_scanner_timeout_cleans_only_own_container(self):
+        calls = []
+        def run(command, **kwargs):
+            calls.append(command)
+            if command[1] == 'run':
+                raise subprocess.TimeoutExpired(command, 480)
+            return subprocess.CompletedProcess(command, 0)
+        with patch.object(engine.subprocess, 'run', side_effect=run), self.assertRaises(subprocess.TimeoutExpired):
+            engine.docker_scan(ROOT / 'tests/fixtures', {'rust'})
+        self.assertEqual(['docker', 'rm', '--force'], calls[1][:3])
+        self.assertEqual(calls[0][calls[0].index('--name') + 1], calls[1][3])
+
+    def test_irrelevant_language_does_not_report_zero_work(self):
+        repo = FakeRepo({'ci.yml': 'name: ci'})
+        with patch.object(engine, 'docker_scan', side_effect=AssertionError('scanner should not run')):
+            self.assertEqual(([], [], 0), engine.scan(repo, ['ci.yml'], {'rust'}))
+
+    def test_event_base_pr_and_merge_group(self):
+        sha = 'a' * 40
+        for event in [{'pull_request': {'base': {'sha': sha}}}, {'merge_group': {'base_sha': sha}}]:
+            event['repository'] = {'default_branch': 'main'}
+            self.assertEqual((sha, 'refs/remotes/origin/main'), engine.event_refs(event))
+        with self.assertRaises(ValueError):
+            engine.event_refs({'merge_group': {}, 'repository': {'default_branch': 'main'}})
+
+    def test_warning_mode_and_promotion_truth_table(self):
+        report = {'mode': 'warn', 'errors': ['scanner missing'], 'promoted_rules': ['id'],
+                  'findings': [{'rule_id': 'id', 'severity': 'ERROR'}]}
+        self.assertEqual(0, engine.exit_code(report))
+        report.update(mode='enforce', errors=[], promoted_rules=[])
+        self.assertEqual(0, engine.exit_code(report))
+        report['promoted_rules'] = ['id']
+        self.assertEqual(1, engine.exit_code(report))
+        report['findings'][0]['severity'] = 'INFO'
+        self.assertEqual(0, engine.exit_code(report))
+
+    def test_annotation_escaping(self):
+        self.assertEqual('evil%2Cline=1%0A%3A%3Aerror%3A%3Ax%25', engine.escaped('evil,line=1\n::error::x%', True))
+
+    def test_all_script_rules_have_provenance(self):
+        source = (ROOT / 'scripts/checks.py').read_text()
+        ids = set(re.findall(r"finding\('([^']+)'", source))
+        self.assertEqual(ids, set(checks.EXAMPLES))
+        for examples in checks.EXAMPLES.values():
+            self.assertTrue(examples)
+            self.assertTrue(all('#' in example for example in examples))
+
+
+def fixture_test() -> int:
+    cases = json.loads((ROOT / 'tests/cases.json').read_text())
+    ids = set()
+    for pack in engine.PACKS:
+        for path in (ROOT / pack).glob('*.yml'):
+            ids.update(re.findall(r'^\s*- id: (\S+)', path.read_text(), re.M))
+            if not re.search(r'\bexamples:\s*\n\s*-', path.read_text()):
+                raise AssertionError('rule missing metadata.examples: ' + str(path))
+    if ids != {case['rule'] for case in cases}:
+        raise AssertionError('rule inventory and fixture manifest differ')
+    for ident in ids:
+        if {case['positive'] for case in cases if case['rule'] == ident} != {True, False}:
+            raise AssertionError('missing positive/negative fixture: ' + ident)
+    result = engine.docker_scan(ROOT / 'tests/fixtures', ALL)
+    if result.get('errors'):
+        raise AssertionError('Semgrep fixture parse errors: ' + str(len(result['errors'])))
+    scanned = set(result.get('paths', {}).get('scanned', []))
+    if not scanned:
+        raise AssertionError('Semgrep scanned no fixtures')
+    failures = []
+    for case in cases:
+        path = case['file'].removeprefix('fixtures/')
+        if path not in scanned:
+            failures.append((case['rule'], 'fixture not scanned', path))
+        hits = [hit for hit in result['results'] if hit['check_id'] == case['rule'] and hit['path'] == path]
+        if bool(hits) != case['positive']:
+            failures.append((case['rule'], 'positive' if case['positive'] else 'negative', path))
+    if failures:
+        for failure in failures:
+            print('FAIL', *failure)
+        return 1
+    print(f'PASS: {len(ids)} rules; {len(cases)} positive/negative fixtures; {len(scanned)} targets; no parser errors.')
+    return 0
+
+
+if __name__ == '__main__':
+    if '--semgrep' in sys.argv:
+        raise SystemExit(fixture_test())
+    unittest.main()

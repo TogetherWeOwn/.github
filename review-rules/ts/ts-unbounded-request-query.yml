@@ -1,0 +1,25 @@
+rules:
+- id: ts-unbounded-request-query
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-012: request-path query has no local limit; prove bound/timeout or add capacity evidence.'
+  severity: WARNING
+  metadata:
+    examples:
+    - two-web-next#823 hotzone-unbounded-row-scan
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: $Q.findMany($OPTS)
+  - metavariable-regex:
+      metavariable: $OPTS
+      regex: (?is)^(?!.*(?:limit|take)).*$
+  paths:
+    include:
+    - '**/src/routes/**'
+    - '**/src/hotzones/**'
+    - '**/src/events/**'
+    - '**/src/admin/**'

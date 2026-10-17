@@ -1,0 +1,18 @@
+rules:
+- id: db-trigger-lineage
+  languages:
+  - generic
+  message: 'R9: lineage/suppression trigger needs live-to-erased, erased-to-live and rehome tests; playbook,
+    not proof.'
+  severity: WARNING
+  metadata:
+    examples:
+    - routeware-shadow-api#266 stale-lineage-drops-live-containers
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-regex: (?i)\b(?:CREATE\s+TRIGGER|RAISE\s*\(\s*IGNORE\s*\))
+  paths:
+    include:
+    - '**/*.sql'

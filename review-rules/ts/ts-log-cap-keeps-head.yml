@@ -1,0 +1,25 @@
+rules:
+- id: ts-log-cap-keeps-head
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-013: evidence-log cap keeps the head and may discard failure tail; document keep: head|tail|both.'
+  severity: WARNING
+  metadata:
+    examples:
+    - paperclip#75 job-log-cap-keeps-head-drops-failure
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: $LOG.slice(0, $CAP)
+  - metavariable-regex:
+      metavariable: $LOG
+      regex: (?i).*(log|stdout|stderr|evidence).*
+  paths:
+    include:
+    - '**/*github-read*'
+    - '**/*job-log*'
+    - '**/*run-log*'
+    - '**/*actions*'

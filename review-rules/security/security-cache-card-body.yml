@@ -1,0 +1,18 @@
+rules:
+- id: security-cache-card-body
+  languages:
+  - typescript
+  - javascript
+  message: 'SEC-AUTH-03B: full card text persisted to cache violates shape-only storage; keep identifiers/status
+    only.'
+  severity: ERROR
+  metadata:
+    examples:
+    - paperclip-ops#3 cache-persists-full-card-body
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-either:
+  - pattern: 'writeCardCache({... , body: $CARD.body, ...})'
+  - pattern: '$FS.writeFile($PATH, JSON.stringify({..., body: $CARD.body, ...}), ...)'

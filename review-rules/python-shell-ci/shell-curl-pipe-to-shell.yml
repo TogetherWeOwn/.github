@@ -1,0 +1,20 @@
+rules:
+- id: shell-curl-pipe-to-shell
+  languages:
+  - bash
+  message: 'PYCI-02b/SEC-AUTH-04: downloaded code piped to shell bypasses immutable provenance and checksum
+    verification.'
+  severity: ERROR
+  metadata:
+    examples:
+    - paperclip#113 trivy-mutable-installer
+    - paperclip-ops-tooling#737 sync-toolkit-unpinned-tarball
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-either:
+  - pattern: curl ... | sh ...
+  - pattern: curl ... | bash ...
+  - pattern: wget ... | sh ...
+  - pattern: wget ... | bash ...

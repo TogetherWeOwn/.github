@@ -1,0 +1,20 @@
+rules:
+- id: ts-config-parseint
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-012: lenient env/config parseInt accepts 24h/8.64e7 prefixes; validate full spelling and
+    bound the duration.'
+  severity: WARNING
+  metadata:
+    examples:
+    - paperclip#53 ttl-override-unbounded-lenient-parse
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: parseInt($X, ...)
+  - metavariable-regex:
+      metavariable: $X
+      regex: (?is).*(env|config).*

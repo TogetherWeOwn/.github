@@ -1,0 +1,46 @@
+name: review-rules-tests
+# ci-policy: non-required -- engine self-tests, not a new organization gate.
+on:
+  pull_request:
+    paths: ['review-rules/**', '.github/workflows/review-rules*.yml']
+  push:
+    branches: [main]
+    paths: ['review-rules/**', '.github/workflows/review-rules*.yml']
+  merge_group:
+permissions:
+  contents: read
+concurrency:
+  group: review-rules-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  selftest:
+    # Public central repo: disposable hosted runner, never execute PR Python on
+    # persistent infrastructure. No environment or inherited secrets.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Standard-library checks and Git-history regression tests
+        run: python3 -I review-rules/tests/selftest.py
+      - name: Pull immutable scanner
+        run: docker pull semgrep/semgrep@sha256:fca58525689355641019c05ab49dcc5bc3a1eb7e044f35014ee39594b5aa4fc1
+      - name: Validate every Semgrep rule
+        # Validation alone fetches Semgrep's rule-lint registry. Scans below
+        # disable network; no credentials or source checkout mount is needed here.
+        run: |
+          docker run --rm --cap-drop ALL --security-opt no-new-privileges \
+            -e SEMGREP_SEND_METRICS=off -e SEMGREP_ENABLE_VERSION_CHECK=0 \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/review-rules,target=/rules,readonly" \
+            semgrep/semgrep@sha256:fca58525689355641019c05ab49dcc5bc3a1eb7e044f35014ee39594b5aa4fc1 \
+            semgrep --validate --config /rules/rust --config /rules/ts \
+              --config /rules/python-shell-ci --config /rules/php --config /rules/security
+      - name: Positive and negative fixtures for every rule
+        run: python3 -I review-rules/tests/selftest.py --semgrep
+      - name: Lint changed workflow family
+        run: |
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/repo,readonly" -w /repo \
+            rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 \
+            -color .github/workflows/review-rules*.yml

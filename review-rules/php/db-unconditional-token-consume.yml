@@ -1,0 +1,21 @@
+rules:
+- id: db-unconditional-token-consume
+  languages:
+  - generic
+  message: 'R6: token delete by email alone is not a conditional single-use consume; check affected rows
+    and atomic audit.'
+  severity: ERROR
+  metadata:
+    examples:
+    - kofra#605 consume-not-conditional-single-use
+    - kofra#642 d1-mark-and-audit-not-atomic
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-regex: (?i)DELETE\s+FROM\s+password_reset_tokens\s+WHERE\s+email\s*=\s*\?\s*[;"\'`]
+  paths:
+    include:
+    - '**/*.php'
+    - '**/*.ts'
+    - '**/*.sql'

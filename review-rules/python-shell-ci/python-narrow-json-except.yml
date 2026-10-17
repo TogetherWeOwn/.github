@@ -1,0 +1,24 @@
+rules:
+- id: python-narrow-json-except
+  languages:
+  - python
+  message: 'PYCI-09a: external JSON can raise ValueError or RecursionError as well as JSONDecodeError;
+    test hostile shapes.'
+  severity: ERROR
+  metadata:
+    examples:
+    - paperclip-operator-toolkit#50 snapshot-read-other-valueerror-recursion
+    - paperclip-operator-toolkit#55 recursionerror-traceback-exit-1
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-either:
+  - pattern: "try:\n    ...\n    json.load(...)\n    ...\nexcept json.JSONDecodeError:\n    ..."
+  - pattern: "try:\n    ...\n    json.loads(...)\n    ...\nexcept json.JSONDecodeError:\n    ..."
+  paths:
+    include:
+    - '**/*snapshot*.py'
+    - '**/*state*.py'
+    - '**/*review_gate*.py'
+    - '**/watchdog/**'
