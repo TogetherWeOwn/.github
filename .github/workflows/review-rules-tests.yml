@@ -37,6 +37,9 @@ jobs:
             semgrep/semgrep@sha256:fca58525689355641019c05ab49dcc5bc3a1eb7e044f35014ee39594b5aa4fc1 \
             semgrep --validate --config /src/rust --config /src/ts \
               --config /src/python-shell-ci --config /src/php --config /src/security
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
       - name: Positive and negative fixtures for every rule
         run: python3 -I review-rules/tests/selftest.py --semgrep
       - name: Lint changed workflow family

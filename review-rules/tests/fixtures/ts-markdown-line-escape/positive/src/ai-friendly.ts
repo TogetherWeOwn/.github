@@ -1,2 +1,1 @@
-const out = text.split("
-").map(escapeLine);
+const out = text.split("\n").map(escapeLine);

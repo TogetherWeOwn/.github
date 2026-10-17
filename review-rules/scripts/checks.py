@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import re
+import shlex
 from pathlib import PurePosixPath
 
 # Provenance is centralized so script findings have the same evidence contract as
@@ -127,7 +128,7 @@ def supply_checks(path: str, text: str) -> list[dict]:
             if not pinned_action(value):
                 out.append(finding('supply-action-pin', path, line,
                     'PYCI-02a/SEC-AUTH-04: external uses must end in exactly 40 hex characters; docker actions need a sha256 digest.', 'ERROR'))
-        for match in re.finditer(r'''(?m)^\s*(?:-\s*)?(?:image|container):\s*["']?([^\s"'#]+)''', text):
+        for match in re.finditer(r'''(?m)^[ \t]*(?:-[ \t]*)?(?:image|container):[ \t]*["']?([^\s"'#]+)''', text):
             value = match[1]
             if value in {'|', '>', '{'} or value.startswith('${{'):
                 continue  # expressions need caller-level provenance, not a guessed pin.
@@ -164,10 +165,45 @@ def shell_checks(path: str, text: str) -> list[dict]:
         out.append(finding('shell-provision-cleanup', path, line_at(code, provision.start()),
             'PYCI-11: provisioned resource has no same-file EXIT cleanup; verify caller-owned cleanup explicitly.'))
     if trap:
-        execute = re.search(r'(?m)^exec\s+\S', code[trap.end():])
-        if execute and not re.search(r'(?m)^\s*trap\s+-\s+EXIT\b', code[trap.end():trap.end() + execute.start()]):
-            out.append(finding('shell-trap-exec', path, line_at(code, trap.end() + execute.start()),
-                'PYCI-11: top-level exec replaces the shell and skips EXIT trap; clean explicitly or avoid exec.', 'ERROR'))
+        after_trap = code[trap.end():]
+        for execute in re.finditer(r'(?m)^\s*exec\b[^\n]*', after_trap):
+            try:
+                words = shlex.split(re.sub(r'^\s*exec\b', '', execute[0], count=1), comments=True)
+            except ValueError:
+                words = ['<unparsed>']
+            has_command = False
+            options_done = False
+            while words:
+                redirection = re.match(
+                    r'^(?:\d+|\{[A-Za-z_]\w*\})?(?:&>>|&>|>>|>\||>&|<&|<<|<>|>|<)(.*)$', words[0])
+                if redirection:
+                    words.pop(0)
+                    if not redirection[1] and words:
+                        words.pop(0)
+                    continue
+                if options_done:
+                    has_command = words[0] not in {'&&', '||', ';', '|', '&'}
+                    break
+                if words[0] == '--':
+                    words.pop(0)
+                    options_done = True
+                elif words[0] in {'-c', '-l'}:
+                    words.pop(0)
+                elif words[0] == '-a':
+                    words.pop(0)
+                    if words:
+                        words.pop(0)
+                elif words[0].startswith('-'):
+                    break
+                else:
+                    has_command = words[0] not in {'&&', '||', ';', '|', '&'}
+                    break
+            if not has_command:
+                continue
+            if not re.search(r'(?m)^\s*trap\s+-\s+EXIT\b', after_trap[:execute.start()]):
+                out.append(finding('shell-trap-exec', path, line_at(code, trap.end() + execute.start()),
+                    'PYCI-11: top-level exec replaces the shell and skips EXIT trap; clean explicitly or avoid exec.', 'ERROR'))
+                break
     for match in re.finditer(r'(?m)^.*\b(?:gh|git|gitleaks|curl)\b[^\n]*2>\s*/dev/null[^\n]*', code):
         nearby = code[match.start():].splitlines()[:3]
         handled = re.search(r'\brc=\$\?|\|\|\s*(?:exit\s+[1-9]|return\s+[1-9])', '\n'.join(nearby))

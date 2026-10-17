@@ -130,6 +130,7 @@ python3 -I review-rules/tests/selftest.py --semgrep
 The second command is the equivalent of `semgrep --test`: all shipped IDs must
 have positive and negative entries in `tests/cases.json`; every fixture must be
 scanned; expectations are matched by exact rule ID and path; parser errors fail.
+It also requires Node.js 22+ to syntax-check the TypeScript fixtures.
 The same digest and isolation options as production are used. The Semgrep tier
 also runs real PR and merge-group event scans with nested malicious ignores and
 an independently scanned sibling; the vulnerable target must still be detected.

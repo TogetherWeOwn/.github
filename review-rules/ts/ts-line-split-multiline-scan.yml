@@ -14,9 +14,7 @@ rules:
     category: correctness
     proof: Advisory static signal; confirm with the named behavioral test before promotion.
   patterns:
-  - pattern: '$TEXT.split("
-
-      ").$FN($PAT)'
+  - pattern: '$TEXT.split("\n").$FN($PAT)'
   - metavariable-regex:
       metavariable: $PAT
       regex: (?s).*console.*error.*

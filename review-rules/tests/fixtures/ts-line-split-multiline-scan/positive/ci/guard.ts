@@ -1,2 +1,1 @@
-const hits = text.split("
-").filter(line => /console\.error\(/.test(line));
+const hits = text.split("\n").filter(line => /console\.error\(/.test(line));

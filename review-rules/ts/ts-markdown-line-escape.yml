@@ -14,9 +14,7 @@ rules:
     mode: shadow
     category: correctness
     proof: Advisory static signal; confirm with the named behavioral test before promotion.
-  pattern: '$TEXT.split("
-
-    ").$FN(...)'
+  pattern: '$TEXT.split("\n").$FN(...)'
   paths:
     include:
     - '**/*ai-friendly*'

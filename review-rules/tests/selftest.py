@@ -111,6 +111,14 @@ class TextChecks(unittest.TestCase):
                        'uses: actions/checkout@' + 'A' * 40 + ' # version']:
             self.assertFalse(checks.supply_checks('ci.yml', source))
 
+    def test_container_mapping_form_checks_nested_image(self):
+        pinned = 'jobs:\n  build:\n    container:\n      image: node@sha256:' + 'a' * 64
+        unpinned = 'jobs:\n  build:\n    container:\n      image: node:20'
+        self.assertNotIn('supply-container-digest',
+                         {x['rule_id'] for x in checks.supply_checks('.github/workflows/ci.yml', pinned)})
+        self.assertIn('supply-container-digest',
+                      {x['rule_id'] for x in checks.supply_checks('.github/workflows/ci.yml', unpinned)})
+
     def test_checksum_must_precede_execution(self):
         text = 'curl https://example.invalid/main/install.sh | sh\nsha256sum -c hashes'
         self.assertIn('supply-download-integrity', {x['rule_id'] for x in checks.shell_checks('install.sh', text)})
@@ -151,6 +159,12 @@ class TextChecks(unittest.TestCase):
         self.assertFalse(checks.shell_checks('a.sh', '# sourced-cleanup: parent.sh\ntmp=$(mktemp -d)'))
         self.assertNotIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
             'trap cleanup EXIT\nrm -rf "$tmp"\ntrap - EXIT\nexec tool')})
+        self.assertNotIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'trap cleanup EXIT\nexec >log 2>&1')})
+        self.assertNotIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'trap cleanup EXIT\nexec -a logger')})
+        self.assertIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'trap cleanup EXIT\nexec >log grype .')})
 
 
 class FakeRepo:
@@ -498,6 +512,11 @@ def fixture_test() -> int:
             target = staging / case['file'].removeprefix('fixtures/').removesuffix('.fixture')
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(source.read_bytes())
+        for target in sorted(staging.rglob('*.ts')):
+            parsed = subprocess.run(['node', '--experimental-strip-types', '--check', str(target)],
+                                    capture_output=True, text=True)
+            if parsed.returncode:
+                raise AssertionError(f'TypeScript fixture syntax error ({target.relative_to(staging)}): {parsed.stderr.strip()}')
         result = engine.docker_scan(staging, ALL)
     if result.get('errors'):
         raise AssertionError('Semgrep fixture parse errors: ' + str(len(result['errors'])))
