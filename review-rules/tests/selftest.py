@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -204,8 +205,8 @@ class TextChecks(unittest.TestCase):
         self.assertEqual([2], [x['line'] for x in hits])
 
     def test_shell_trap_exec_scan_is_bounded(self):
-        # Behavior pins for the work bounds; timings are measured evidence in
-        # the PR, not asserted here (CI machines vary). A long line of
+        # Behavior pins for the work bounds (the wall-clock cap that makes a
+        # revert fail is test_blank_runs_and_long_lines_stay_linear). A long line of
         # unclosed substitution openers still flags instead of rescanning
         # quadratically, and collapse leaves it literal once its scan budget
         # is spent.
@@ -246,6 +247,52 @@ class TextChecks(unittest.TestCase):
             'gh api repos/x 2>/dev/null\nset -e')})
         self.assertNotIn('shell-tool-failure-hidden', {x['rule_id'] for x in checks.shell_checks('a.sh',
             'set -e\ngh api repos/x 2>/dev/null')})
+
+    def test_blank_runs_and_long_lines_stay_linear(self):
+        # Wall-clock caps with wide headroom: the linear shapes finish these
+        # in ~0.01-0.1s, while the quadratic shapes they replaced took
+        # 2-18s at these sizes (^\s* rescanning blank runs, ^.*X[^\n]*Y
+        # backtracking on one long line, per-match newline recounts). A
+        # revert to those shapes fails here instead of passing slowly.
+        cases = [
+            ('trap then blank run', lambda: checks.shell_checks(
+                'a.sh', 'trap cleanup EXIT\n' + '\n' * 80000)),
+            ('blank run then set -e', lambda: checks.shell_checks(
+                'a.sh', '\n' * 80000 + 'set -e\ngh x 2>/dev/null')),
+            ('action references on blank run', lambda: list(checks.action_references('\n' * 40000))),
+            ('dockerfile without FROM after blank run', lambda: checks.supply_checks(
+                'Dockerfile', '\n' * 40000 + 'RUN true')),
+            ('long curl line without suffix', lambda: checks.shell_checks('a.sh', 'curl ' * 20000)),
+            ('long gitleaks line without || true', lambda: checks.shell_checks('a.sh', 'gitleaks ' * 20000)),
+            ('many uses lines', lambda: checks.supply_checks(
+                'ci.yml', '- uses: a/b@v1\n' * 20000)),
+            ('many capped-listing markers', lambda: checks.pagination_checks(
+                'a.sh', '--limit 1\n' * 20000)),
+            ('many tar excludes', lambda: checks.check_text(
+                'a.ts', "'--exclude', 'x'\n" * 30000, {'ts'})),
+        ]
+        for label, run in cases:
+            with self.subTest(label=label):
+                started = time.perf_counter()
+                run()
+                self.assertLess(time.perf_counter() - started, 5.0, label)
+        # Behavior pins at the same shapes: matches after blank runs are
+        # still found and reported at their own line, not the run's start.
+        self.assertEqual([(4, 'a/b@v1')], list(checks.action_references('\n\n\n- uses: a/b@v1')))
+        hits = [x for x in checks.shell_checks('a.sh', 'trap cleanup EXIT\n' + '\n' * 1000 + 'exec tool')
+                if x['rule_id'] == 'shell-trap-exec']
+        self.assertEqual([1002], [x['line'] for x in hits])
+        hits = [x for x in checks.supply_checks('Dockerfile', '\n\nFROM ubuntu:24.04')
+                if x['rule_id'] == 'supply-container-digest']
+        self.assertEqual([3], [x['line'] for x in hits])
+        # Long-line two-token checks still fire when the second token does
+        # follow, and stay silent when it only precedes the first token.
+        self.assertIn('supply-download-integrity', {x['rule_id'] for x in checks.shell_checks(
+            'a.sh', 'x ' * 5000 + 'curl -O https://h/main/a.tgz')})
+        self.assertNotIn('supply-download-integrity', {x['rule_id'] for x in checks.shell_checks(
+            'a.sh', 'echo /main/a.tgz\ncurl -O https://h/x')})
+        self.assertIn('shell-pr-first-match', {x['rule_id'] for x in checks.shell_checks(
+            'a.sh', 'gh api x --jq .[0] ' * 500)})
 
 
 class FakeRepo:
