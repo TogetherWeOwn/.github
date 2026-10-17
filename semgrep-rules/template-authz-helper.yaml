@@ -1,10 +1,11 @@
 # TEMPLATE — disabled until a repo names its own authz helper .
 #
 # The report asks for "route handlers must call the authz helper". A generic
-# regex cannot know what a repo calls that function, so this rule ships
-# matching NOTHING: `paths.include` is empty on purpose. To enable, a repo
-# copies this file, sets the handler path and the helper name, and measures
-# the false-positive rate over 20 PRs before promoting it to required.
+# regex cannot know what a repo calls that function, so this rule ships as a
+# stub callee that matches nothing. To enable, a repo copies this file,
+# replaces the stub with its real helper call shape, sets the handler paths,
+# and measures the false-positive rate over 20 PRs before promoting it to
+# required.
 #
 # Example (a repo whose handlers live in routes/ and whose helper is
 # requireAuth): set paths.include to ['routes/*.ts'] and replace

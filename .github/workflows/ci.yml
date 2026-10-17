@@ -13,7 +13,7 @@
 #   * One required aggregator `ci-ok` (`if: always()` over every gated job).
 #     Branch protection requires only `ci-ok` (plus pr-lint, secret scan).
 #   * Full suite on `push` to `main` and on the nightly schedule.
-#   * Cheap/security jobs (lint, secrets, ci-ok) always run.
+#   * Cheap/security jobs (lint, secrets, semgrep selftest, ci-ok) always run.
 #   * Concurrency cancels superseded PR runs only; timeouts on every job;
 #     drafts skip heavy jobs on PR events only (force/full-run first) while
 #     `ci-ok` still reports (rules 9-10).
@@ -128,9 +128,25 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - run: echo "secret scan goes here (always runs)"
 
+  semgrep-selftest:
+    name: semgrep selftest
+    needs: [changes]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Live sinks fire per language, templates stay silent
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --disable-pip-version-check -q "semgrep==1.128.1" "setuptools==80.9.0" 2>&1 | tail -1
+          export PATH="$HOME/.local/bin:$PATH"
+          bash semgrep-rules/tests/test_rules.sh
+
   ci-ok:
     name: ci-ok
-    needs: [changes, full_run, lint, test-web, test-bot, secret-scan]
+    needs: [changes, full_run, lint, test-web, test-bot, secret-scan, semgrep-selftest]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

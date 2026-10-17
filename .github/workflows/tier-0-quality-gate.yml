@@ -23,9 +23,12 @@
 #     node, python3, go, rustup, php and composer. Repo-owned linters
 #     (tsc, phpstan, clippy) run only when the repo configures them; Python
 #     linters and gate-owned scanners are installed at pinned versions.
-#   - Every gate auto-detects its stack from manifests AND changed files,
-#     and skips silently when neither matches — a docs-only PR runs the
-#     workflow-checks job and skips the other five.
+#   - Every gate auto-detects its stack from manifests AND changed files.
+#     Gates 1 and 2 skip entirely via stack `if:` conditions when nothing
+#     matches. Gates 3, 5 and 6 always start: their stack-specific steps
+#     no-op when nothing matches, while the always-on scans — gitleaks on
+#     the diff and the Semgrep starter pack — still run. Gate 4 always
+#     runs: workflow hygiene is stack-independent.
 #   - All third-party actions are pinned by SHA (repo rule). Scanner
 #     versions and binary SHA-256 values live together in `env:` below.
 #
@@ -736,27 +739,50 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Aggregate gate verdicts
+        # Per-job payloads only, never toJSON(needs): the whole needs object
+        # embeds detect's newline-joined changed-file list, and a single env
+        # string over 128 KiB makes exec fail ("Argument list too long") on
+        # very large PRs — failing tier-0-ok even in report-only mode. Each
+        # job payload below carries only `result` + `outputs.results`.
         env:
           TIER0_MODE: ${{ inputs.mode }}
-          TIER0_NEEDS_JSON: ${{ toJSON(needs) }}
+          TIER0_JOB_LINT_TYPES: ${{ toJSON(needs['lint-types']) }}
+          TIER0_JOB_UNUSED_CODE: ${{ toJSON(needs['unused-code']) }}
+          TIER0_JOB_GENERATOR_DRIFT: ${{ toJSON(needs['generator-drift']) }}
+          TIER0_JOB_WORKFLOW_CHECKS: ${{ toJSON(needs['workflow-checks']) }}
+          TIER0_JOB_SECURITY: ${{ toJSON(needs['security']) }}
+          TIER0_JOB_TESTS: ${{ toJSON(needs['tests']) }}
         run: |
           set -euo pipefail
-          printf '%s\n' "$TIER0_NEEDS_JSON" > needs.json
-          python3 - needs.json <<'PY'
-          import json, os, sys
+          python3 - <<'PY'
+          import json, os
           mode = os.environ.get("TIER0_MODE", "report-only")
-          needs = json.load(open(sys.argv[1]))
+          job_env = {
+              "lint-types": "TIER0_JOB_LINT_TYPES",
+              "unused-code": "TIER0_JOB_UNUSED_CODE",
+              "generator-drift": "TIER0_JOB_GENERATOR_DRIFT",
+              "workflow-checks": "TIER0_JOB_WORKFLOW_CHECKS",
+              "security": "TIER0_JOB_SECURITY",
+              "tests": "TIER0_JOB_TESTS",
+          }
+          needs = {job: json.loads(os.environ[key]) for job, key in job_env.items()}
+          with open("needs.json", "w") as handle:
+              json.dump(needs, handle, indent=2, sort_keys=True)
+              handle.write("\n")
           gate_results = {}
           failures = {}
           for job, result in needs.items():
+              # The job result counts on its own: a gate that failed before
+              # its `result` step ran still exports an all-skipped results
+              # object, which must not mask the failure.
+              if result.get("result") not in ("success", "skipped"):
+                  failures[job] = result.get("result")
               raw = result.get("outputs", {}).get("results")
               if raw:
                   gate_results[job] = json.loads(raw)
                   for step, outcome in gate_results[job].items():
                       if outcome not in ("success", "skipped"):
                           failures[f"{job}.{step}"] = outcome
-              elif result.get("result") not in ("success", "skipped"):
-                  failures[job] = result.get("result")
           with open("gate-results.json", "w") as artifact:
               json.dump(gate_results, artifact, indent=2, sort_keys=True)
               artifact.write("\n")
@@ -767,12 +793,13 @@ jobs:
               for name, outcome in sorted(failures.items()):
                   print(f"::error::tier-0-ok: gate {name} ended {outcome}")
               raise SystemExit(1)
-          skipped = sorted(j for j, n in needs.items() if n["result"] == "skipped")
+          skipped = sorted(j for j, n in needs.items() if n.get("result") == "skipped")
           print("tier-0-ok: all gates succeeded or skipped"
                 + (f" (skipped: {', '.join(skipped)})" if skipped else "")
                 + f" [mode={mode}]")
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() }}
         with:
           name: tier-0-findings
           path: |
