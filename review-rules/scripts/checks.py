@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import re
 import shlex
+from bisect import bisect_left
 from pathlib import PurePosixPath
 
 # Provenance is centralized so script findings have the same evidence contract as
@@ -147,6 +148,12 @@ def supply_checks(path: str, text: str) -> list[dict]:
     return out
 
 
+# An exec statement longer than this is treated as an unparsed command
+# (conservative: it still flags) instead of being tokenized, so one hostile
+# or oversized line cannot make the pure-Python scans unbounded.
+MAX_EXEC_TEXT_CHARS = 8192
+
+
 def collapse_substitutions(line: str) -> str:
     """Replace each balanced `>(...)`, `<(...)` and `$(...)` with one word.
 
@@ -158,6 +165,14 @@ def collapse_substitutions(line: str) -> str:
     out = []
     index = 0
     quote = ''
+    # Total inner-scan work is budgeted. A balanced substitution is scanned
+    # once and then jumped past, so all successful scans together cost at
+    # most one pass over the line; only repeated *unbalanced* openers --
+    # each of which rescans to end-of-line -- can spend the budget. Without
+    # it, a line of unclosed `$(` openers is quadratic in line length.
+    # Spending the budget leaves the rest of the line literal, whose words
+    # then tokenize as a command: the conservative direction.
+    scan_budget = 4 * len(line) + 1024
     while index < len(line):
         char = line[index]
         if quote == "'":
@@ -184,6 +199,9 @@ def collapse_substitutions(line: str) -> str:
             inner_quote = ''
             end = index + 1
             while end < len(line):
+                if scan_budget <= 0:
+                    return ''.join(out) + line[index:]
+                scan_budget -= 1
                 inner = line[end]
                 if inner_quote == "'":
                     inner_quote = '' if inner == "'" else inner_quote
@@ -248,38 +266,77 @@ def shell_checks(path: str, text: str) -> list[dict]:
     # Strip comment-only lines, not quoted shell data. These checks are hints;
     # no regex is presented as a control-flow proof or a checksum verifier.
     code = '\n'.join('' if l.lstrip().startswith('#') else l for l in text.splitlines())
+    # Positions are indexed once and bisected per match below. Slicing the
+    # remainder (or prefix) of the file, rescanning it, or recounting its
+    # newlines for every match makes each of these loops quadratic in file
+    # size on untrusted input, outside every scanner timeout.
+    newlines = [m.start() for m in re.finditer('\n', code)]
+
+    def line_of(offset: int) -> int:
+        return bisect_left(newlines, offset) + 1
+
+    def first_at_or_after(starts: list[int], offset: int):
+        index = bisect_left(starts, offset)
+        return starts[index] if index < len(starts) else None
+
+    checked_starts = [m.start() for m in re.finditer(r'\bsha256sum\s+(?:--check|-c)\b', code)]
+    execute_starts = [m.start() for m in re.finditer(
+        r'(?:\|\s*(?:sh|bash|tar)\b|\b(?:tar\s|sudo\s+(?:mv|install)|chmod\s+\+x|\./install))', code)]
     for match in re.finditer(r'(?m)^.*\b(?:curl|wget)\b[^\n]*(?:/main/|/master/|releases/download/|\$\{?TAG\}?|\.tar\.gz|\.tgz)[^\n]*', code):
-        after = code[match.start():]
-        checked = re.search(r'\bsha256sum\s+(?:--check|-c)\b', after)
-        execute = re.search(r'(?:\|\s*(?:sh|bash|tar)\b|\b(?:tar\s|sudo\s+(?:mv|install)|chmod\s+\+x|\./install))', after)
-        if not checked or (execute and execute.start() < checked.start()):
-            out.append(finding('supply-download-integrity', path, line_at(code, match.start()),
+        checked_at = first_at_or_after(checked_starts, match.start())
+        execute_at = first_at_or_after(execute_starts, match.start())
+        if checked_at is None or (execute_at is not None and execute_at < checked_at):
+            out.append(finding('supply-download-integrity', path, line_of(match.start()),
                 'PYCI-02b/SEC-AUTH-04: archive/installer needs immutable provenance and checksum verification before extraction/execution in this step.', 'ERROR'))
     trap = re.search(r'(?m)^\s*trap\s+[^\n]*\bEXIT\b', code)
     provision = re.search(r'\b(?:mktemp|lxc\s+(?:init|launch)|pscale\s+branch\s+create)\b', code)
     if provision and not trap and not re.search(r'#\s*sourced-cleanup:\s*\S+', text):
-        out.append(finding('shell-provision-cleanup', path, line_at(code, provision.start()),
+        out.append(finding('shell-provision-cleanup', path, line_of(provision.start()),
             'PYCI-11: provisioned resource has no same-file EXIT cleanup; verify caller-owned cleanup explicitly.'))
     if trap:
         after_trap = code[trap.end():]
+        # Located once: searching (and slicing) the prefix before every exec
+        # line would make the loop below quadratic in file size.
+        trap_off = re.search(r'(?m)^\s*trap\s+-\s+EXIT\b', after_trap)
+        trap_off_end = trap_off.end() if trap_off else None
         for execute in re.finditer(r'(?m)^[ \t]*exec\b[^\n]*', after_trap):
             # Join backslash-newline continuations so a command (or its
             # arguments) on the next line is tokenized with the exec line;
             # the finding still reports the exec line via execute.start().
-            exec_text = execute[0]
-            following = after_trap[execute.end():].split('\n')
-            next_line = 1
-            while (len(exec_text) - len(exec_text.rstrip('\\'))) % 2 and next_line < len(following):
-                exec_text = exec_text[:-1] + following[next_line]
-                next_line += 1
-            try:
-                words = shlex.split(exec_first_command(
-                    re.sub(r'^[ \t]*exec\b', '', exec_text, count=1)), comments=True)
-            except ValueError:
-                # A plain word: the redirection/option branches below must
-                # not consume it, so an unparseable exec still counts as a
-                # command (the shell is replaced either way).
+            # Fetch only the next physical line with find() and accumulate
+            # parts: splitting the remainder of the file, or concatenating
+            # onto the growing text, per exec line is quadratic. A physical
+            # line ending in an odd number of backslashes continues, exactly
+            # as rechecking the joined text did.
+            parts = [execute[0]]
+            segment = execute[0]
+            total = len(segment)
+            pos = execute.end()
+            too_long = total > MAX_EXEC_TEXT_CHARS
+            while (not too_long and pos < len(after_trap)
+                   and (len(segment) - len(segment.rstrip('\\'))) % 2):
+                parts[-1] = parts[-1][:-1]
+                total -= 1
+                start = pos + 1  # the exec match stops at the newline
+                end = after_trap.find('\n', start)
+                if end < 0:
+                    end = len(after_trap)
+                segment = after_trap[start:end]
+                parts.append(segment)
+                total += len(segment)
+                too_long = total > MAX_EXEC_TEXT_CHARS
+                pos = end
+            if too_long:
                 words = ['unparsed-command']
+            else:
+                try:
+                    words = shlex.split(exec_first_command(
+                        re.sub(r'^[ \t]*exec\b', '', ''.join(parts), count=1)), comments=True)
+                except ValueError:
+                    # A plain word: the redirection/option branches below must
+                    # not consume it, so an unparseable exec still counts as a
+                    # command (the shell is replaced either way).
+                    words = ['unparsed-command']
             has_command = False
             options_done = False
             while words:
@@ -309,32 +366,42 @@ def shell_checks(path: str, text: str) -> list[dict]:
                     break
             if not has_command:
                 continue
-            if not re.search(r'(?m)^\s*trap\s+-\s+EXIT\b', after_trap[:execute.start()]):
-                out.append(finding('shell-trap-exec', path, line_at(code, trap.end() + execute.start()),
+            if trap_off_end is None or trap_off_end > execute.start():
+                out.append(finding('shell-trap-exec', path, line_of(trap.end() + execute.start()),
                     'PYCI-11: top-level exec replaces the shell and skips EXIT trap; clean explicitly or avoid exec.', 'ERROR'))
                 break
+    errexit = re.search(r'(?m)^\s*set\s+-[a-z]*e', code)
+    errexit_end = errexit.end() if errexit else None
     for match in re.finditer(r'(?m)^.*\b(?:gh|git|gitleaks|curl)\b[^\n]*2>\s*/dev/null[^\n]*', code):
-        nearby = code[match.start():].splitlines()[:3]
-        handled = re.search(r'\brc=\$\?|\|\|\s*(?:exit\s+[1-9]|return\s+[1-9])', '\n'.join(nearby))
-        errexit = re.search(r'(?m)^\s*set\s+-[a-z]*e', code[:match.start()])
-        if not handled and not errexit:
-            out.append(finding('shell-tool-failure-hidden', path, line_at(code, match.start()),
+        # Only the next three lines are evidence; slice to the third newline
+        # instead of splitting the remainder of the file for every match.
+        nearby_end = match.start()
+        for _ in range(3):
+            newline = code.find('\n', nearby_end)
+            if newline < 0:
+                nearby_end = len(code)
+                break
+            nearby_end = newline + 1
+        handled = re.search(r'\brc=\$\?|\|\|\s*(?:exit\s+[1-9]|return\s+[1-9])', code[match.start():nearby_end])
+        if not handled and (errexit_end is None or errexit_end > match.start()):
+            out.append(finding('shell-tool-failure-hidden', path, line_of(match.start()),
                 'PYCI-07a: forge/tool stderr is discarded without a visible status check; tool failure is not a clean result.'))
     for match in re.finditer(r'(?m)^.*\b(?:gh\s+run\s+download|gitleaks|semgrep|trivy)\b[^\n]*\|\|\s*(?:true|exit\s+0)\b', code):
-        out.append(finding('shell-tool-failure-hidden', path, line_at(code, match.start()),
+        out.append(finding('shell-tool-failure-hidden', path, line_of(match.start()),
             'PYCI-07a: scan/download failure is converted to success; report incomplete work explicitly.', 'ERROR'))
+    scan_counted = re.search(r'(?:commits scanned|scanned[_-]?(?:files|commits)|scan[_-]?count)', code)
     for match in re.finditer(r'\bgitleaks\s+(?:git|detect)\b', code):
-        if not re.search(r'(?:commits scanned|scanned[_-]?(?:files|commits)|scan[_-]?count)', code):
-            out.append(finding('shell-scan-proves-work', path, line_at(code, match.start()),
+        if not scan_counted:
+            out.append(finding('shell-scan-proves-work', path, line_of(match.start()),
                 'PYCI-07b: scanner success alone does not prove a nonempty range; assert a positive scanned count.'))
     for match in re.finditer(r'(?m)^.*\bgh\s+(?:api|pr\s+list)\b[^\n]*\.\[0\][^\n]*', code):
         if not re.search(r'select\([^)]*\.(?:head\.sha|number)\s*==', match[0]):
-            out.append(finding('shell-pr-first-match', path, line_at(code, match.start()),
+            out.append(finding('shell-pr-first-match', path, line_of(match.start()),
                 'PYCI-05a: first PR result is not an identity match; select full PR/head identity before indexing.'))
     for match in re.finditer(r'--match-head-commit\b([^\n]*)', code):
         tail = match[1].strip()
         if not tail or tail.startswith(('--', '&&', '||', ';')):
-            out.append(finding('shell-cli-head-binding', path, line_at(code, match.start()),
+            out.append(finding('shell-cli-head-binding', path, line_of(match.start()),
                 'PYCI-13: --match-head-commit is missing its evaluated SHA argument.', 'ERROR'))
     return out
 

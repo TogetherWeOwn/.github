@@ -203,6 +203,50 @@ class TextChecks(unittest.TestCase):
         hits = [x for x in checks.shell_checks('a.sh', continued) if x['rule_id'] == 'shell-trap-exec']
         self.assertEqual([2], [x['line'] for x in hits])
 
+    def test_shell_trap_exec_scan_is_bounded(self):
+        # Behavior pins for the work bounds; timings are measured evidence in
+        # the PR, not asserted here (CI machines vary). A long line of
+        # unclosed substitution openers still flags instead of rescanning
+        # quadratically, and collapse leaves it literal once its scan budget
+        # is spent.
+        unclosed = 'trap cleanup EXIT\nexec ' + '$(' * 20000
+        self.assertIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh', unclosed)})
+        self.assertEqual('$(' * 5000, checks.collapse_substitutions('$(' * 5000))
+        self.assertEqual('__substitution__ x', checks.collapse_substitutions('$(echo hi) x'))
+        # Mechanism pin (fails before the budget existed): with the scan
+        # budget spent, even the balanced tail is left literal; unbudgeted
+        # rescans eventually reach and collapse it.
+        tail = '$(' * 6000 + '$(echo hi)'
+        self.assertEqual(tail, checks.collapse_substitutions(tail))
+        # Many redirection-only exec lines stay clean, and a command exec
+        # after them still flags at its own line: joining a continuation
+        # must not consume or misnumber the rest of the file.
+        many = 'trap cleanup EXIT\n' + 'exec 3>&1\n' * 5000
+        self.assertNotIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh', many)})
+        hits = [x for x in checks.shell_checks('a.sh', many + 'exec grype .')
+                if x['rule_id'] == 'shell-trap-exec']
+        self.assertEqual([5002], [x['line'] for x in hits])
+        # An exec statement over the length cap takes the unparsed-command
+        # branch and flags, even if it is shaped like a redirection.
+        oversized = 'trap cleanup EXIT\nexec >' + 'a' * 9000 + ' 2>&1'
+        self.assertIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh', oversized)})
+        # `trap - EXIT` only suppresses exec lines after it.
+        self.assertIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'trap cleanup EXIT\nexec tool\ntrap - EXIT')})
+        # Hoisted once-only searches keep their per-match ordering: a
+        # checksum verified after the first download does not cover a later
+        # download, and `set -e` after a discarded-stderr line does not
+        # suppress it (only the positions relative to each match may decide).
+        downloads = ('curl -O https://h/main/a.tar.gz\nsha256sum -c sums\ntar xf a.tar.gz\n'
+                     'curl -O https://h/main/b.tar.gz\ntar xf b.tar.gz')
+        hits = [x for x in checks.shell_checks('a.sh', downloads)
+                if x['rule_id'] == 'supply-download-integrity']
+        self.assertEqual([4], [x['line'] for x in hits])
+        self.assertIn('shell-tool-failure-hidden', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'gh api repos/x 2>/dev/null\nset -e')})
+        self.assertNotIn('shell-tool-failure-hidden', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'set -e\ngh api repos/x 2>/dev/null')})
+
 
 class FakeRepo:
     def __init__(self, files, old=None, main=None):
