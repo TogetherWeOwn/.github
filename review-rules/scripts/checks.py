@@ -263,11 +263,23 @@ def shell_checks(path: str, text: str) -> list[dict]:
     if trap:
         after_trap = code[trap.end():]
         for execute in re.finditer(r'(?m)^[ \t]*exec\b[^\n]*', after_trap):
+            # Join backslash-newline continuations so a command (or its
+            # arguments) on the next line is tokenized with the exec line;
+            # the finding still reports the exec line via execute.start().
+            exec_text = execute[0]
+            following = after_trap[execute.end():].split('\n')
+            next_line = 1
+            while (len(exec_text) - len(exec_text.rstrip('\\'))) % 2 and next_line < len(following):
+                exec_text = exec_text[:-1] + following[next_line]
+                next_line += 1
             try:
                 words = shlex.split(exec_first_command(
-                    re.sub(r'^[ \t]*exec\b', '', execute[0], count=1)), comments=True)
+                    re.sub(r'^[ \t]*exec\b', '', exec_text, count=1)), comments=True)
             except ValueError:
-                words = ['<unparsed>']
+                # A plain word: the redirection/option branches below must
+                # not consume it, so an unparseable exec still counts as a
+                # command (the shell is replaced either way).
+                words = ['unparsed-command']
             has_command = False
             options_done = False
             while words:

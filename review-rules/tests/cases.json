@@ -282,7 +282,8 @@
   {
     "rule": "ts-unbounded-request-query",
     "file": "fixtures/ts-unbounded-request-query/positive/src/routes/events.ts",
-    "positive": true
+    "positive": true,
+    "lines": [1, 2]
   },
   {
     "rule": "ts-unbounded-request-query",
@@ -442,7 +443,8 @@
   {
     "rule": "php-claim-before-queue",
     "file": "fixtures/php-claim-before-queue/positive/app/SendReminder.php",
-    "positive": true
+    "positive": true,
+    "lines": [1, 2]
   },
   {
     "rule": "php-claim-before-queue",

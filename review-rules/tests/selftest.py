@@ -67,6 +67,9 @@ TEXT_CASES = [
     ('shell-trap-exec', 'scripts/run.sh',
      'trap cleanup EXIT\nexec >|log grype .',
      'trap cleanup EXIT\nexec >|log 2>&1'),
+    ('shell-trap-exec', 'scripts/run.sh',
+     'trap cleanup EXIT\nexec grype \\\n  --foo .',
+     'trap cleanup EXIT\nexec >log \\\n 2>&1'),
     ('workflow-cancel-cleanup', '.github/workflows/branch.yml',
      'steps:\n  - run: pscale branch create db test',
      'steps:\n  - run: pscale branch create db test\n  - if: always()\n    run: pscale branch delete db test'),
@@ -183,11 +186,22 @@ class TextChecks(unittest.TestCase):
             'trap cleanup EXIT\nexec 2>|log grype .')})
         self.assertNotIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
             'trap cleanup EXIT\nexec >log | grype .')})
+        self.assertIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'trap cleanup EXIT\nexec \\\n grype .')})
+        self.assertIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'trap cleanup EXIT\nexec >log 2>&1 \\\n grype .')})
+        self.assertIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'trap cleanup EXIT\nexec "grype .')})
+        self.assertNotIn('shell-trap-exec', {x['rule_id'] for x in checks.shell_checks('a.sh',
+            'trap cleanup EXIT\nexec >log \\\n 2>&1')})
 
     def test_shell_trap_exec_reports_exec_line(self):
         text = '#!/bin/sh\nset -eu\ntmp=x\ntrap cleanup EXIT\n\n\nexec grype .'
         hits = [x for x in checks.shell_checks('a.sh', text) if x['rule_id'] == 'shell-trap-exec']
         self.assertEqual([7], [x['line'] for x in hits])
+        continued = 'trap cleanup EXIT\nexec grype \\\n  --foo .'
+        hits = [x for x in checks.shell_checks('a.sh', continued) if x['rule_id'] == 'shell-trap-exec']
+        self.assertEqual([2], [x['line'] for x in hits])
 
 
 class FakeRepo:
