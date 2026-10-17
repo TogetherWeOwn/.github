@@ -1,0 +1,33 @@
+name: review-rules shadow
+# ci-policy: non-required -- future bare check name only; do not add to rulesets.
+on:
+  pull_request:
+  merge_group:
+permissions:
+  contents: read
+concurrency:
+  group: review-rules-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  rules:
+    uses: TogetherWeOwn/.github/.github/workflows/review-rules.yml@1d190d61bbe277af2a4523fe849cf197e62be24f
+    with:
+      packs: rust,ts,python-shell-ci,php,security
+      mode: warn
+  review-rules:
+    name: review-rules
+    needs: rules
+    if: always()
+    runs-on: ${{ fromJSON(github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]') }}
+    timeout-minutes: 2
+    steps:
+      - name: Re-export the bare shadow check
+        env:
+          RULES_RESULT: ${{ needs.rules.result }}
+        shell: bash
+        run: |
+          if [[ "$RULES_RESULT" != 'success' ]]; then
+            printf '%s\n' '::warning title=review-rules incomplete::Called workflow did not finish successfully; shadow coverage is unknown.'
+            printf '%s\n' '## review-rules' '' 'Coverage incomplete: called workflow did not succeed. Shadow remains nonblocking.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 0
