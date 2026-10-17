@@ -235,6 +235,28 @@ class RiskTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(a.classify({path}), "T0")
 
+    def test_nested_wrangler_and_payment_permission_modules_require_t0(self):
+        for path in ("apps/api/wrangler.jsonc", "workers/api/wrangler.toml",
+                     "workers/stream/wrangler.json", "apps/api/wrangler.production.toml",
+                     "src/payments/charge.ts", "src/payment.ts", "src/permissions.ts",
+                     "src/permission/check.rs", "app/PaymentController.php",
+                     "app/PermissionsPolicy.php", "lib/payment_processor.py"):
+            with self.subTest(path=path):
+                report = a.validate(body().replace("[x]", "[ ]"), [file(), file(path)])
+                self.assertEqual(report["path_tier"], "T0")
+                self.assertEqual(report["verdict"], "invalid")
+                self.assertIn("risk_tier_understated", report["issues"])
+                self.assertIn("high_risk_checklist_unchecked", report["issues"])
+                self.assertEqual(a.validate(body("T0"), [file(), file(path)])["verdict"], "valid")
+
+    def test_payment_permission_and_wrangler_boundaries(self):
+        for path in ("src/prepayments.ts", "src/permissionless.rs", "src/permissionship.py",
+                     "docs/payment-guide.md", "docs/permissions.md", "docs/wrangler.md",
+                     "apps/api/wranglerish.jsonc", "apps/api/not-wrangler.toml",
+                     "apps/api/wrangler.jsonc.example"):
+            with self.subTest(path=path):
+                self.assertFalse(a.is_t0(path))
+
     def test_risk_prefix_boundary(self):
         for path in ("authors.py", "src/authority.rs", "billings/demo.ts", "docs/vault_notes.md",
                      "src/voices/handler.rs", "docs/wrangler.md", "migrations_archive/01.sql",

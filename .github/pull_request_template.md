@@ -35,14 +35,17 @@ or describe the problem and motivation here. No internal tracker identifiers. --
 T0 = critical paths, T1 = standard changes, T2 = docs-only. Declaring a higher risk is OK.
 T0 directories at any depth: migrations, sql, db, database, drizzle.
 T0 directory/module words: auth, authn, authz, authentication, authorization, oauth,
-session, sessions, billing, gateway, voice, crypto, vault, secret, secrets,
+session, sessions, billing, payment, payments, permission, permissions,
+gateway, voice, crypto, vault, secret, secrets,
 backup, backups, dump, dumps, grant, grants, role, roles, erasure, ingest.
 Words are case-insensitive and split at punctuation, snake_case, kebab-case, and CamelCase
 boundaries (auth.rs, gateway_backoff.rs, member-erasure.ts, SessionController.php).
 The words also match directory names/descendants. Prose filenames ending .md/.rst/.txt
 are not modules, but still inherit any critical directory floor. Substrings such as
 names in authors.py, voices/, and roleplay.ts do not match those critical words.
-Also T0: .github/workflows/deploy*, root wrangler*, crates/cutover/**.
+Also T0: .github/workflows/deploy*, crates/cutover/**, and wrangler .toml/.json/.jsonc
+configs at any depth (including wrangler.production.toml); prose like docs/wrangler.md
+is not a config. Deploy scripts outside these paths still require a declared T0 when critical.
 Renames inspect both old and new paths; deleting a T0 file is still T0.
 T2 requires only root or docs/ .md/.rst files or explicitly allowlisted text basenames:
 README.txt, LICENSE.txt, NOTICE.txt, CHANGELOG.txt, CONTRIBUTING.txt, CODE_OF_CONDUCT.txt,

@@ -24,13 +24,14 @@ SCHEMA_VERSION = 1
 T0_DIRECTORIES = frozenset({"migrations", "sql", "db", "database", "drizzle"})
 T0_WORDS = frozenset({
     "auth", "authn", "authz", "authentication", "authorization", "oauth",
-    "session", "sessions", "billing", "gateway", "voice", "crypto", "vault",
+    "session", "sessions", "billing", "payment", "payments", "permission", "permissions",
+    "gateway", "voice", "crypto", "vault",
     "secret", "secrets", "backup", "backups", "dump", "dumps",
     "grant", "grants", "role", "roles", "erasure", "ingest",
 })
 T0_PATTERNS = (
     r"^\.github/workflows/deploy[^/]*(?:/.*)?$",
-    r"^wrangler[^/]*(?:/.*)?$", r"^crates/cutover/",
+    r"(?:^|/)wrangler(?:[.-][^/]*)?\.(?:toml|jsonc?)$", r"^crates/cutover/",
 )
 DOC_SUFFIXES = (".md", ".rst", ".txt")
 TEXT_DOC_NAMES = frozenset({
