@@ -22,7 +22,7 @@ concurrency:
 jobs:
   observation:
     if: always()
-    uses: TogetherWeOwn/.github/.github/workflows/pr-attestation.yml@80c0e518a834127ab2db1ab0b9c0576f1bef222f
+    uses: TogetherWeOwn/.github/.github/workflows/pr-attestation.yml@5a7ec5ec5f812c3d1b3e53a7aa0fe946f746570c
     with:
       runs-on-json: ${{ github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]' }}
 
