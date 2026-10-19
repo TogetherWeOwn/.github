@@ -386,6 +386,13 @@ class TextChecks(unittest.TestCase):
             'a.sh', 'trivy fs . ||\n\n\n  exit 0')})
         self.assertNotIn('shell-tool-failure-hidden', {x['rule_id'] for x in checks.shell_checks(
             'a.sh', 'gitleaks detect --source . ||\n  echo x || true')})
+        # The join is restricted to lines ending in `||`: a redirection
+        # split across the newline (`2>` with its target on the next
+        # line) stays silent. Removing the `endswith('||')` guard joins
+        # every line and flags this shape (the old text-wide
+        # `2>\s*/dev/null` crossed the newline here).
+        self.assertNotIn('shell-tool-failure-hidden', {x['rule_id'] for x in checks.shell_checks(
+            'a.sh', 'gitleaks detect --source . 2>\n/dev/null')})
         # A workflow `if:` value on the next line is valid YAML and the
         # old text-wide regex saw it (`\s*` crossed the newline): the
         # cleanup step must not be reported missing.
