@@ -79,7 +79,7 @@ jobs:
               while read -r run_id run_sha; do
                 if [ -z "$VERIFY_JOB" ]; then sha="$run_sha"; break; fi
                 verdict="$(gh api --method GET "repos/$REPO/actions/runs/$run_id/jobs" -f per_page=100 \
-                  --jq '[.jobs[] | select(.name == $ENV.VERIFY_JOB) | .conclusion] | first // ""')"
+                  --jq '[.jobs[] | select(.name == env.VERIFY_JOB) | .conclusion] | first // ""')"
                 if [ "$verdict" = "success" ]; then sha="$run_sha"; break; fi
               done <<< "$runs"
               [ -n "$sha" ] && break
