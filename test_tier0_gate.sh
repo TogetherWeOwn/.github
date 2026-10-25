@@ -258,8 +258,16 @@ for path in sorted(glob.glob('semgrep-rules/*.yaml')):
               f"{path}/{rule['id']}: no ignored rule-level metavariable-regex")
         if 'secrets-in-code' in path:
             clauses = rule.get('patterns', [])
-            check(any('pattern' in c for c in clauses) and
-                  any('metavariable-regex' in c for c in clauses),
+            assignments = [
+                [c['pattern']] if 'pattern' in c else
+                [alternative.get('pattern') for alternative in c.get('pattern-either', [])]
+                for c in clauses
+            ]
+            check(any(patterns and all(isinstance(p, str) and '$KEY' in p
+                                       for p in patterns) for patterns in assignments) and
+                  any(isinstance(c.get('metavariable-regex'), dict) and
+                      c['metavariable-regex'].get('metavariable') == '$KEY' and
+                      bool(c['metavariable-regex'].get('regex')) for c in clauses),
                   f"{path}/{rule['id']}: assignment and key filter are conjoined")
 check('squawk_${SQUAWK_VERSION}_x86_64' not in gate_text,
       "squawk download is not the missing musl tarball")
