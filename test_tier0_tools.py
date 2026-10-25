@@ -1,14 +1,13 @@
-#!/usr/bin/env python3
 """Hermetic execution contracts: python3 -m unittest -v test_tier0_tools.py.
 
 Run the real workflow shell blocks. Only external installers/scanners are
 stubbed: no downloads, toolchain installs, credentials or GitHub calls.
 """
 import json
-from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 import yaml
 
@@ -47,7 +46,7 @@ class ToolExecutionContract(unittest.TestCase):
         return subprocess.run(
             ['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', script],
             cwd=self.root, env={**self.env, **env},
-            text=True, capture_output=True, timeout=15,
+            text=True, capture_output=True, timeout=15, check=False,
         )
 
     def lint_step(self, stack):

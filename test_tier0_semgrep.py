@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Real scanner regression: python3 -m unittest -v test_tier0_semgrep.py.
 
 Requires Semgrep 1.133.0; SEMGREP_BIN may select an isolated installation.
@@ -7,12 +6,12 @@ separate from the hermetic structural suite because the scanner is optional.
 """
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 RULES = ROOT / 'semgrep-rules'
@@ -35,7 +34,7 @@ class RealSemgrepContract(unittest.TestCase):
             'SEMGREP_ENABLE_VERSION_CHECK': '0',
         }
         result = subprocess.run([cls.executable, '--version'], env=cls.env,
-                                text=True, capture_output=True, timeout=30)
+                                text=True, capture_output=True, timeout=30, check=False)
         if result.returncode != 0 or result.stdout.strip() != '1.133.0':
             raise RuntimeError('Requires working Semgrep 1.133.0: ' + result.stdout + result.stderr)
 
@@ -55,7 +54,7 @@ class RealSemgrepContract(unittest.TestCase):
                 [self.executable, 'scan', '--config', str(config), '--error',
                  '--json', '--metrics=off', '--disable-version-check',
                  '--no-git-ignore', '--no-rewrite-rule-ids', '--jobs', '1', str(target)],
-                cwd=root, env=self.env, text=True, capture_output=True, timeout=60,
+                cwd=root, env=self.env, text=True, capture_output=True, timeout=60, check=False,
             )
         try:
             payload = json.loads(result.stdout)
