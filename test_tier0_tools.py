@@ -78,8 +78,8 @@ class ToolExecutionContract(unittest.TestCase):
                                   f'printf \'["{tool}"]\\n\' >> "$CALL_LOG"\n'
                                   f'[[ "$FAIL_TOOL" != "{tool}" ]] || exit 17\n')
                     self.stub(self.bin / 'python3', '''
-if [[ "$1 $2" == '-m pip' ]]; then exit 0; fi
-if [[ "$1 $2" == '-m ruff' || "$1 $2" == '-m mypy' ]]; then
+if [[ "${1-} ${2-}" == '-m pip' ]]; then exit 0; fi
+if [[ "${1-} ${2-}" == '-m ruff' || "${1-} ${2-}" == '-m mypy' ]]; then
   printf '["%s"]\\n' "$2" >> "$CALL_LOG"
   [[ "$FAIL_TOOL" != "$2" ]] || exit 17
   exit 0
@@ -112,19 +112,23 @@ exit 2
         self.assertEqual(len(steps), 1)
         user_bin = Path(self.env['HOME']) / '.local/bin'
         self.stub(user_bin / 'semgrep', '''
-if [[ "$1" == '--version' ]]; then
+if [[ "${1-}" == '--version' ]]; then
   printf '["version"]\\n' >> "$CALL_LOG"
   echo 1.133.0
   exit 0
 fi
-printf '["%s","%s","%s","%s"]\\n' "$1" "$2" "$3" "$4" >> "$CALL_LOG"
-[[ "$1" == scan && "$2" == --config && "$4" == --error ]] || exit 2
+printf '["%s","%s","%s","%s"]\\n' "${1-}" "${2-}" "${3-}" "${4-}" >> "$CALL_LOG"
+[[ "${1-}" == scan && "${2-}" == --config && "${4-}" == --error ]] || exit 2
 exit "$SCAN_EXIT"
 ''')
         self.stub(self.bin / 'python3', '''
-if [[ "$1 $2" == '-m pip' ]]; then exit 0; fi
-if [[ "$1 $2 $3" == '-m site --user-base' ]]; then
+if [[ "${1-} ${2-}" == '-m pip' ]]; then exit 0; fi
+if [[ "${1-} ${2-} ${3-}" == '-m site --user-base' ]]; then
   printf '%s/.local\\n' "$HOME"
+  exit 0
+fi
+if [[ "${1-}" == -c && "${2-}" == 'import sysconfig; print(sysconfig.get_path("scripts"))' ]]; then
+  printf '%s/.local/bin\\n' "$HOME"
   exit 0
 fi
 echo 'unsupported Python module launcher' >&2
