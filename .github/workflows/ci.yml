@@ -84,6 +84,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - run: echo "lint goes here (always runs)"
 
   test-web:
@@ -94,6 +96,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - run: echo "web tests go here"
 
   test-bot:
@@ -104,6 +108,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - run: echo "bot tests go here"
 
   secret-scan:
@@ -113,6 +119,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - run: echo "secret scan goes here (always runs)"
 
   # The test-guard wrapper calls the reusable by pinned path+ref; a
@@ -126,6 +134,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Wrapper pin must carry the current reusable
         run: |-
           PIN="$(grep -o 'test-guard\.yml@[0-9a-f]\{40\}' .github/workflows/test-guard-required.yml | head -1 | cut -d@ -f2)"
@@ -156,6 +165,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - run: bash .github/scripts/test-guard-selftest.sh
 
   # Unit tests for the org PR-size labeller (stdlib unittest, seconds),
@@ -170,6 +181,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - run: python3 -m unittest discover -s .github/scripts -p 'test_pr_size*.py'
 
   gradual-promote-selftest:
@@ -178,6 +191,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - name: Checkout the caller smoke checker
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
