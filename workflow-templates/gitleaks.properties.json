@@ -1,0 +1,5 @@
+{
+  "name": "gitleaks",
+  "description": "Full-history secret scan; required check `gitleaks` (TogetherWeOwn pipeline standard). Pin the image digest before adopting.",
+  "iconName": "octicon shield-lock"
+}

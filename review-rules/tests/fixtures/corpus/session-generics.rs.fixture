@@ -1,0 +1,10 @@
+#[derive(Debug)]
+pub struct SessionKeys<'a, T> {
+    pub previous: Option<&'a [u8]>,
+    pub marker: T,
+}
+#[derive(Debug)]
+pub struct Container<T> {
+    pub secret: Vec<u8>,
+    pub marker: T,
+}

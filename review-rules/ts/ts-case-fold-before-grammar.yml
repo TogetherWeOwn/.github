@@ -1,0 +1,23 @@
+rules:
+- id: ts-case-fold-before-grammar
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-002b: case-folding before grammar validation may admit Kelvin homoglyphs; validate raw
+    spelling.'
+  severity: WARNING
+  metadata:
+    examples:
+    - paperclip#145 attestation-repository-case-fold-defeats-grammar
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern: $X.toLowerCase()
+  paths:
+    include:
+    - '**/*attestation*'
+    - '**/*projection*'
+    - '**/*tracker*'
+    - '**/*issue-prefix*'
+    - '**/*reference*'

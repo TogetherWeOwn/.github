@@ -1,0 +1,20 @@
+export function writeCardCache(env, taskId, { card, pendingInteractions } = {}) {
+  if (!card || typeof card !== "object") return false;
+  const { dir, file } = cacheFileFor(env, taskId);
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const temporary = `${file}.${process.pid}.tmp`;
+    const payload = {
+      v: 1,
+      taskId: String(taskId),
+      ts: Date.now(),
+      card,
+      ...(Number.isInteger(pendingInteractions) && pendingInteractions >= 0 ? { pendingInteractions } : {}),
+    };
+    writeFileSync(temporary, `${JSON.stringify(payload)}\n`, { mode: 0o600 });
+    renameSync(temporary, file);
+    return true;
+  } catch {
+    return false;
+  }
+}

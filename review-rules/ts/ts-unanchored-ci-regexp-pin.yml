@@ -1,0 +1,25 @@
+rules:
+- id: ts-unanchored-ci-regexp-pin
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-003b: dynamic CI command pin without visible anchors needs command-disable mutant tests.'
+  severity: WARNING
+  metadata:
+    examples:
+    - two-web-next#890 rsvp-wiring-pin-unanchored
+    - two-web-next#807 rollback-command-pins-are-substrings
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: new RegExp($CMD, ...)
+  - metavariable-regex:
+      metavariable: $CMD
+      regex: (?is)^(?!.*(?:\^|\$)).*(?:command|cmd|pin|script).*
+  paths:
+    include:
+    - '**/ci/**'
+    - '**/test/**'
+    - '**/tests/**'

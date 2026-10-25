@@ -135,9 +135,108 @@ jobs:
     permissions:
       contents: read
 
+  # The test-guard wrapper calls the reusable by pinned path+ref; a
+  # forgotten repin means CI keeps exercising a stale gate. Light and
+  # always-on (no paths filter — this job feeds required `ci-ok`).
+  pincheck:
+    name: pincheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Wrapper pin must carry the current reusable
+        run: |-
+          PIN="$(grep -o 'test-guard\.yml@[0-9a-f]\{40\}' .github/workflows/test-guard-required.yml | head -1 | cut -d@ -f2)"
+          if [ -z "$PIN" ]; then
+            echo "::error::test-guard-pincheck: no pinned test-guard.yml@<sha> in test-guard-required.yml"
+            exit 1
+          fi
+          # The pin may name a commit on the PR branch; make sure it is
+          # present before diffing so a missing object reads as a repin
+          # request, not `fatal: bad object`. After a squash-merge with
+          # branch deletion, repin to the merge commit on main.
+          git fetch origin "$PIN" 2>/dev/null || true
+          if ! git cat-file -e "$PIN^{commit}" 2>/dev/null; then
+            echo "::error::test-guard-pincheck: pin $PIN is not fetchable (branch deleted?) — repin uses: to a commit on main carrying the reusable"
+            exit 1
+          fi
+          if ! git diff --quiet "$PIN" HEAD -- .github/workflows/test-guard.yml; then
+            echo "::error::test-guard-pincheck: wrapper pins $PIN but the reusable changed since; repin uses: to the commit carrying the reusable (see TEST-GUARD.md step 4)"
+            exit 1
+          fi
+          echo "test-guard-pincheck: pin $PIN carries the current reusable"
+
+  # Regression tests for the embedded test-guard gate (see the script).
+  # Light (~30s) and always-on so gate changes can never merge red.
+  gate-selftest:
+    name: gate selftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: bash .github/scripts/test-guard-selftest.sh
+
+  # Unit tests for the org PR-size labeller (stdlib unittest, seconds),
+  # including the static check that every caller job in the shipped
+  # template grants at least the permissions its reusable file requests
+  # (GitHub rejects an under-granting caller at parse time, which no
+  # executing job here could catch). Always-on like gate-selftest so
+  # labeller changes can never merge red.
+  pr-size-selftest:
+    name: pr-size selftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: python3 -m unittest discover -s .github/scripts -p 'test_pr_size*.py'
+
+  gradual-promote-selftest:
+    name: gradual-promote selftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Checkout the caller smoke checker
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: TogetherWeOwn/two-web-next
+          ref: d09b4bee57ad7effdaa79d0765574c3a60e8068e
+          path: two-web-next
+          persist-credentials: false
+      - name: Run gradual promotion self-tests
+        run: node --test ci/gradual-promote.test.mjs ci/gradual-promote-gate-acceptance.test.mjs ci/gradual-promote-action.test.mjs
+        env:
+          TWO_WEB_NEXT_ROOT: two-web-next
+
+  # New attestation development checks are observable but non-blocking during
+  # shadow. Deliberately not added to ci-ok needs; existing required gates stay
+  # unchanged. This tests policy code, not the target PR's test claims.
+  pr-attestation-selftest:
+    name: pr-attestation selftest (shadow)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Parser, API and workflow regression tests
+        id: tests
+        continue-on-error: true
+        run: |
+          python3 -I .github/scripts/test_pr_attestation.py
+          python3 -I .github/scripts/test_pr_attestation_workflows.py
+          python3 -I .github/scripts/check_pr_attestation_pins.py
+      - name: Surface self-test failure without changing required CI
+        if: always() && steps.tests.outcome != 'success'
+        run: printf '%s\n' '::warning::PR attestation shadow self-tests did not succeed; investigate before rollout.'
+
   ci-ok:
     name: ci-ok
-    needs: [changes, full_run, lint, test-web, test-bot, secret-scan, tier-0]
+    needs: [changes, full_run, lint, test-web, test-bot, secret-scan, pincheck, gate-selftest, pr-size-selftest, gradual-promote-selftest, tier-0]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

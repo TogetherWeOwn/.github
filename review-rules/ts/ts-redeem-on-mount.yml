@@ -1,0 +1,26 @@
+rules:
+- id: ts-redeem-on-mount
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-009a: mount-time magic-token redemption is login-CSRF prone; require explicit confirmation
+    and browser binding.'
+  severity: ERROR
+  metadata:
+    examples:
+    - nntunev2#30 magic-landing-login-csrf
+    - nntunev2#30 magic-confirm-gate-unpinned
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern-either:
+    - pattern: onMount(() => { ... $REDEEM(...); ... })
+    - pattern: onMount(async () => { ... await $REDEEM(...); ... })
+    - pattern: onMount(() => $REDEEM(...))
+    - pattern: onMount(() => void $REDEEM(...))
+    - pattern: $effect(() => { ... $REDEEM(...); ... })
+  - metavariable-regex:
+      metavariable: $REDEEM
+      regex: (?i).*(redeem|magicFinish|finishMagic).*

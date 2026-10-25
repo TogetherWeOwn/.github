@@ -1,0 +1,5 @@
+{
+  "name": "pr-size",
+  "description": "Advisory PR size labels (size/S/M/L/XL) via the org reusable workflow - never a required check (TogetherWeOwn standard).",
+  "iconName": "octicon tag"
+}

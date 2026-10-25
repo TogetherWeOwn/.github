@@ -1,0 +1,19 @@
+rules:
+- id: ts-time-delta-division
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-012: dividing by a reset/time delta needs a floor; exercise the near-reset boundary.'
+  severity: WARNING
+  metadata:
+    examples:
+    - paperclip-operator-toolkit#52 pull-no-hours-floor
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: $A / $DELTA
+  - metavariable-regex:
+      metavariable: $DELTA
+      regex: (?i)^(hoursLeft|hoursRemaining|deltaHours|timeDelta|resetDelta)$

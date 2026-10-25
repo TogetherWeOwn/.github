@@ -9,9 +9,10 @@ where they differ, the repo file wins.
 - PR titles are Conventional Commits headers (`type(scope): summary`, max 100 chars,
   no trailing period). Types: feat, fix, perf, refactor, test, docs, build, ci, chore,
   revert, style, security.
-- Fill in every section of the PR template. The `pr-lint` check reads them: a missing
-  or empty section is a warning by default and an error once a repo sets
-  `PR_STANDARDS_MODE: error`.
+- Use the PR template. The `pr-lint` check requires two sections, Linked Issues or
+  Issue Description (feat/fix/perf/refactor/security) and Verification: a missing or
+  empty one is a warning by default and an error once a repo sets
+  `PR_STANDARDS_MODE: error`. What Changed and Notes for reviewers are optional.
 - Done means merged. Never leave an orphan PR open: merge it, or close it with a
   comment naming what replaced it.
 
@@ -25,8 +26,6 @@ or describe the problem in your own words. Name branches after the change
 
 ## 3. Honest disclosure
 
-- Name the model used (provider plus exact model ID), or write
-  "None — human-authored".
 - Report the tests you actually ran and their results. Say what you did not run.
   Never claim a green run you did not see.
 

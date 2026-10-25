@@ -1,0 +1,83 @@
+# Thin pull_request wrapper so an org ruleset can require the test-guard
+# WORKFLOW (not just the check name). Ruleset required workflows need
+# their own pull_request/merge_group trigger — they cannot target the
+# workflow_call-only reusable directly. Calls the reusable by full
+# pinned path+ref so it resolves identically as a normal workflow and
+# as a ruleset required workflow; repin the `uses:` SHA on every
+# reusable update (it must name a commit carrying the reusable).
+#
+# Check-name mechanics: a direct reusable call would report as
+# "guard / test-guard". The `test-guard` aggregator below (org ci-ok
+# pattern) re-exports a BARE `test-guard` check — that bare name is what
+# the ruleset requires. In warn mode the reusable never fails, so the
+# check stays green; in enforce (base config) a builder-touched verdict
+# fails the reusable job and the aggregator turns red.
+#
+# Do NOT point a ruleset here until the per-repo rollout (TEST-GUARD.md)
+# reaches enforce with zero false positives. Requires pull-requests:
+# read for the marker-label actor audit.
+
+name: test-guard (required)
+
+on:
+  pull_request:
+    # NOTE: rulesets may ignore `types`; the list documents intent for
+    # normal runs. labeled/unlabeled re-evaluates a fresh marker label.
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  merge_group: {}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  # Distinct from the caller template's `test-guard-<n>` group: the
+  # rollout installs BOTH in each repo, and sharing one group with
+  # cancel-in-progress would let them cancel each other, leaving the
+  # required `test-guard` check cancelled instead of green/red.
+  group: test-guard-required-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    # Intentionally always-run (ci_policy.py: the required gate must
+    # evaluate every PR — no change gating here). `timeout-minutes` is
+    # not a legal key on a `uses:` job; runtime is bounded by the called
+    # reusable (timeout-minutes: 5 there).
+    if: always()
+    # Full pinned self-reference (not ./...): ruleset required
+    # workflows execute from this repo at a pinned ref, and only the
+    # full path+ref form is documented to resolve there. Pinned to the
+    # commit that last touched the reusable (content-addressed, so a
+    # pre-merge SHA stays correct); repin on every reusable update.
+    uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@80951a57d7f6e8d1ed97016bd12ed82d78c3fc30
+    # Private repos run the gate on the self-hosted pool (no Actions
+    # spend); public repos stay on GitHub-hosted. Per-repo warn callers
+    # pass their own pool instead (see TEST-GUARD.md).
+    with:
+      runs-on-json: ${{ github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]' }}
+
+  # Keep id and name byte-identical: the required check name is `test-guard`.
+  test-guard:
+    name: test-guard
+    # Same pool selection as the guard call above: the required check must
+    # report from a runner the repo can actually start.
+    runs-on: ${{ fromJSON(github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    needs: [guard]
+    if: always()
+    steps:
+      - name: Re-export gate verdict as a bare check
+        env:
+          GUARD_RESULT: ${{ needs.guard.result }}
+          GUARD_VERDICT: ${{ needs.guard.outputs.verdict }}
+        run: |-
+          if [ "$GUARD_RESULT" = "failure" ]; then
+            echo "::error::test-guard: gate failed (verdict: ${GUARD_VERDICT:-unknown})"
+            exit 1
+          fi
+          if [ "$GUARD_RESULT" != "success" ]; then
+            echo "::error::test-guard: gate did not succeed (result: $GUARD_RESULT)"
+            exit 1
+          fi
+          echo "test-guard: gate ${GUARD_RESULT} (verdict: ${GUARD_VERDICT:-unknown})"

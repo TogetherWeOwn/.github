@@ -1,0 +1,69 @@
+# Reusable weekly tally for the advisory pull-request size labels.
+#
+# Lives in the org `.github` repo at `.github/workflows/pr-size-weekly.yml`.
+# Callers invoke it from their own schedule (the tally is per-repository and
+# a reusable workflow has no schedule of its own for caller repositories):
+#   uses: TogetherWeOwn/.github/.github/workflows/pr-size-weekly.yml@<sha>
+# Starter caller: `workflow-templates/pr-size.yml`. Standard: the
+# "Advisory PR-size labels" section of CI-STANDARD.md.
+#
+# ADVISORY ONLY, like the labeller: never a required check, never in a
+# ruleset's required-workflows list. The script exits 0 on any API failure.
+#
+# This is a SEPARATE reusable file from `pr-size.yml` on purpose. GitHub
+# validates a reusable workflow's nested-job permissions against the
+# caller job's grant statically, when parsing the workflow, and ignores
+# the nested jobs' `if:` conditions. Keeping the read-only weekly job in
+# the same file as the write-permission label job would make every
+# read-only weekly caller fail at startup, so each file requests only the
+# permissions its callers grant. `.github/scripts/test_pr_size_workflows.py`
+# pins that contract for the shipped template.
+#
+# The tally logic is the `weekly` mode of `.github/scripts/pr_size.py`,
+# checked out from THIS repository at the workflow's own ref
+# (`job.workflow_repository` / `job.workflow_sha`) - the same single
+# definition the labeller uses.
+#
+# Token: no secrets are passed or needed. The job's GITHUB_TOKEN is minted
+# for the caller's repository and capped by the caller's job permissions;
+# callers of this file grant read-only. Never pass `secrets: inherit`.
+
+name: pr-size weekly (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: >-
+          JSON runner label(s), e.g. '["ubuntu-latest"]' or
+          '["self-hosted","linux"]' for a private caller repository.
+        required: false
+        default: '["ubuntu-latest"]'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  weekly:
+    name: weekly
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .pr-size-central
+          sparse-checkout: .github/scripts/pr_size.py
+          persist-credentials: false
+
+      - name: Weekly size tally (advisory)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: python3 .pr-size-central/.github/scripts/pr_size.py weekly

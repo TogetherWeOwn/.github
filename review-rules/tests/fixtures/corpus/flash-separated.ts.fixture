@@ -1,0 +1,7 @@
+function clearOnSuccess() { deleteJoinCookie(); }
+async function load() { const model = await modelForFn(); return model; }
+export const safeArrow = async () => {
+  const model = await modelForFn();
+  deleteJoinCookie();
+  return model;
+};

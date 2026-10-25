@@ -1,0 +1,18 @@
+rules:
+- id: migration-order-equality
+  languages:
+  - rust
+  - python
+  - javascript
+  - typescript
+  message: 'R2b: equality to the maximum migration breaks on the next migration; use an explicit ordering
+    fixture (nit).'
+  severity: INFO
+  metadata:
+    examples:
+    - nntunev2#106 kek-order-test-breaks-next-migration
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-regex: (?:max_number\s*==|==\s*max_(?:migration|number)|assert_eq!\([^\n]*max_number)

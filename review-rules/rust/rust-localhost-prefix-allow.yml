@@ -1,0 +1,17 @@
+rules:
+- id: rust-localhost-prefix-allow
+  languages:
+  - rust
+  message: 'RUST-15: localhost prefix accepts localhost.evil and localhost@evil; parse and compare exact
+    host/scheme.'
+  severity: ERROR
+  metadata:
+    examples:
+    - nntunev2#15 localhost-origin-prefix
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-either:
+  - pattern: $U.starts_with("http://localhost")
+  - pattern: $U.starts_with("https://localhost")

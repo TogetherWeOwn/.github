@@ -1,0 +1,53 @@
+name: deploy-production
+
+# TogetherWeOwn pipeline standard §3: production PROMOTES the last commit that deploy-staging.yml successfully
+# deployed on the default branch. It never demands the newest main SHA and never needs a merge freeze.
+# Pin the reusable workflow by SHA when adopting. Replace the placeholder deploy step with the repo's real deploy.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Optional staged commit to promote (default: last successful deploy-staging run on the default branch)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  resolve-staged-sha:
+    # Pin by SHA when adopting. staging-workflow MUST be the staging-only workflow, never this file.
+    uses: TogetherWeOwn/.github/.github/workflows/promote-staging.yml@main
+    with:
+      staging-workflow: deploy-staging.yml
+      sha: ${{ inputs.sha }}
+
+  deploy-production:
+    needs: resolve-staged-sha
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      SHA: ${{ needs.resolve-staged-sha.outputs.sha }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve-staged-sha.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      # checkout with fetch-depth 0 already fetched every branch into origin/* while authenticated; a second fetch
+      # here would fail in private repos (persist-credentials: false removes the auth).
+      - name: Refuse a commit that is not on the default branch
+        run: |
+          if ! git merge-base --is-ancestor "$SHA" "origin/$DEFAULT_BRANCH"; then
+            echo "::error::$SHA is not an ancestor of origin/$DEFAULT_BRANCH; refusing to deploy an unmerged commit"
+            exit 1
+          fi
+      - name: Deploy the staged commit to production (replace)
+        run: echo "deploy $SHA to production"

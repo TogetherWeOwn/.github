@@ -1,0 +1,17 @@
+rules:
+- id: security-branch-only-trust
+  languages:
+  - yaml
+  message: 'SEC-AUTH-07: branch-name-only gate can be copied by a fork; bind repository and actor as well
+    as name.'
+  severity: ERROR
+  metadata:
+    examples:
+    - paperclip#39 refresh-branch-name-bypass
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern-regex: (?m)^\s*if:\s*[^\n]*github\.head_ref\s*==[^\n]*
+  - pattern-not-regex: (head\.repo\.full_name|github\.actor|head\.repo\.fork)

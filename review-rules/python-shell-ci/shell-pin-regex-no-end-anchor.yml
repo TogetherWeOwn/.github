@@ -1,0 +1,15 @@
+rules:
+- id: shell-pin-regex-no-end-anchor
+  languages:
+  - bash
+  message: 'PYCI-05a: 40-hex pin regex without an end anchor accepts a 43-character prefix; compare full
+    identity.'
+  severity: ERROR
+  metadata:
+    examples:
+    - paperclip-operator-toolkit#85 pin-check-prefix-match
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-regex: grep\s+[^\n]*["'][^"'\n]*\[0-9a-f\]\{40\}[^"'$\n]*["']

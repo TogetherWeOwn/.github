@@ -1,0 +1,4 @@
+{
+  "name": "Web quality gate",
+  "description": "Lighthouse categories, Core Web Vitals and web standards against a deployed origin after each staging deploy (gates promotion) and nightly (CI-STANDARD rule 23). Pair with a PR-time lighthouse job inside ci-ok."
+}

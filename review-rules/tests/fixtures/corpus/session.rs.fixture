@@ -1,0 +1,5 @@
+#[derive(Debug, Clone, Copy)]
+pub struct SessionKeys<'a> {
+    pub primary: &'a [u8],
+    pub previous: Option<&'a [u8]>,
+}

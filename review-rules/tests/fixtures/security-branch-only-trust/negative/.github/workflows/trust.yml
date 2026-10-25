@@ -1,0 +1,4 @@
+jobs:
+  gate:
+    if: github.head_ref == 'chore/refresh-lockfile' && github.event.pull_request.head.repo.full_name == github.repository && github.actor == 'trusted-bot'
+    runs-on: ubuntu-latest

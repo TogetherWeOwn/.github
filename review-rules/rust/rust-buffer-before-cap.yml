@@ -1,0 +1,34 @@
+rules:
+- id: rust-buffer-before-cap
+  languages:
+  - rust
+  message: 'RUST-04/SEC-AUTH-05: full body read precedes a length cap; bound the stream and test missing
+    Content-Length.'
+  severity: ERROR
+  metadata:
+    examples:
+    - nntunev2#10 routes-body-unbounded-before-cap
+    - nntunev2#10 body-cap-after-buffering-no-content-length
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern-either:
+    - pattern: let $B = $R.text().await?; ... if $B.len() > $MAX { ... }
+    - pattern: let $B = hyper::body::to_bytes($R).await?; ... if $B.len() > $MAX { ... }
+    - pattern: $R.read_to_end(&mut $B)?; ... if $B.len() > $MAX { ... }
+    - patterns:
+      - pattern-either:
+        - pattern: |
+            let $B = $READ;
+            ...
+            if let Err($ERROR) = check_body_cap($B.len(), ...) { ... }
+        - pattern: |
+            let $B = $READ;
+            ...
+            if $B.len() > $MAX { ... }
+      - metavariable-pattern:
+          metavariable: $READ
+          pattern: <... $R.text().await ...>
+  - pattern-not-regex: \.take\s*\(

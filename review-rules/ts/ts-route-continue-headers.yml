@@ -1,0 +1,16 @@
+rules:
+- id: ts-route-continue-headers
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-008a: route.continue header override persists across redirects; prove a second origin receives
+    no secrets.'
+  severity: ERROR
+  metadata:
+    examples:
+    - nntunev2#11 redirect-leaks-access-token
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern: '$ROUTE.continue({headers: $H, ...})'

@@ -1,0 +1,22 @@
+rules:
+- id: db-read-then-write
+  languages:
+  - generic
+  message: 'R4: nearby SQL read/write may lose a concurrent update; reassert version/state and prove interleavings.'
+  severity: WARNING
+  metadata:
+    examples:
+    - kofra#630 update-unversioned-lost-write
+    - kofra#633 register-limit-toctou
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  pattern-regex: (?is)SELECT\b[^;\n]{0,200}\bFROM\s+(\w+)[^;\n]{0,100}[;\n][\s\S]{0,250}?UPDATE\s+\1\s+SET\b[^;\n]{0,100}\bWHERE\s+id\s*=
+  paths:
+    include:
+    - '**/*.ts'
+    - '**/*.js'
+    - '**/*.php'
+    - '**/*.py'
+    - '**/*.sql'

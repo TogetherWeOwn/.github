@@ -1,0 +1,18 @@
+rules:
+- id: rust-double-percent-encode
+  languages:
+  - rust
+  message: 'RUST-14a: encoding a URL path may double-encode percent escapes; prove decode/encode round-trip.'
+  severity: WARNING
+  metadata:
+    examples:
+    - two-bot-next#849 s3-prefix-double-encoded
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: $ENC($U.path(...))
+  - metavariable-regex:
+      metavariable: $ENC
+      regex: (?i).*(encode|escape|percent).*

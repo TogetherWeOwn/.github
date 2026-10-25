@@ -1,0 +1,25 @@
+rules:
+- id: ts-insensitive-tracker-pattern
+  languages:
+  - typescript
+  - javascript
+  message: 'TS-002b: case-insensitive tracker matching can corrupt utf-8/sha-256 text; test literal lowercase
+    text.'
+  severity: WARNING
+  metadata:
+    examples:
+    - paperclip#78 tracker-regex-case-insensitive
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: new RegExp($PAT, $FLAGS)
+  - metavariable-regex:
+      metavariable: $FLAGS
+      regex: .*i.*
+  paths:
+    include:
+    - '**/*projection*'
+    - '**/*tracker*'
+    - '**/*publication*'

@@ -1,0 +1,19 @@
+rules:
+- id: rust-timeout-lane-permit
+  languages:
+  - rust
+  message: 'RUST-09: timeout cancels a lane/permit send; prove RAII release with body-stall and drop tests.'
+  severity: WARNING
+  metadata:
+    examples:
+    - two-bot-next#885 self-role-read-get-orphans-lane
+    - two-bot-next#885 get-body-stall-still-orphans-lane
+    confidence: LOW
+    mode: shadow
+    category: correctness
+    proof: Advisory static signal; confirm with the named behavioral test before promotion.
+  patterns:
+  - pattern: tokio::time::timeout($D, $E)
+  - metavariable-regex:
+      metavariable: $E
+      regex: (?is).*(?:\blane\b|admitted|permit|PermitGuard).*

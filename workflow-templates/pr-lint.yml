@@ -3,16 +3,33 @@ name: PR lint
 # TogetherWeOwn GitHub standard, one-click template for new repos.
 # Always an error: Conventional Commits title, and a commit on the default branch that is not one.
 # PR_STANDARDS_MODE ("warn" or "error") sets the level for the rest: an empty body and the
-# PR template sections (Thinking Path, What Changed, Verification, Risks, Model Used, and
-# Linked Issues or Issue Description for feat/fix/perf/refactor/security). Land it in "warn",
-# clear the open PRs, then flip to "error".
+# two required PR template sections (Verification, and Linked Issues or Issue Description for
+# feat/fix/perf/refactor/security). Land it in "warn", clear the open PRs, then flip to "error".
 # Private repos: set REQUIRE_CARD_REF to "true" so every PR links its tracking card.
 # Set INTERNAL_ID_PREFIXES to a comma- or pipe-separated list (e.g. "ABC,XYZ") to flag
 # org-specific ticket ids; empty means a generic ticket-like pattern.
+# Forward control for public repos: the strict subset (tracker ids only when
+# INTERNAL_ID_PREFIXES is set above, instance UI links like /TOG/issues/ outside
+# github.com URLs, and the internal host) always fails the PR title/body check.
+# github.com scrub accepts an optional scheme and www and stops at delimiters so
+# glued refs are still scanned; UI-link matches any scheme-qualified host
+# (localhost, single-label, IP, IPv6) and dotted bare hosts with a boundary,
+# so code paths stay clean and long blobs stay fast.
+# STRICT_INTERNAL_LEVEL fail-closed: any value other than an explicit "warning"
+# (or "warn") downgrade fails. The tracker-id hit is skipped when REQUIRE_CARD_REF
+# is "true" (private repos expect a card id), and INTERNAL_ID_LEVEL=error still
+# fails a tracker id even when the strict level is downgraded (stricter wins,
+# advisory runs when the tracker id itself is not strict).
+# Otherwise advisory INTERNAL_ID_LEVEL behavior is unchanged.
 
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review]
+  # Merge queue validation: `pr-lint` is a required check, so it must
+  # report on merge_group. The queue run carries no PR title and an
+  # empty commits payload, so the run step passes vacuously (the title
+  # was already linted on the PR head).
+  merge_group:
   push:
     branches: [ $default-branch ]
 
@@ -21,12 +38,13 @@ permissions:
 
 concurrency:
   group: pr-lint-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   REQUIRE_CARD_REF: "false"
   INTERNAL_ID_LEVEL: "warning" # or "error" to fail a PR that carries an internal ticket id
   INTERNAL_ID_PREFIXES: "" # e.g. "ABC,XYZ"; empty means a generic ticket-like pattern
+  STRICT_INTERNAL_LEVEL: "error" # fail-closed strict public-text gate; "warning" downgrades it
   PR_STANDARDS_MODE: "warn"
 
 jobs:
@@ -53,21 +71,29 @@ jobs:
               if raw:
                   parts = [p.strip() for p in re.split(r"[,\s|]+", raw) if p.strip()]
                   if parts:
-                      return re.compile(r"\b(" + "|".join(re.escape(p) for p in parts) + r")-\d+\b")
-              return re.compile(r"\b[A-Z]{2,10}-\d+\b")
-          INTERNAL_ID = build_internal_id()
+                      return (re.compile(r"\b(" + "|".join(re.escape(p) for p in parts) + r")-\d+\b"),
+                              True)
+              return re.compile(r"\b[A-Z]{2,10}-\d+\b"), False
+          INTERNAL_ID, HAVE_PREFIXES = build_internal_id()
+          # Strict public-text subset: tracker ids only when prefixes are set (otherwise the
+          # generic pattern stays advisory), instance UI links and the internal host. These
+          # always fail a public title/body check unless the strict level is explicitly
+          # downgraded to a warning (fail-closed).
+          UI_LINK_BARE = re.compile(r"(?<![\w.-])/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
+          UI_LINK_HOST = re.compile(r"(?:https?://[^\s/<>()]+|(?<![\w./-])[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?::\d+)?)/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
+          HOST_INTERNAL = re.compile(r"\binfextion\.net\b", re.IGNORECASE)
+          GITHUB_URL = re.compile(r"(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9_.~%/#?=&+\-]*", re.IGNORECASE)
+          STRICT_FIXED = [(UI_LINK_BARE, "an instance UI link"), (UI_LINK_HOST, "an instance UI link"), (HOST_INTERNAL, "the internal host")]
           HELP = ("Expected a Conventional Commits header, e.g. 'fix(auth): refuse expired sudo "
                   "sessions'. Allowed types: " + TYPES.replace("|", ", ") + ".")
 
           LIGHT = {"docs", "chore", "build", "ci", "style", "test", "revert"}
           # (heading, minimum real items, skipped for LIGHT types)
+          # Pipeline review 2026-10-10: only what a reviewer or gate needs. The other template
+          # sections (What Changed, Notes for reviewers) are optional context.
           SECTIONS = [
-              ("Thinking Path", 3, False),
               ("Linked Issues or Issue Description", 1, True),
-              ("What Changed", 1, False),
               ("Verification", 1, False),
-              ("Risks", 1, False),
-              ("Model Used", 1, False),
           ]
 
           def parse_sections(text):
@@ -111,6 +137,29 @@ jobs:
                   return level == "error"
               return False
 
+          def strict_internal_hits(text):
+              """Fail-closed strict subset for public title/body. Labels only, never values."""
+              hits = []
+              require_card = os.environ.get("REQUIRE_CARD_REF") == "true"
+              if HAVE_PREFIXES and not require_card and INTERNAL_ID.search(text or ""):
+                  hits.append("a tracker id")
+              scrubbed = GITHUB_URL.sub("", text or "")
+              for pat, label in STRICT_FIXED:
+                  if pat.search(scrubbed) and label not in hits:
+                      hits.append(label)
+              return hits
+
+          def report_strict(hits, where):
+              raw = (os.environ.get("STRICT_INTERNAL_LEVEL") or "").strip().lower()
+              level = "warning" if raw in ("warning", "warn") else "error"
+              if "a tracker id" in hits and os.environ.get("INTERNAL_ID_LEVEL") == "error":
+                  level = "error"
+              print(f"::{level} title=Strict internal ref in {where}::The PR {where} holds " +
+                    f"{', '.join(hits)}. Public PR text carries no tracker ids, instance " +
+                    "links or internal hosts: say it in plain words and link only public " +
+                    "GitHub issues.")
+              return level == "error"
+
           mode = os.environ.get("PR_STANDARDS_MODE", "warn")
           strict = mode == "error"
           failed = False
@@ -148,9 +197,15 @@ jobs:
               if os.environ.get("REQUIRE_CARD_REF") == "true" and not INTERNAL_ID.search(body):
                   failed = True
                   print("::error title=Card reference::Add 'Refs: <card-id>' to the PR body.")
-              failed = internal_id_notes(title, "the title") or failed
-              if internal_id_notes(body, "the body"):
-                  failed = True
+              for where, text in (("the title", title), ("the body", body)):
+                  hits = strict_internal_hits(text)
+                  if hits:
+                      if report_strict(hits, where):
+                          failed = True
+                      if "a tracker id" not in hits and internal_id_notes(text, where):
+                          failed = True
+                  elif internal_id_notes(text, where):
+                      failed = True
           else:
               for c in json.loads(os.environ.get("COMMITS") or "[]") or []:
                   subject = (c.get("message") or "").splitlines()[0] if c.get("message") else ""

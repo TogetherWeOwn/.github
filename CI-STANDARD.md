@@ -110,6 +110,128 @@ time, money and resources.
     ~75% of included minutes; set per-repo budgets so one repo cannot starve
     shared hosted concurrency (seen 2026-10-04: an ops-tooling burst queued
     TWO Next ~25 min). Clean up stale PRs and old runs.
+21. **Tier 0 before LLM review (2026-10-10).** Deterministic checks catch what
+    a linter can, so the Paperclip Review spends its rounds on judgment. Every
+    repo runs, inside `ci-ok`: actionlint (checksum-pinned) and zizmor on
+    workflows; gitleaks; each generator re-run plus `git diff --exit-code`
+    (schema, OpenAPI, lockfiles, vendored lists); and the stack's strict
+    lint/type/unused-code checks. Each repeated review finding becomes a new
+    rule here or a repo lint. Measured 2026-10-09: about 35% of 146 structured
+    review findings were catchable this way, and workflow logic was the
+    largest single class.
+22. **Review only green heads; no pushes during review.** Paperclip Review is
+    requested once per CI-green, non-draft head. The author batches all
+    findings of a round into one push after the review completes. Measured
+    2026-10-10: 45% of review rows were superseded or incomplete, mostly
+    from pushes while a review was queued or running.
+
+23. **Web quality gate (2026-10-10).** Every repo that serves a website gates on
+    Lighthouse and web standards, with budgets in a committed file (e.g.
+    `ci/quality-budget.json`) so any loosening is a visible, reviewed diff:
+    - Lighthouse category scores (desktop: performance >= 0.90, accessibility,
+      best-practices and SEO >= 0.95; mobile performance floor) plus Core Web
+      Vitals budgets (LCP <= 2.5 s, CLS <= 0.1, TBT <= 200 ms), 3 runs, median;
+    - axe (0 serious/critical), security headers (CSP, nosniff,
+      Referrer-Policy; HSTS where the app, not the edge, owns it), HTML basics
+      (doctype, lang, title, viewport, description, one h1), internal links
+      resolved against the app's own route table, and a bundle-size budget;
+    - one "what to fix" job summary (failing audits, score vs budget, top
+      offending resources), reports uploaded as artifacts (never
+      temporary-public-storage).
+    When it runs:
+    - **PRs:** only when files that can change the rendered site change (app
+      source, components, styles, public assets, build config,
+      package.json/lockfile, the Lighthouse/standards config itself); docs-,
+      CI- and tests-only PRs skip. It reports inside `ci-ok`, which counts a
+      path-skipped job as success (the scope-gate pattern, never `on: paths:`).
+    - **After every staging deploy:** against staging, and it gates promote to
+      production (the promotion resolver requires it alongside the journeys).
+    - **Nightly:** against staging, to catch drift no PR causes (third-party
+      scripts, CDN, content).
+    Agents fix failures; a budget is raised (ratchet) or lowered only in its own
+    justified PR, and Paperclip Review treats loosening as a finding. Template:
+    `workflow-templates/web-quality.yml`. Reference implementation:
+    togetherweown/two-web-next.
+
+24. **Web E2E and quality loop (2026-10-11).** Beyond the quality gate (rule
+    23), every website repo closes the loop from "something broke" to "an agent
+    fixed it":
+    - **Critical journeys required on PR.** Browser journeys run on every PR
+      that can change the site, against a local full stack (Worker + disposable
+      DB, no secrets). Like every gated job (rule 3), the journeys count only
+      through `ci-ok`: the scope step decides whether they run, a scope-skip
+      passes, and a failed or cancelled upstream job fails `ci-ok`. They are not
+      a separately required check. Per-PR remote previews are not used: they
+      would put a deploy-capable credential in PR workflows.
+    - **Visual regression.** Full-page screenshots of the public routes at
+      desktop and mobile widths against committed baselines, before the
+      journeys, with volatile regions (times) masked. CI never rewrites a
+      baseline; an intentional change commits reviewed baselines in the same PR.
+    - **Security scan of staging.** An OWASP ZAP passive baseline runs after
+      every staging deploy (gating promotion: a High, or Medium/Low above the
+      committed budget, fails the run the promotion resolver requires) and
+      nightly. Public repos print alert names and counts only and never upload
+      the report.
+    - **Daily explorer + QA routine.** A GET-only, guest, staging-only crawl at
+      desktop and mobile widths records non-200s, page/console errors, failed
+      subresources, broken images, overflow and serious axe violations with
+      stable finding ids; a daily Paperclip routine files one card per new
+      finding for the site's engineer and notes resolved ones.
+    - **Real-user metrics.** A nightly check of production p75 LCP/CLS/INP from
+      the CDN's RUM data against committed budgets, with a read-only analytics
+      token (never the deploy token).
+    Scheduled failures go through the host flake ledger (one re-run, then a
+    private main-red card); PR failures wake the PR's owner card via the PR
+    controller. Baselines and budgets only ratchet; loosening is its own
+    reviewed PR. Templates: `workflow-templates/web-zap-staging.yml`.
+    Reference implementation: togetherweown/two-web-next (docs/visual-regression.md,
+    docs/zap-baseline.md, docs/explore-staging.md, docs/rum-web-vitals.md).
+
+## Advisory PR-size labels
+
+One definition, in this repo: `.github/scripts/pr_size.py` (stdlib only,
+unit-tested by the `pr-size selftest` job) behind the reusable workflows
+`.github/workflows/pr-size.yml` (label) and
+`.github/workflows/pr-size-weekly.yml` (weekly tally). Adopters add only the thin caller from
+`workflow-templates/pr-size.yml`, pin its `uses:` to a full SHA of this
+repo's `main`, and pass their generated paths as `exclude-extra`. Nobody
+copies the script. The reusable checks the script out from this repository
+at its own ref (`job.workflow_repository` / `job.workflow_sha`), never from
+the caller's pull-request head, so a pull request cannot run a modified
+labeller or silence its own label by deleting a local copy.
+
+- **Thresholds are central and fixed**: `size/S` <= 100, `size/M` <= 400,
+  `size/L` <= 1000 counted lines (additions + deletions, lockfiles /
+  generated files / fixtures excluded), `size/XL` above that. They are not
+  caller inputs; changing them is one reviewed PR here.
+- **Advisory only, permanently.** `pr-size` is never a required status
+  check and must never appear in a ruleset's required-workflows list -
+  either would make it block merges and break the invariant. Org-level
+  inheritance happens through this template and repo bootstrap, not merge
+  blocking. The script exits 0 on any API failure (and fork PRs, whose
+  token is read-only, warn and skip), so labelling can never turn a run red.
+- **Token**: callers grant job-level `issues: write` + `pull-requests:
+  write` to call the label reusable and read-only to call the weekly one.
+  The two modes are separate reusable FILES because GitHub validates a
+  reusable workflow's nested-job permissions against the caller job's
+  grant when parsing the workflow, ignoring nested `if:` conditions: a
+  read-only weekly caller of a file that also holds the write-permission
+  label job would fail the whole workflow at startup. The `pr-size
+  selftest` job statically checks that every caller job in the shipped
+  template grants at least what the file it calls requests. No secrets
+  are passed; never add `secrets: inherit` - the reusable job's
+  `GITHUB_TOKEN` is minted for the caller's repo and capped by the
+  caller's permissions.
+- **Weekly tally**: the schedule stays in the caller (decided once, here).
+  A reusable workflow has no schedule of its own for caller repositories
+  and the tally is per-repository, so the caller's Monday `schedule:` calls
+  the `pr-size-weekly.yml` reusable. The labels are the durable record: the
+  same tally is any `is:pr is:merged label:size/L` search.
+- **Repinning**: when the labeller changes here, adopters repin their
+  caller's `uses:` SHA in their own small PRs; until they do, they keep
+  running the older pinned labeller, which is safe because it is advisory.
+
+Reference adoption: TogetherWeOwn/two-web-next `.github/workflows/pr-size.yml`.
 
 ## Banned
 
@@ -118,6 +240,15 @@ time, money and resources.
 - `cancel-in-progress` on `main`, release, deploy or merge queue.
 - Jobs without `timeout-minutes`.
 - Full mutation / full E2E / full CodeQL on every push.
+- Nightly / scheduled-only suites (full ignored-test sweeps, benchmarks)
+  triggered on every `pull_request`. They run on `schedule`,
+  `workflow_dispatch` and `push` to `main`; on a PR only when that PR changes
+  the suite's own wiring or trips a Rule 4 full-run trigger (decided by the
+  job-level change detector, so the workflow still reports). This never
+  removes a PR-time check: dependency/advisory scans still run on lockfile
+  change (Rules 6 and 19), and any guard that only the nightly suite ran moves
+  into the per-PR workflow first. Measured 2026-10-10: one repo's nightly sweep
+  ran on ~170 PR pushes a day, most cancelled by the next push.
 - Retries that hide flakes (unlogged or ticketless).
 - `push` + `pull_request` duplicate full runs on the same SHA.
 - `[skip ci]` to dodge gates.
