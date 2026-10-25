@@ -6,12 +6,11 @@ import importlib.util
 import io
 import json
 import os
-from pathlib import Path
-import re
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -585,9 +584,9 @@ class APITests(unittest.TestCase):
 
     def test_http_failure_is_fixed_diagnostic(self):
         api = a.GitHub("never-print-token", REPO)
-        with mock.patch.object(api.opener, "open", side_effect=OSError("sensitive-detail")):
-            with self.assertRaisesRegex(a.ObservationError, "^api_request_failed$"):
-                api.get("pulls/1")
+        with mock.patch.object(api.opener, "open", side_effect=OSError("sensitive-detail")), \
+             self.assertRaisesRegex(a.ObservationError, "^api_request_failed$"):
+            api.get("pulls/1")
 
     def test_budget_exhaustion_is_explicit(self):
         api = a.GitHub("unused", REPO)
@@ -605,7 +604,7 @@ class CLITests(unittest.TestCase):
             env = {**os.environ, "GITHUB_EVENT_PATH": str(p / "event.json"), "GITHUB_EVENT_NAME": "pull_request",
                    "GITHUB_OUTPUT": str(p / "output"), "GITHUB_STEP_SUMMARY": str(p / "summary"),
                    "GH_TOKEN": "do-not-print-token", "PYTHONPATH": d}
-            result = subprocess.run([sys.executable, "-I", str(SCRIPT)], cwd=d, env=env, text=True, capture_output=True)
+            result = subprocess.run([sys.executable, "-I", str(SCRIPT)], check=False, cwd=d, env=env, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0)
             self.assertIn('"verdict": "error"', result.stdout)
             self.assertIn("::warning::", result.stdout)

@@ -9,7 +9,8 @@ import http.client
 import io
 import os
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import ClassVar
 from unittest import mock
 
 import pr_size
@@ -182,7 +183,7 @@ class Weekly(unittest.TestCase):
         # A date-only `merged:>=YYYY-MM-DD` from a Monday 07:17 run covers
         # 7 days + 7 hours, double-counting early-Monday merges in the next
         # tally. The window must carry the full UTC timestamp.
-        now = datetime(2026, 10, 14, 7, 17, 30, tzinfo=timezone.utc)
+        now = datetime(2026, 10, 14, 7, 17, 30, tzinfo=UTC)
         self.assertEqual(pr_size.weekly_since(now), "2026-10-07T07:17:30Z")
 
     def test_report_names_the_total_and_over_threshold(self):
@@ -216,14 +217,14 @@ class TransportErrors(unittest.TestCase):
     otherwise one dropped connection turns an advisory run red.
     """
 
-    ENV = {"REPO": "owner/name", "GH_TOKEN": "test-token", "PR_NUMBER": "7"}
+    ENV: ClassVar[dict[str, str]] = {"REPO": "owner/name", "GH_TOKEN": "test-token", "PR_NUMBER": "7"}
 
     def _run_main(self, mode, urlopen):
         out = io.StringIO()
-        with mock.patch.dict(os.environ, self.ENV):
-            with mock.patch("urllib.request.urlopen", urlopen):
-                with contextlib.redirect_stdout(out):
-                    code = pr_size.main(["pr_size.py", mode])
+        with mock.patch.dict(os.environ, self.ENV), \
+             mock.patch("urllib.request.urlopen", urlopen), \
+             contextlib.redirect_stdout(out):
+            code = pr_size.main(["pr_size.py", mode])
         return code, out.getvalue()
 
     def test_request_wraps_remote_disconnected_as_api_error(self):
@@ -231,9 +232,8 @@ class TransportErrors(unittest.TestCase):
         dropped = mock.Mock(
             side_effect=http.client.RemoteDisconnected("closed without response")
         )
-        with mock.patch("urllib.request.urlopen", dropped):
-            with self.assertRaises(pr_size.ApiError):
-                api.request("GET", "/repos/owner/name/pulls/7")
+        with mock.patch("urllib.request.urlopen", dropped), self.assertRaises(pr_size.ApiError):
+            api.request("GET", "/repos/owner/name/pulls/7")
 
     def test_label_mode_exits_0_on_remote_disconnected(self):
         dropped = mock.Mock(
