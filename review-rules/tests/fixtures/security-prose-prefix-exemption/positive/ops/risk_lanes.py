@@ -1,2 +1,3 @@
-if name.startswith(("README", "LICENSE", "NOTICE")):
-    exempt()
+def exempt_prose(name, exempt):
+    if name.startswith(("README", "LICENSE", "NOTICE")):
+        exempt()

@@ -13,14 +13,13 @@ import contextlib
 import importlib.util
 import io
 import json
-import os
-from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -558,7 +557,7 @@ class GitTests(unittest.TestCase):
         self.base = self.git('rev-parse', 'HEAD').strip()
 
     def git(self, *args, check=True):
-        p = subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', '-C', str(self.root), *args], capture_output=True, text=True)
+        p = subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', '-C', str(self.root), *args], check=False, capture_output=True, text=True)
         if check and p.returncode:
             self.fail('fixture git command failed: ' + p.stderr)
         return p.stdout
@@ -717,10 +716,11 @@ class ScannerIntegrationTests(unittest.TestCase):
 
 class ReceiptTests(unittest.TestCase):
     def test_publication_failure_stays_warn(self):
-        with tempfile.TemporaryDirectory() as temp:
-            with patch.object(engine, 'publish', side_effect=OSError('disk full')), contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(0, engine.main(['--repo', temp, '--base', 'bad', '--output', temp]))
-                self.assertEqual(1, engine.main(['--repo', temp, '--base', 'bad', '--output', temp, '--mode', 'enforce']))
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(engine, 'publish', side_effect=OSError('disk full')), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, engine.main(['--repo', temp, '--base', 'bad', '--output', temp]))
+            self.assertEqual(1, engine.main(['--repo', temp, '--base', 'bad', '--output', temp, '--mode', 'enforce']))
 
     def test_scanner_timeout_cleans_only_own_container(self):
         calls = []
@@ -798,7 +798,7 @@ def fixture_test() -> int:
     ids = set()
     for pack in engine.PACKS:
         for path in (ROOT / pack).glob('*.yml'):
-            ids.update(re.findall(r'^\s*- id: (\S+)', path.read_text(), re.M))
+            ids.update(re.findall(r'^\s*- id: (\S+)', path.read_text(), re.MULTILINE))
             if not re.search(r'\bexamples:\s*\n\s*-', path.read_text()):
                 raise AssertionError('rule missing metadata.examples: ' + str(path))
     if ids != {case['rule'] for case in cases}:
@@ -829,7 +829,7 @@ def fixture_test() -> int:
                 continue
             target = staging / case['file'].removeprefix('fixtures/')
             parsed = subprocess.run(['node', '--experimental-strip-types', '--check', str(target)],
-                                    capture_output=True, text=True)
+                                    check=False, capture_output=True, text=True)
             if parsed.returncode:
                 raise AssertionError(f'TypeScript fixture is not valid JavaScript syntax ({target.relative_to(staging)}): {parsed.stderr.strip()}')
         result = engine.docker_scan(staging, ALL)

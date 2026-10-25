@@ -2,12 +2,12 @@
 """Workflow contracts; YAML syntax is additionally checked with pinned actionlint."""
 
 import os
-from pathlib import Path
 import re
 import subprocess
 import tempfile
 import textwrap
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 REUSABLE = ROOT / ".github/workflows/pr-attestation.yml"
@@ -56,7 +56,7 @@ class WorkflowTests(unittest.TestCase):
             for verdict in ("valid", "invalid", "error", "", "$(exit 3)"):
                 with self.subTest(result=result, verdict=verdict), tempfile.TemporaryDirectory() as directory:
                     summary = Path(directory) / "summary"
-                    run = subprocess.run(["bash", "-euo", "pipefail", "-c", script], text=True, capture_output=True,
+                    run = subprocess.run(["bash", "-euo", "pipefail", "-c", script], check=False, text=True, capture_output=True,
                                          env={**os.environ, "RESULT": result, "VERDICT": verdict,
                                               "GITHUB_STEP_SUMMARY": str(summary)})
                     self.assertEqual(run.returncode, 0, run.stderr)
