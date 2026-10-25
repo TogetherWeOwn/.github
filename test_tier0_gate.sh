@@ -80,19 +80,26 @@ check('verdict' in agg_src and 'outputs' in agg_src,
       "tier-0-ok reads honest verdict outputs (not masked results)")
 check('enforcing' in agg_src,
       "tier-0-ok still fails failed gates in enforcing mode")
-# 3b. Full evidence in Gates 4 and 5: tool steps run when an earlier tool
-#     failed (default success() gating would skip them), so one broken
-#     tool never hides the rest. install/summarise/verdict steps keep
-#     their defaults (first runs once, rest are always()).
-for gj in ('workflow-checks', 'security'):
+# 3b. Full evidence in Gates 1, 2, 4 and 5: tool steps run when an earlier
+#     tool failed (default success() gating would skip them), without
+#     turning cancellation into an always-run tool invocation.
+for gj in ('lint-types', 'unused-code', 'workflow-checks', 'security'):
     gsteps = jobs[gj].get('steps', [])
     tools = [s for s in gsteps
              if (s.get('name') or '') not in ('Summarise findings',)
              and s.get('id') != 'verdict'
              and 'checkout' not in s.get('uses', '')
              and 'Compute changed files' not in (s.get('name') or '')]
-    check(all((s.get('if') or '').startswith('${{ !cancelled()') for s in tools),
-          f"gate {gj}: every tool step runs unless cancelled (full evidence)")
+    check(bool(tools), f"gate {gj}: actual tool steps found (non-vacuous coverage)")
+    for tool in tools:
+        condition = tool.get('if') or ''
+        check(condition.startswith('${{ !cancelled()') and
+              '||' not in condition and
+              not re.search(r'\b(?:success|failure|always)\s*\(', condition),
+              f"gate {gj}/{tool.get('name', tool.get('id', '?'))}: "
+              "tool runs after a failure but not cancellation")
+        check('continue-on-error' not in tool,
+              f"gate {gj}/{tool.get('name', '?')}: tool failure is not masked before verdict")
 check('min-severity' in str(jobs['workflow-checks']),
       "zizmor audits at a pinned severity floor (help notes stay advisory)")
 
@@ -230,7 +237,30 @@ env_pins = gate.get('env', {}) or {}
 semgrep_v = env_pins.get('SEMGREP_VERSION', '')
 check(semgrep_v != '1.129.0' and bool(re.match(r'^\d+\.\d+\.\d+$', semgrep_v or '')),
       f"SEMGREP_VERSION is a real release ({semgrep_v})")
+check(semgrep_v == '1.133.0', "Semgrep regression contract stays pinned to 1.133.0")
 gate_text = open(gate_path).read()
+check(not re.search(r'\bpython3?\s+-m\s+semgrep\b', gate_text),
+      "Semgrep uses its supported executable, never the non-entrypoint module")
+semgrep_steps = [s for s in jobs['security'].get('steps', [])
+                 if re.search(r'\bsemgrep\s+(?:scan|--config)\b', s.get('run') or '')]
+check(len(semgrep_steps) == 1, "one executable Semgrep scan step found")
+if semgrep_steps:
+    semgrep_run = semgrep_steps[0]['run']
+    check(len(re.findall(r'(?m)^\s*semgrep\s+scan\b', semgrep_run)) == 2,
+          "both local-config and registry-fallback branches use semgrep scan")
+    check(bool(re.search(r'\bcommand\s+-v\s+semgrep\b', semgrep_run)),
+          "Semgrep executable is discovered before scanning")
+    check(bool(re.search(r'\bsemgrep\s+(?:scan\s+)?--version\b', semgrep_run)),
+          "Semgrep executable version is checked before scanning")
+for path in sorted(glob.glob('semgrep-rules/*.yaml')):
+    for rule in yaml.safe_load(open(path))['rules']:
+        check('metavariable-regex' not in rule,
+              f"{path}/{rule['id']}: no ignored rule-level metavariable-regex")
+        if 'secrets-in-code' in path:
+            clauses = rule.get('patterns', [])
+            check(any('pattern' in c for c in clauses) and
+                  any('metavariable-regex' in c for c in clauses),
+                  f"{path}/{rule['id']}: assignment and key filter are conjoined")
 check('squawk_${SQUAWK_VERSION}_x86_64' not in gate_text,
       "squawk download is not the missing musl tarball")
 check('releases/download/v${SQUAWK_VERSION}/squawk-linux-x64' in gate_text,
@@ -256,4 +286,5 @@ check('TIER0_CHANGED_FILE' in gate_text,
 
 sys.exit(1 if errors else 0)
 PY
-pass "tier-0 structural contract holds"
+python3 -m unittest -v test_tier0_tools.py
+pass "tier-0 structural and tool-execution contracts hold"
