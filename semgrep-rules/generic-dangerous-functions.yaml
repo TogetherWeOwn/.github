@@ -1,4 +1,3 @@
-Paperclip: GitHub broker_transport_unavailable; continuing without managed credentials.
 rules:
   - id: tier0-no-eval
     languages: [javascript, typescript, python]

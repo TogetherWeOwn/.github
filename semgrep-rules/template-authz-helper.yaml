@@ -2,14 +2,13 @@
 #
 # The gate asks for "route handlers must call the authz helper". A generic
 # regex cannot know what a repo calls that function, so this rule ships
-# matching NOTHING: `paths.include` is empty on purpose. To enable, a repo
-# copies this file, sets the handler path and the helper name, and measures
-# the false-positive rate over 20 PRs before promoting it to required.
-#
-# Example (a repo whose handlers live in routes/ and whose helper is
-# requireAuth): set paths.include to ['routes/*.ts'] and replace
-# NOT_REQUIRE_AUTH_HELPER with `pattern-not: requireAuth(...)` semantics
-# per the Semgrep docs for the repo's language.
+# matching NOTHING through the named-call stub below. To enable, a repo
+# copies this file, replaces `__tier0_template_name_your_authz_helper__(...)`
+# with a rule for its handler and helper call shapes, and scopes it using
+# `paths.include` (for example, ['routes/*.ts']). Detecting a missing helper
+# call requires a handler pattern plus `pattern-not` for that helper, per
+# the Semgrep docs for the repo's language. Measure the false-positive rate
+# over 20 PRs before promoting the rule to required.
 rules:
   - id: tier0-template-route-handlers-call-authz
     languages: [javascript]

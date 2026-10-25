@@ -86,6 +86,8 @@ env:
   SQUAWK_VERSION: "2.68.0"
   SEMGREP_VERSION: "1.133.0"
   SETUPTOOLS_VERSION: "80.9.0" # Semgrep's tracing dependency still imports pkg_resources.
+  RUFF_VERSION: "0.17.2"
+  MYPY_VERSION: "2.4.0"
 
 jobs:
   # ------------------------------------------------------------------
@@ -230,7 +232,7 @@ jobs:
         if: ${{ !cancelled() && needs.detect.outputs.has-python == 'true' }}
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check -q "ruff" "mypy" 2>&1 | tail -1
+          python3 -m pip install --disable-pip-version-check -q "ruff==${RUFF_VERSION}" "mypy==${MYPY_VERSION}" 2>&1 | tail -1
           failed=0
           if [[ ! -e pyproject.toml && ! -e ruff.toml && ! -e .ruff.toml ]]; then echo "no ruff config — running ruff defaults"; fi
           python3 -m ruff check . || failed=1
@@ -294,7 +296,7 @@ jobs:
             git ls-files > /tmp/tier0-changed.txt
           else
             git cat-file -e "$base" || { echo "base not in local history; failing closed"; exit 1; }
-            git diff --name-only --no-renames "$base" HEAD -- > /tmp/tier0-changed.txt || git ls-files > /tmp/tier0-changed.txt
+            git diff --name-only --no-renames --diff-filter=d "$base" HEAD -- > /tmp/tier0-changed.txt || git ls-files > /tmp/tier0-changed.txt
           fi
           echo "changed files: $(wc -l < /tmp/tier0-changed.txt)"
       - name: TypeScript — knip
@@ -370,7 +372,7 @@ jobs:
             echo "running declared generators from .tier0-generators"
             while IFS= read -r cmd || [[ -n "$cmd" ]]; do
               [[ -z "$cmd" || "$cmd" == \#* ]] && continue
-              echo "+ $cmd"; bash -c "$cmd"
+              echo "+ $cmd"; bash -c "$cmd" < /dev/null
             done < .tier0-generators
           else
             echo "no .tier0-generators file — running universal lockfile checks only"
@@ -543,7 +545,7 @@ jobs:
             git ls-files > /tmp/tier0-changed.txt
           else
             git cat-file -e "$base" || { echo "base not in local history; failing closed"; exit 1; }
-            git diff --name-only --no-renames "$base" HEAD -- > /tmp/tier0-changed.txt || git ls-files > /tmp/tier0-changed.txt
+            git diff --name-only --no-renames --diff-filter=d "$base" HEAD -- > /tmp/tier0-changed.txt || git ls-files > /tmp/tier0-changed.txt
           fi
           echo "changed files: $(wc -l < /tmp/tier0-changed.txt)"
       - name: gitleaks secret scan on the PR diff

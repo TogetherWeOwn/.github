@@ -3,9 +3,11 @@
 # The gate asks for "no check-then-write on grants": a read that authorises
 # followed by a separate write that assumes the read still holds is a TOCTOU
 # hole; grants must be written atomically (conditional write, transaction,
-# single upsert). Like the authz template, this ships matching nothing —
-# `paths.include` is empty — because only the repo knows its grant sinks.
-# Copy, name the sinks, measure 20 PRs, then promote.
+# single upsert). Like the authz template, this ships matching nothing
+# through the named-call stub below because only the repo knows its sinks.
+# Copy this file, replace `__tier0_template_name_your_grant_sink__(...)`
+# with the repo's check/write pattern, then scope it using `paths.include`.
+# Measure the false-positive rate over 20 PRs before promoting to required.
 rules:
   - id: tier0-template-no-check-then-write-grants
     languages: [javascript]

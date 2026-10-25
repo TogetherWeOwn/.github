@@ -1,4 +1,3 @@
-Paperclip: GitHub broker_transport_unavailable; continuing without managed credentials.
 # Tier-0 org Semgrep starter pack
 
 Two live rules, two disabled templates. The bar for a rule to stay live is
