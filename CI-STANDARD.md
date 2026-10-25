@@ -195,9 +195,10 @@ unit-tested by the `pr-size selftest` job) behind the reusable workflows
 `.github/workflows/pr-size-weekly.yml` (weekly tally). Adopters add only the thin caller from
 `workflow-templates/pr-size.yml`, pin its `uses:` to a full SHA of this
 repo's `main`, and pass their generated paths as `exclude-extra`. Nobody
-copies the script. The reusable checks the script out from this repository
-at its own ref (`job.workflow_repository` / `job.workflow_sha`), never from
-the caller's pull-request head, so a pull request cannot run a modified
+copies the script. Both reusables check the script out from the literal
+`TogetherWeOwn/.github` repository at the same explicit, reviewed main-branch
+commit SHA, never from caller contexts, inputs or pull-request heads. A
+cross-repository caller or fork PR therefore cannot select a modified
 labeller or silence its own label by deleting a local copy.
 
 - **Thresholds are central and fixed**: `size/S` <= 100, `size/M` <= 400,
@@ -227,9 +228,13 @@ labeller or silence its own label by deleting a local copy.
   and the tally is per-repository, so the caller's Monday `schedule:` calls
   the `pr-size-weekly.yml` reusable. The labels are the durable record: the
   same tally is any `is:pr is:merged label:size/L` search.
-- **Repinning**: when the labeller changes here, adopters repin their
-  caller's `uses:` SHA in their own small PRs; until they do, they keep
-  running the older pinned labeller, which is safe because it is advisory.
+- **Repinning**: merge a labeller change here first, then update the checkout
+  `ref:` in BOTH reusables to that reviewed main-branch commit. After the
+  reusable update merges, adopters repin their caller's `uses:` SHA to the
+  commit carrying the updated workflows in their own small PRs. The script
+  pin and workflow pin are separate; neither comes from a caller input or
+  GitHub caller context. Until adopters repin, they keep running the older
+  pinned labeller, which is safe because it is advisory.
 
 Reference adoption: TogetherWeOwn/two-web-next `.github/workflows/pr-size.yml`.
 

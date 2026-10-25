@@ -20,9 +20,10 @@
 # pins that contract for the shipped template.
 #
 # The tally logic is the `weekly` mode of `.github/scripts/pr_size.py`,
-# checked out from THIS repository at the workflow's own ref
-# (`job.workflow_repository` / `job.workflow_sha`) - the same single
-# definition the labeller uses.
+# checked out from THIS repository at an explicit, reviewed main-branch
+# commit - the same single definition and SHA the labeller uses. When the
+# script changes, commit it first, then repin BOTH reusable workflows to
+# that reviewed main-branch SHA; never use a caller context or PR head.
 #
 # Token: no secrets are passed or needed. The job's GITHUB_TOKEN is minted
 # for the caller's repository and capped by the caller's job permissions;
@@ -56,8 +57,8 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
+          repository: TogetherWeOwn/.github
+          ref: fcfe691790ac925e8c4cf5e191a5004d4d991392
           path: .pr-size-central
           sparse-checkout: .github/scripts/pr_size.py
           persist-credentials: false
