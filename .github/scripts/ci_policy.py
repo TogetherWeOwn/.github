@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """CI change-gating policy lint (Phase 2 of the org CI standard).
 
 Warns, and once every repo child complies fails, when a workflow has heavy
@@ -39,7 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 HEAVY_DEFAULT = 10
-EXEMPT = re.compile(r"ci-policy:\s*non-required\b", re.I)
+EXEMPT = re.compile(r"ci-policy:\s*non-required\b", re.IGNORECASE)
 GATED = re.compile(
     r"needs\.[a-zA-Z0-9_-]+\.outputs|github\.event|failure\(\)|always\(\)|cancelled\(\)"
 )

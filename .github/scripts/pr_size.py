@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Advisory pull-request size labels: size/S, size/M, size/L, size/XL.
 
 Deterministic and advisory only. The workflow that runs this script is not a
@@ -43,7 +42,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 MARKER = "<!-- pr-size-advisory -->"
 DEFAULT_THRESHOLD = 400
@@ -145,14 +144,14 @@ def comment_body(counted, excluded, counted_files, threshold):
         MARKER,
         "## Pull request size (advisory)",
         "",
-        f"This pull request changes **{counted} counted lines** across "
-        f"{counted_files} {files_word}, over the {threshold}-line advisory threshold "
-        f"({excluded} further lines in lockfiles, generated files and "
-        "fixtures are not counted).",
+        (f"This pull request changes **{counted} counted lines** across "
+         f"{counted_files} {files_word}, over the {threshold}-line advisory threshold "
+         f"({excluded} further lines in lockfiles, generated files and "
+         "fixtures are not counted)."),
         "",
-        "Smaller pull requests get faster, more careful review. If this change "
-        "can be split into independently mergeable pieces, please consider "
-        "splitting it; if it cannot, no action is needed.",
+        ("Smaller pull requests get faster, more careful review. If this change "
+         "can be split into independently mergeable pieces, please consider "
+         "splitting it; if it cannot, no action is needed."),
         "",
         "_Advisory only: this comment and the `size/*` label never block a merge._",
     ]
@@ -164,8 +163,8 @@ def under_body(counted, threshold):
         MARKER,
         "## Pull request size (advisory)",
         "",
-        f"This pull request is back under the {threshold}-line advisory "
-        f"threshold ({counted} counted lines). Thank you.",
+        (f"This pull request is back under the {threshold}-line advisory "
+         f"threshold ({counted} counted lines). Thank you."),
         "",
         "_Advisory only: this comment and the `size/*` label never block a merge._",
     ]
@@ -192,8 +191,8 @@ def weekly_report(counts, since):
     rows = [
         "## Weekly pull-request size tally",
         "",
-        f"Pull requests merged since {since}: **{total}** "
-        f"({over} over the advisory threshold).",
+        (f"Pull requests merged since {since}: **{total}** "
+         f"({over} over the advisory threshold)."),
         "",
         "| Label | Merged |",
         "|---|---|",
@@ -343,7 +342,7 @@ def weekly_since(now):
 
 
 def weekly(api, log=print):
-    since = weekly_since(datetime.now(timezone.utc))
+    since = weekly_since(datetime.now(UTC))
     report = weekly_report(tally(api.merged_since(since)), since)
     log(report)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")

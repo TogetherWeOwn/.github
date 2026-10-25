@@ -1,14 +1,13 @@
-#!/usr/bin/env python3
 """Check the content at both attestation pins; requires fetch-depth: 0.
 
 Local/CI developer test only: a stale pin is an error, not an attestation verdict.
 Do not run against untrusted PR code with a write token.
 """
 
-from pathlib import Path
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -18,7 +17,9 @@ def check(pattern, workflow, target):
     if len(matches) != 1:
         raise ValueError(f"expected one full SHA in {workflow}")
     pin = matches[0]
-    result = subprocess.run(["git", "-C", str(ROOT), "show", f"{pin}:{target}"], capture_output=True)
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "show", f"{pin}:{target}"], capture_output=True, check=False
+    )
     if result.returncode:
         raise ValueError(f"pin {pin} is unavailable locally; fetch full branch history before checking")
     if result.stdout != (ROOT / target).read_bytes():

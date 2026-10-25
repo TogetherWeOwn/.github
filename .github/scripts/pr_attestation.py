@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Shadow-only PR attestation validator. Stdlib; run with python3 -I.
 
 PR text is data, never code. No checkout of the target repository, subprocess,
@@ -9,6 +8,7 @@ this instrument is not a merge gate and has no enforce-mode switch.
 
 import html
 import json
+import logging
 import os
 import re
 import time
@@ -17,6 +17,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+LOGGER = logging.getLogger(__name__)
 SCHEMA_VERSION = 1
 # Central path floor: match real module names as well as directory layouts.
 # Word boundaries (snake/kebab/dot/CamelCase) avoid substrings such as authors,
@@ -43,7 +44,7 @@ TEST = re.compile(
     r"- (C[1-9][0-9]*) \| test=([^|]+) \| failed_before=(yes|no|not-run) \| proof=(.+)"
 )
 CHECK = re.compile(r"- \[([ xX])\] (D[1-8]): (.+)")
-PLACEHOLDER = re.compile(r"(?:<[^<>]+>|TODO|TBD|REPLACE_ME)", re.I)
+PLACEHOLDER = re.compile(r"(?:<[^<>]+>|TODO|TBD|REPLACE_ME)", re.IGNORECASE)
 SHA = re.compile(r"[a-f0-9]{40}")
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
@@ -457,8 +458,8 @@ def evaluate(api, event_name, event):
 def summary(report):
     lines = ["## PR attestation (shadow / WARN)", "",
              f"Observation: **{report['verdict']}**. No enforcement; this check never blocks.", "",
-             "Only declaration shape, path risk and changed-file references are checked. "
-             "Test execution, test quality and failed-before claims are NOT verified.", ""]
+             ("Only declaration shape, path risk and changed-file references are checked. "
+              "Test execution, test quality and failed-before claims are NOT verified."), ""]
     for issue in report.get("issues", []):
         lines.append(f"- Observation error: `{html.escape(issue)}`")
     for row in report.get("observations", []):
@@ -482,6 +483,8 @@ def main():
         # The exception text from an unknown error could contain untrusted body
         # data or credentials. Only our fixed ObservationError codes are safe.
         code = str(exc) if isinstance(exc, ObservationError) else "observation_runtime_error"
+        # Log only a fresh, sanitized exception; the original traceback can expose data.
+        LOGGER.error("PR attestation observation failed", exc_info=(ObservationError, ObservationError(code), None))
         report = {"schema_version": SCHEMA_VERSION, "mode": "warn", "verdict": "error",
                   "observations": [], "issues": [code]}
     print(json.dumps(report, sort_keys=True))
