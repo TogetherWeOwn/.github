@@ -38,12 +38,12 @@ class RealSemgrepContract(unittest.TestCase):
         if result.returncode != 0 or result.stdout.strip() != '1.133.0':
             raise RuntimeError('Requires working Semgrep 1.133.0: ' + result.stdout + result.stderr)
 
-    def scan(self, source, invalid_config=False):
+    def scan(self, source, invalid_config=False, filename='settings.py'):
         # Do not use test*/fixtures paths: the live rule intentionally excludes
         # those. The scanned input is a production-shaped synthetic source file.
         with tempfile.TemporaryDirectory(prefix='tier0-scan-') as tmp:
             root = Path(tmp)
-            target = root / 'src/settings.py'
+            target = root / 'src' / filename
             target.parent.mkdir()
             target.write_text(source)
             config = RULES
@@ -88,6 +88,89 @@ class RealSemgrepContract(unittest.TestCase):
         self.assertEqual(findings[0]['check_id'], 'tier0-no-hardcoded-credentials')
         self.assertEqual(findings[0]['start']['line'], 1)
         self.assertEqual(len(payload['paths']['scanned']), 1, 'fixture must not be excluded')
+
+    def test_prefixed_db_password_is_exactly_one_correct_finding(self):
+        result, payload = self.scan('DB_PASSWORD = "synthetic-not-a-real-credential-123456"\n')
+        self.assertEqual(payload.get('errors'), [])
+        self.assertEqual(result.returncode, 1, 'prefixed credentials must have exit 1')
+        findings = payload.get('results', [])
+        self.assertEqual(len(findings), 1, 'one prefixed assignment, one finding')
+        self.assertEqual(findings[0]['check_id'], 'tier0-no-hardcoded-credentials')
+        self.assertEqual(findings[0]['start']['line'], 1)
+        self.assertEqual(len(payload['paths']['scanned']), 1, 'fixture must not be excluded')
+
+    def test_attribute_password_is_exactly_one_correct_finding(self):
+        result, payload = self.scan('settings.password = "synthetic-not-a-real-credential-123456"\n')
+        self.assertEqual(payload.get('errors'), [])
+        self.assertEqual(result.returncode, 1, 'attribute credentials must have exit 1')
+        findings = payload.get('results', [])
+        self.assertEqual(len(findings), 1, 'one attribute assignment, one finding')
+        self.assertEqual(findings[0]['check_id'], 'tier0-no-hardcoded-credentials')
+        self.assertEqual(findings[0]['start']['line'], 1)
+        self.assertEqual(len(payload['paths']['scanned']), 1, 'fixture must not be excluded')
+
+    def assert_rule_fixture(self, source, filename, rule_id, expected):
+        result, payload = self.scan(source, filename=filename)
+        self.assertEqual(payload.get('errors'), [])
+        self.assertEqual(len(payload['paths']['scanned']), 1, 'fixture must not be excluded')
+        self.assertEqual(result.returncode, 1 if expected else 0,
+                         'findings, clean scans and CLI errors stay distinguishable')
+        # Semgrep also resolves destructured exec in the separate eval rule;
+        # each split-rule fixture asserts only its own rule's exact findings.
+        findings = [(finding['check_id'], finding['start']['line'])
+                    for finding in payload.get('results', []) if finding['check_id'] == rule_id]
+        self.assertEqual(findings, expected, 'exact rule, line and finding count required')
+
+    def test_javascript_and_typescript_eval_require_dynamic_input(self):
+        cases = (
+            ('dynamic', 'eval(userInput);\n', [('tier0-no-eval', 1)]),
+            ('literal', 'eval("1+1");\n', []),
+        )
+        for extension in ('js', 'ts'):
+            for fixture, source, expected in cases:
+                with self.subTest(language=extension, fixture=fixture):
+                    self.assert_rule_fixture(source, f'execute.{extension}', 'tier0-no-eval', expected)
+
+    def test_python_eval_requires_dynamic_input(self):
+        cases = (
+            ('dynamic', 'eval(user_input)\n', [('tier0-no-eval-python', 1)]),
+            ('literal', 'eval("1+1")\n', []),
+        )
+        for fixture, source, expected in cases:
+            with self.subTest(fixture=fixture):
+                self.assert_rule_fixture(source, 'execute.py', 'tier0-no-eval-python', expected)
+
+    def test_javascript_and_typescript_shell_exec_require_interpolation(self):
+        cases = (
+            ('qualified', 'const child_process = require("child_process");\n'
+             'child_process.exec(`ls ${d}`);\n',
+             [('tier0-no-shell-exec-interpolation', 2)]),
+            ('destructured', 'const { exec } = require("child_process");\n'
+             'exec(`ls ${d}`);\n', [('tier0-no-shell-exec-interpolation', 2)]),
+            ('fixed', 'const { execSync } = require("child_process");\n'
+             'execSync("fixed");\n', []),
+        )
+        for extension in ('js', 'ts'):
+            for fixture, source, expected in cases:
+                with self.subTest(language=extension, fixture=fixture):
+                    self.assert_rule_fixture(source, f'execute.{extension}',
+                                             'tier0-no-shell-exec-interpolation', expected)
+
+    def test_python_shell_exec_covers_call_popen_and_system(self):
+        cases = (
+            ('call', 'import subprocess\nsubprocess.call(cmd, shell=True)\n',
+             [('tier0-no-shell-exec-interpolation-python', 2)]),
+            ('popen', 'import subprocess\n'
+             'subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)\n',
+             [('tier0-no-shell-exec-interpolation-python', 2)]),
+            ('system', 'import os\nos.system(cmd)\n',
+             [('tier0-no-shell-exec-interpolation-python', 2)]),
+            ('argv', 'import subprocess\nsubprocess.call(["ls"])\n', []),
+        )
+        for fixture, source, expected in cases:
+            with self.subTest(fixture=fixture):
+                self.assert_rule_fixture(source, 'execute.py',
+                                         'tier0-no-shell-exec-interpolation-python', expected)
 
     def test_invalid_configuration_is_a_cli_error_not_a_finding(self):
         result, payload = self.scan('colour = "blue"\n', invalid_config=True)

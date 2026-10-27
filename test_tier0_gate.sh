@@ -17,7 +17,8 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 pass() { echo "PASS: $1"; }
 
 python3 - "$GATE" "$CALLER" <<'PY'
-import re, sys, yaml
+import re, shlex, sys, yaml
+from pathlib import Path
 
 gate_path, caller_path = sys.argv[1], sys.argv[2]
 gate = yaml.safe_load(open(gate_path))
@@ -291,6 +292,104 @@ check('TIER0_CHANGED: ' not in gate_text and 'TIER0_CHANGED_FILES: ' not in gate
       "no job passes the changed list through the environment")
 check('TIER0_CHANGED_FILE' in gate_text,
       "Gate 6 passes the list as TIER0_CHANGED_FILE")
+
+# 12. Review-round supply-chain contract. Missing installers/checkouts must
+#     fail too: checking only the entries that remain would pass a deletion.
+def integrity(cond, msg):
+    check(cond, f"review integrity: {msg}")
+
+requirements = {
+    'lint-types': ('lint', (('ruff', 'RUFF_VERSION'), ('mypy', 'MYPY_VERSION'))),
+    'unused-code': ('unused', (('vulture', 'VULTURE_VERSION'),)),
+    'security': ('security', (('semgrep', 'SEMGREP_VERSION'),
+                              ('setuptools', 'SETUPTOOLS_VERSION'))),
+}
+pip_installs = []
+run_blocks = []
+for job, spec in jobs.items():
+    for step in spec.get('steps', []):
+        script = (step.get('run') or '').replace('\\\n', ' ')
+        run_blocks.append(script)
+        for match in re.finditer(
+                r'(?m)^\s*(?:python[\d.]*\s+-m\s+)?pip[\d.]*\s+install\s+([^\n]+)', script):
+            command = re.split(r'\s+(?:\||&&|;)\s*', match[1], maxsplit=1)[0]
+            args = [arg for arg in shlex.split(command, comments=True)
+                    if not re.fullmatch(r'\d*>&\d+', arg)]
+            pip_installs.append((job, args))
+integrity(len(pip_installs) == 3 and
+          {job for job, _ in pip_installs} == set(requirements),
+          "exactly one pip installer per lint, unused and security job")
+for job, (family, packages) in requirements.items():
+    expected = f'.tier0-gate/tier0/requirements-{family}.txt'
+    installs = [args for owner, args in pip_installs if owner == job]
+    integrity(len(installs) == 1 and installs[0].count('-r') == 1 and
+              installs[0][installs[0].index('-r') + 1:installs[0].index('-r') + 2] == [expected] and
+              '--require-hashes' in installs[0] and
+              all(arg.startswith('-') or arg == expected for arg in installs[0]),
+              f"{job} pip uses --require-hashes -r {expected}, no inline packages")
+    path = Path(f'tier0/requirements-{family}.txt')
+    integrity(path.is_file(), f"{path} exists")
+    text = path.read_text().replace('\\\n', ' ') if path.is_file() else ''
+    for package, version_key in packages:
+        version = str(env_pins.get(version_key, ''))
+        entries = re.findall(rf'(?m)^\s*{re.escape(package)}==([^\s]+)([^\n]*)', text)
+        integrity(bool(re.fullmatch(r'\d+(?:\.\d+)+', version)) and
+                  len(entries) == 1 and entries[0][0] == version,
+                  f"{path} pins {package} to env.{version_key}")
+        integrity(len(entries) == 1 and bool(re.search(
+                  r'(?:^|\s)--hash(?:=|\s+)sha256:[0-9a-fA-F]{64}(?=\s|$)', entries[0][1])),
+                  f"{path} hashes {package}")
+
+for binary in ('actionlint', 'zizmor', 'gitleaks', 'squawk'):
+    version_key = binary.upper() + '_VERSION'
+    digest_key = binary.upper() + '_SHA256'
+    integrity(bool(re.fullmatch(r'[0-9a-fA-F]{64}', str(env_pins.get(digest_key, '')))),
+              f"{binary} has an env SHA-256 digest")
+    blocks = [script for script in run_blocks if any(
+        re.match(r'^\s*curl\s', line) and version_key in line
+        for line in script.splitlines())]
+    integrity(len(blocks) == 1, f"{binary} has one binary download block")
+    lines = blocks[0].splitlines() if len(blocks) == 1 else []
+    downloads = [(index, shlex.split(line)) for index, line in enumerate(lines)
+                 if re.match(r'^\s*curl\s', line) and version_key in line]
+    download_index, args = downloads[0] if len(downloads) == 1 else (-1, [])
+    artifact = args[args.index('-o') + 1] if '-o' in args and args.index('-o') + 1 < len(args) else ''
+    integrity(bool(artifact), f"{binary} download names its output artifact")
+    verified = [index for index, line in enumerate(lines)
+                if re.match(r'^\s*(?:echo|printf)\s', line) and artifact and artifact in line
+                and re.search(rf'\$(?:\{{{digest_key}\}}|{digest_key}\b)', line)
+                and re.search(r'\|\s*sha256sum\s+-c(?:\s|$)', line)]
+    integrity(len(verified) == 1,
+              f"{binary} verifies its artifact with env.{digest_key} and sha256sum -c")
+    verify_index = verified[0] if len(verified) == 1 else -1
+    integrity(download_index >= 0 and download_index < verify_index,
+              f"{binary} checksum follows its download")
+    consumers = [index for index, line in enumerate(lines) if (
+        artifact and artifact in line and
+        re.match(r'^\s*(?:sudo\s+)?(?:tar|unzip|install|mv|chmod)\s', line)) or
+        re.match(rf'^\s*(?:sudo\s+)?(?:\S*/)?{binary}(?:\s|$)', line)]
+    integrity(bool(consumers) and verify_index >= 0 and verify_index < min(consumers),
+              f"{binary} checksum precedes extraction or use")
+
+integrity(bool(re.fullmatch(r'[0-9a-fA-F]{40}', str(env_pins.get('TIER0_SELF_PIN', '')))),
+          "TIER0_SELF_PIN is exactly a 40-hex commit (freshness belongs to pincheck)")
+side_checkouts = [(job, step.get('with', {})) for job, spec in jobs.items()
+                  for step in spec.get('steps', [])
+                  if 'actions/checkout@' in step.get('uses', '') and
+                  step.get('with', {}).get('path') == '.tier0-gate']
+integrity(len(side_checkouts) == 3 and
+          {job for job, _ in side_checkouts} == set(requirements),
+          "exactly three .tier0-gate side-checkouts cover lint, unused and security")
+for job in requirements:
+    configs = [config for owner, config in side_checkouts if owner == job]
+    config = configs[0] if len(configs) == 1 else {}
+    integrity(len(configs) == 1 and config.get('repository') == 'TogetherWeOwn/.github',
+              f"{job} side-checkout uses the org rules repository")
+    integrity(config.get('ref') == '${{ env.TIER0_SELF_PIN }}',
+              f"{job} side-checkout uses env.TIER0_SELF_PIN")
+    expected = {'semgrep-rules', 'tier0'} if job == 'security' else {'tier0'}
+    integrity(set(str(config.get('sparse-checkout', '')).split()) == expected,
+              f"{job} side-checkout sparsely includes {sorted(expected)}")
 
 sys.exit(1 if errors else 0)
 PY
