@@ -17,6 +17,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github/workflows"
+TEMPLATES = ROOT / "workflow-templates"
+TEMPLATE_JOBS = ("lint", "test-web", "test-bot", "secret-scan")
 CHECKOUT = "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683"
 TARGETS = {
     ("changes", "detect"): {"fetch-depth": "0"},
@@ -34,13 +36,13 @@ AREAS = {"web": ["web/**"], "bot": ["bot/**"], "docs": ["*.md", "docs/**"]}
 FULL_RUN = ["package.json", "**/package.json", ".github/**", "shared/**"]
 
 
-def steps_in(workflow, job):
+def steps_in(workflow, job, root=WORKFLOWS):
     """Read the workflows' two-space job / six-space step block shape, not YAML.
 
     Scope every assertion to a real step so comments or a neighboring checkout
     cannot satisfy an input contract. General YAML validity belongs to actionlint.
     """
-    text = (WORKFLOWS / f"{workflow}.yml").read_text(encoding="utf-8")
+    text = (root / f"{workflow}.yml").read_text(encoding="utf-8")
     jobs = text.split("\njobs:\n", 1)[1]
     match = re.search(rf"(?m)^  {re.escape(job)}:\s*$", jobs)
     if match is None:
@@ -50,9 +52,9 @@ def steps_in(workflow, job):
     return [block[start:end] for start, end in zip(starts, starts[1:] + [len(block)])]
 
 
-def checkout_steps(workflow, job):
+def checkout_steps(workflow, job, root=WORKFLOWS):
     result = []
-    for step in steps_in(workflow, job):
+    for step in steps_in(workflow, job, root=root):
         uses = re.search(r"(?m)^\s*(?:- )?uses: (actions/checkout@[^\s#]+)", step)
         if uses is not None:
             inputs = dict(re.findall(r"(?m)^          ([\w-]+): ([^\n#]*?)(?:\s+#.*)?$", step))
@@ -104,6 +106,20 @@ class CheckoutCredentialTests(unittest.TestCase):
         self.assertEqual(checkout_steps("ci", "pr-attestation-selftest"), [(CHECKOUT, {
             "fetch-depth": "0", "persist-credentials": "false",
         })])
+
+    def test_starter_template_checkouts_explicitly_disable_persistence(self):
+        for job in TEMPLATE_JOBS:
+            with self.subTest(job=job):
+                checkouts = checkout_steps("starter-ci", job, root=TEMPLATES)
+                self.assertEqual(len(checkouts), 1)
+                self.assertEqual(checkouts[0][1].get("persist-credentials"), "false")
+
+    def test_starter_template_checkouts_keep_pinned_action(self):
+        for job in TEMPLATE_JOBS:
+            with self.subTest(job=job):
+                checkouts = checkout_steps("starter-ci", job, root=TEMPLATES)
+                self.assertEqual(len(checkouts), 1)
+                self.assertEqual(checkouts[0][0], CHECKOUT)
 
     def test_test_guard_api_token_remains_step_scoped(self):
         steps = steps_in("test-guard", "gate")
