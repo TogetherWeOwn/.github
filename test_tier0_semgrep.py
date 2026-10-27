@@ -142,13 +142,14 @@ class RealSemgrepContract(unittest.TestCase):
 
     def test_javascript_and_typescript_shell_exec_require_interpolation(self):
         cases = (
-            ('qualified', 'const child_process = require("child_process");\n'
-             'child_process.exec(`ls ${d}`);\n',
+            ('qualified', ('const child_process = require("child_process");\n'
+                           'child_process.exec(`ls ${d}`);\n'),
              [('tier0-no-shell-exec-interpolation', 2)]),
-            ('destructured', 'const { exec } = require("child_process");\n'
-             'exec(`ls ${d}`);\n', [('tier0-no-shell-exec-interpolation', 2)]),
-            ('fixed', 'const { execSync } = require("child_process");\n'
-             'execSync("fixed");\n', []),
+            ('destructured', ('const { exec } = require("child_process");\n'
+                             'exec(`ls ${d}`);\n'),
+             [('tier0-no-shell-exec-interpolation', 2)]),
+            ('fixed', ('const { execSync } = require("child_process");\n'
+                       'execSync("fixed");\n'), []),
         )
         for extension in ('js', 'ts'):
             for fixture, source, expected in cases:
@@ -160,8 +161,8 @@ class RealSemgrepContract(unittest.TestCase):
         cases = (
             ('call', 'import subprocess\nsubprocess.call(cmd, shell=True)\n',
              [('tier0-no-shell-exec-interpolation-python', 2)]),
-            ('popen', 'import subprocess\n'
-             'subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)\n',
+            ('popen', ('import subprocess\n'
+                       'subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)\n'),
              [('tier0-no-shell-exec-interpolation-python', 2)]),
             ('system', 'import os\nos.system(cmd)\n',
              [('tier0-no-shell-exec-interpolation-python', 2)]),
@@ -187,6 +188,41 @@ class RealSemgrepContract(unittest.TestCase):
                         f'import subprocess\nsubprocess.{function}({arguments})\n',
                         'execute.py', 'tier0-no-shell-exec-interpolation-python', expected,
                     )
+
+    def test_python_shell_exec_reports_truthy_and_unknown_shell_flags(self):
+        # Scan synthetic text only: none of these command strings is executed.
+        rule = 'tier0-no-shell-exec-interpolation-python'
+        functions = ('run', 'call', 'check_call', 'check_output', 'Popen')
+        expected = [(rule, line) for line in (2, 3, 4, 5, 6)]
+        for flag in ('True', '1', '-1', '"enabled"', 'use_shell'):
+            with self.subTest(shell=flag):
+                source = 'import subprocess\n' + ''.join(
+                    f'subprocess.{function}(command, shell={flag})\n'
+                    for function in functions
+                )
+                self.assert_rule_fixture(source, 'execute.py', rule, expected)
+
+    def test_python_shell_exec_reports_every_always_shell_helper(self):
+        rule = 'tier0-no-shell-exec-interpolation-python'
+        source = ('import os\nimport subprocess\n'
+                  'os.system(command)\n'
+                  'os.popen(command)\n'
+                  'subprocess.getoutput(command)\n'
+                  'subprocess.getstatusoutput(command)\n')
+        self.assert_rule_fixture(source, 'execute.py', rule,
+                                 [(rule, 3), (rule, 4), (rule, 5), (rule, 6)])
+
+    def test_python_shell_exec_allows_falsy_flags_and_plain_argv(self):
+        rule = 'tier0-no-shell-exec-interpolation-python'
+        functions = ('run', 'call', 'check_call', 'check_output', 'Popen')
+        for flag in ('False', '0', 'None', None):
+            with self.subTest(shell=flag):
+                keyword = '' if flag is None else f', shell={flag}'
+                source = 'import subprocess\n' + ''.join(
+                    f'subprocess.{function}(["fixed-program", argument]{keyword})\n'
+                    for function in functions
+                )
+                self.assert_rule_fixture(source, 'execute.py', rule, [])
 
     def test_invalid_configuration_is_a_cli_error_not_a_finding(self):
         result, payload = self.scan('colour = "blue"\n', invalid_config=True)

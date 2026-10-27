@@ -3,7 +3,11 @@
 Execute the actual YAML run blocks with real Git history, no scanners,
 installers, network or inherited credentials. Only job-local /tmp paths move.
 """
+import copy
+import os
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -241,6 +245,148 @@ exit 19
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertIn('failing closed', result.stdout)
                     self.assertFalse(self.changed.exists(), 'missing base must not list all files')
+
+
+class InstallerIntegrityContract(unittest.TestCase):
+    """Execute the embedded checker, never the caller's installer run blocks."""
+
+    @classmethod
+    def setUpClass(cls):
+        script = (ROOT / 'test_tier0_gate.sh').read_text()
+        _, start, body = script.partition("<<'PY'\n")
+        cls.checker, end, _ = body.partition('\nPY\n')
+        if not start or not end:
+            raise RuntimeError('The real embedded structural checker was not found')
+        cls.caller = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='tier0-installer-check-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        for directory in ('tier0', 'semgrep-rules', '.github/workflows'):
+            shutil.copytree(ROOT / directory, self.root / directory)
+        self.marker = self.root / 'caller-script-executed'
+
+    def check_caller(self, appended=''):
+        caller = copy.deepcopy(self.caller)
+        steps = caller['jobs']['tier-0-selftest']['steps']
+        installers = [step for step in steps
+                      if step.get('name') == 'Install the hashed selftest pins']
+        self.assertEqual(len(installers), 1, 'one compliant installer must be retained')
+        # Keep the original compliant installer; the extra command is YAML data.
+        # A marker would expose accidentally executing any caller run block.
+        installers[0]['run'] = (
+            f'printf executed > "{self.marker}"\n' + installers[0]['run'] + appended + '\n'
+        )
+        (self.root / '.github/workflows/ci.yml').write_text(yaml.safe_dump(caller))
+        result = subprocess.run(
+            [sys.executable, '-', '.github/workflows/tier-0-quality-gate.yml',
+             '.github/workflows/ci.yml'],
+            input=self.checker, cwd=self.root,
+            env={'PATH': os.environ['PATH'], 'HOME': str(self.root)},
+            text=True, capture_output=True, timeout=15, check=False,
+        )
+        self.assertFalse(self.marker.exists(), 'caller shell snippets must remain inert data')
+        return result
+
+    def assert_rejected(self, script):
+        result = self.check_caller(script)
+        self.assertEqual(result.returncode, 1, result.stderr or result.stdout[-2000:])
+        failures = [line for line in result.stdout.splitlines() if line.startswith('FAIL:')]
+        self.assertTrue(failures, 'rejection needs a checker diagnostic, not a crash')
+        self.assertTrue(all('review integrity: tier-0-selftest' in line for line in failures),
+                        '\n'.join(failures))
+
+    def test_current_hashed_selftest_installer_is_accepted(self):
+        result = self.check_caller()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_extra_unhashed_installers_are_rejected_in_every_spelling(self):
+        # Reverting pip global-option or subshell detection must fail these.
+        commands = (
+            ('plain', 'pip install'),
+            ('global-option', 'pip -q install'),
+            ('global-value-option', 'pip --timeout 1 install'),
+            ('subshell', '(pip install'),
+            ('subshell-global-option', '(pip -q install'),
+            ('python-module', 'python3 -m pip install'),
+            ('python-global-option', 'python3 -m pip --quiet install'),
+            ('python-subshell', '(python3 -m pip install'),
+            ('quoted-venv', '"$venv/bin/pip" install'),
+            ('quoted-venv-global-option', '"$venv/bin/pip" --no-input install'),
+            ('quoted-venv-subshell', '("$venv/bin/pip" install'),
+            ('quoted-python-module', '"$venv/bin/python" -m pip install'),
+            ('quoted-python-global-option', '"$venv/bin/python" -m pip -q install'),
+            ('chained-global-option', 'true&&pip -q install'),
+        )
+        for name, command in commands:
+            with self.subTest(installer=name):
+                script = command + ' --no-index fixture-not-installed'
+                if command.startswith('('):
+                    script += ')'
+                self.assert_rejected(script)
+
+    def test_hash_only_requirements_contract_cannot_be_weakened(self):
+        scripts = (
+            'pip install -r tier0/requirements-selftest.txt',
+            'pip install --require-hashes',
+            ('pip install --require-hashes -r tier0/requirements-selftest.txt '
+             'fixture-not-installed'),
+            'pip install --require-hashes -r missing-requirements.txt',
+        )
+        for script in scripts:
+            with self.subTest(installer=script):
+                self.assert_rejected(script)
+
+    def test_unsupported_global_options_fail_closed_even_with_hashes(self):
+        for executable in ('pip', '"$venv/bin/python" -m pip'):
+            with self.subTest(executable=executable):
+                self.assert_rejected(
+                    executable + ' --timeout 1 install --require-hashes '
+                    '-r tier0/requirements-selftest.txt'
+                )
+
+    def test_redirections_cannot_hide_installer_arguments(self):
+        scripts = (
+            'pip 2>/dev/null -q install --no-index fixture-not-installed',
+            ('pip install --require-hashes -r tier0/requirements-selftest.txt '
+             '2>/dev/null fixture-not-installed'),
+        )
+        for script in scripts:
+            with self.subTest(installer=script):
+                self.assert_rejected(script)
+
+    def test_malformed_installer_syntax_has_a_rejection_diagnostic(self):
+        self.assert_rejected('pip install "fixture-not-installed')
+
+    def test_hash_only_installers_are_accepted_across_supported_spellings(self):
+        commands = (
+            'pip install',
+            'pip -q install',
+            '(pip install',
+            'python3 -m pip install',
+            'python3 -m pip --quiet install',
+            '"$venv/bin/pip" --no-input install',
+            '"$venv/bin/python" -m pip -q install',
+        )
+        for command in commands:
+            with self.subTest(installer=command):
+                script = command + ' --require-hashes -r tier0/requirements-selftest.txt'
+                if command.startswith('('):
+                    script += ')'
+                result = self.check_caller(script)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_comments_and_quoted_command_text_are_not_installers(self):
+        scripts = (
+            '# pip -q install --no-index fixture-not-installed',
+            'printf "%s\\n" "pip -q install --no-index fixture-not-installed"',
+            'note="(pip install --no-index fixture-not-installed)"',
+        )
+        for script in scripts:
+            with self.subTest(text=script):
+                result = self.check_caller(script)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == '__main__':
