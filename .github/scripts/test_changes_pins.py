@@ -10,9 +10,10 @@ import re
 import subprocess
 import sys
 import tempfile
-import textwrap
 import unittest
 from unittest import mock
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 CI = ".github/workflows/ci.yml"
@@ -24,33 +25,15 @@ CHECKER = ".github/scripts/check_changes_pins.py"
 USES = "TogetherWeOwn/.github/.github/workflows/changes.yml@"
 
 
-def job_block(text, job):
-    jobs = text.split("\njobs:\n", 1)[1]
-    match = re.search(rf"(?ms)^  {re.escape(job)}:\n(.*?)(?=^  [\w-]+:|\Z)", jobs)
-    if match is None:
-        raise AssertionError(f"missing job {job}")
-    return match.group(1)
-
-
 def pincheck_commands():
-    """Read actual run steps, including the existing inline test-guard check."""
-    block = job_block((ROOT / CI).read_text(encoding="utf-8"), "pincheck")
-    lines = block.splitlines(keepends=True)
-    commands = []
-    for index, line in enumerate(lines):
-        match = re.match(r"        run: (.*)", line)
-        if match is None:
-            continue
-        value = match.group(1).strip()
-        if value in ("|", "|-", "|+"):
-            script = []
-            for following in lines[index + 1:]:
-                if following.strip() and not following.startswith("          "):
-                    break
-                script.append(following)
-            commands.append(textwrap.dedent("".join(script)))
-        else:
-            commands.append(value)
+    """Execute actual gate steps; dependency setup is separate from Git fixtures.
+
+    Fixtures inherit the test interpreter's installed, hash-pinned dependency.
+    The dependency-step contract below keeps setup mandatory in hosted CI.
+    """
+    workflow = yaml.safe_load((ROOT / CI).read_text(encoding="utf-8"))
+    commands = [step["run"] for step in workflow["jobs"]["pincheck"]["steps"]
+                if "run" in step and step.get("id") != "yaml-dependency"]
     if not commands:
         raise AssertionError("required pincheck has no executable run steps")
     return "\n".join(commands)
@@ -246,7 +229,32 @@ class ChangesPinTests(unittest.TestCase):
                         self.write(caller, "name: fixture\non: workflow_dispatch\njobs:\n"
                                    f"  changes:\n    {key}: {USES}{self.stale}\n"
                                    f"  {neighbor}:\n    uses: {USES}{self.current}\n")
-                        self.assert_rejected(caller, "40-character")
+                        reason = "invalid or duplicate workflow YAML" if "\t" in key + neighbor else "differs"
+                        self.assert_rejected(caller, reason)
+            self.write(caller, original)
+
+    def test_block_scalar_text_cannot_supply_active_pin(self):
+        for caller in (CI, TEMPLATE):
+            original = (self.repo / caller).read_text(encoding="utf-8")
+            for scalar in ("|", "|-", ">", ">-"):
+                with self.subTest(caller=caller, scalar=scalar):
+                    self.write(caller, "name: fixture\non: workflow_dispatch\njobs:\n"
+                               f"  changes:\n   uses: {USES}{self.stale}\n"
+                               f"   name: {scalar}\n    uses: {USES}{self.current}\n")
+                    self.assert_rejected(caller, "differs")
+            self.write(caller, original)
+
+    def test_duplicate_yaml_keys_cannot_hide_behind_valid_pin(self):
+        for caller in (CI, TEMPLATE):
+            original = (self.repo / caller).read_text(encoding="utf-8")
+            common = f"  changes:\n    uses: {USES}{self.current}\n"
+            variants = ["name: first\nname: second\njobs:\n" + common,
+                        "jobs:\n" + common + "  other:\n    name: first\n  other:\n    name: second\n",
+                        "jobs:\n" + common + "    name: first\n    name: second\n"]
+            for variant in variants:
+                with self.subTest(caller=caller, variant=variant[:50]):
+                    self.write(caller, variant)
+                    self.assert_rejected(caller, "40-character")
             self.write(caller, original)
 
     def test_hash_suffix_is_part_of_ref_not_a_comment(self):
@@ -261,17 +269,35 @@ class ChangesPinTests(unittest.TestCase):
                 self.assert_rejected(caller, "40-character")
                 self.write(caller, original)
 
-    def test_unsupported_mapping_shapes_fail_closed(self):
+    def test_alternate_mapping_shapes_check_the_actual_pin(self):
         for caller in (CI, TEMPLATE):
             original = (self.repo / caller).read_text(encoding="utf-8")
-            variants = [original.replace("\njobs:\n", '\n"jobs":\n'),
-                        original.replace("  changes:\n", '  "changes":\n'),
-                        original.replace("    uses: ", '    "uses": '),
-                        original.replace("    uses: ", "    uses : ")]
+            self.repin(caller, self.stale)
+            stale = (self.repo / caller).read_text(encoding="utf-8")
+            variants = [stale.replace("\njobs:\n", '\n"jobs":\n'),
+                        stale.replace("  changes:\n", '  "changes":\n'),
+                        stale.replace("    uses: ", '    "uses": '),
+                        stale.replace("    uses: ", "    uses : ")]
             for variant in variants:
                 with self.subTest(caller=caller, variant=variant[:80]):
                     self.write(caller, variant)
-                    self.assert_rejected(caller, "40-character")
+                    self.assert_rejected(caller, "differs")
+            self.write(caller, original)
+
+    def test_valid_quoted_keys_and_alternate_indentation_pass(self):
+        for caller in (CI, TEMPLATE):
+            self.write(caller, 'name: fixture\n"jobs":\n  "changes":\n'
+                       f'   "uses" : {USES}{self.current}\n'
+                       '   name: |\n    uses: this is scalar text, not a ref\n')
+        result = self.run_pincheck()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_unsafe_yaml_tags_are_rejected(self):
+        for caller in (CI, TEMPLATE):
+            original = (self.repo / caller).read_text(encoding="utf-8")
+            self.write(caller, 'name: !!python/tuple [not, a, workflow, tag]\njobs:\n'
+                       f'  changes:\n    uses: {USES}{self.current}\n')
+            self.assert_rejected(caller, "invalid or duplicate workflow YAML")
             self.write(caller, original)
 
     def test_missing_head_source_reports_head_read_failure(self):
@@ -342,16 +368,42 @@ class ChangesPinTests(unittest.TestCase):
                 if stage == "cat-file":
                     self.assertIn(CI, output.getvalue())
 
+    def assert_mandatory_collection(self, text):
+        jobs = yaml.safe_load(text)["jobs"]
+        gate = jobs["gate-selftest"]
+        self.assertNotIn("if", gate)
+        self.assertNotIn("continue-on-error", gate)
+        collectors = [step for step in gate["steps"]
+                      if step.get("run") == "python3 -I .github/scripts/test_changes_pins.py"]
+        self.assertEqual(len(collectors), 1)
+        self.assertNotIn("if", collectors[0])
+        self.assertNotIn("continue-on-error", collectors[0])
+        aggregate = jobs["ci-ok"]
+        self.assertIn("gate-selftest", aggregate["needs"])
+        self.assertEqual(aggregate["if"], "always()")
+        self.assertTrue(any("sys.exit(1)" in step.get("run", "") for step in aggregate["steps"]))
+
     def test_new_suite_is_always_collected_by_required_gate(self):
-        text = (ROOT / CI).read_text(encoding="utf-8")
-        gate = job_block(text, "gate-selftest")
-        self.assertRegex(gate, r"(?m)^        run: python3 -I \.github/scripts/test_changes_pins\.py[ \t]*$")
-        self.assertNotIn("continue-on-error:", gate)
-        self.assertNotRegex(gate, r"(?m)^\s*(?:- )?if:")
-        aggregate = job_block(text, "ci-ok")
-        self.assertRegex(aggregate, r"needs: \[[^\n]*\bgate-selftest\b")
-        self.assertIn("if: always()", aggregate)
-        self.assertIn("sys.exit(1)", aggregate)
+        self.assert_mandatory_collection((ROOT / CI).read_text(encoding="utf-8"))
+
+    def test_collection_rejects_alternate_optional_key_spellings(self):
+        original = (ROOT / CI).read_text(encoding="utf-8")
+        run = "        run: python3 -I .github/scripts/test_changes_pins.py\n"
+        for key, value in [("if ", "github.event_name == 'workflow_dispatch'"),
+                           ('"if"', "github.event_name == 'workflow_dispatch'"),
+                           ("'if'", "github.event_name == 'workflow_dispatch'"),
+                           ("continue-on-error ", "true"),
+                           ('"continue-on-error"', "true"),
+                           ("'continue-on-error'", "true")]:
+            for scope in ("step", "job"):
+                with self.subTest(key=key, scope=scope):
+                    if scope == "step":
+                        variant = original.replace(run, run + f"        {key}: {value}\n")
+                    else:
+                        variant = original.replace("  gate-selftest:\n",
+                                                   f"  gate-selftest:\n    {key}: {value}\n")
+                    with self.assertRaises(AssertionError):
+                        self.assert_mandatory_collection(variant)
 
     def test_stale_test_guard_still_fails(self):
         self.write(GUARD, "changed guard\n")
@@ -368,12 +420,34 @@ class ChangesPinTests(unittest.TestCase):
         self.assertIn("test-guard-pincheck: no pinned test-guard.yml", result.stdout)
         self.assertNotIn("changes-pincheck:", result.stdout)
 
+    def test_yaml_dependency_is_required_before_both_consumers(self):
+        jobs = yaml.safe_load((ROOT / CI).read_text(encoding="utf-8"))["jobs"]
+        consumers = {"pincheck": "python3 -I .github/scripts/check_changes_pins.py",
+                     "gate-selftest": "python3 -I .github/scripts/test_changes_pins.py"}
+        for job, command in consumers.items():
+            steps = jobs[job]["steps"]
+            installs = [(index, step) for index, step in enumerate(steps)
+                        if step.get("id") == "yaml-dependency"]
+            self.assertEqual(len(installs), 1)
+            index, install = installs[0]
+            self.assertLess(index, next(i for i, step in enumerate(steps) if step.get("run") == command))
+            self.assertNotIn("if", install)
+            self.assertNotIn("continue-on-error", install)
+            for required in ("-m venv", "--require-hashes", "--only-binary=:all:",
+                             ".github/scripts/requirements-pincheck.txt", "$GITHUB_PATH"):
+                self.assertIn(required, install["run"])
+        requirements = (ROOT / ".github/scripts/requirements-pincheck.txt").read_text(encoding="utf-8")
+        self.assertIn("PyYAML==6.0.3", requirements)
+        self.assertEqual(len(re.findall(r"--hash=sha256:[0-9a-f]{64}", requirements)), 2)
+        self.assertEqual(yaml.__version__, "6.0.3")
+
     def test_pincheck_failure_reaches_ci_ok(self):
-        block = job_block((ROOT / CI).read_text(encoding="utf-8"), "ci-ok")
-        self.assertRegex(block, r"needs: \[[^\n]*\bpincheck\b")
-        self.assertIn("if: always()", block)
-        self.assertIn('sys.exit(1)', block)
-        self.assertNotIn("continue-on-error", job_block((ROOT / CI).read_text(encoding="utf-8"), "pincheck"))
+        jobs = yaml.safe_load((ROOT / CI).read_text(encoding="utf-8"))["jobs"]
+        aggregate = jobs["ci-ok"]
+        self.assertIn("pincheck", aggregate["needs"])
+        self.assertEqual(aggregate["if"], "always()")
+        self.assertTrue(any("sys.exit(1)" in step.get("run", "") for step in aggregate["steps"]))
+        self.assertNotIn("continue-on-error", jobs["pincheck"])
 
 
 if __name__ == "__main__":

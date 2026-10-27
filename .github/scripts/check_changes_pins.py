@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""Verify both changes.yml callers carry HEAD's source; needs full Git history."""
+"""Verify both changes.yml callers carry HEAD's source; needs full Git history.
+
+Install the hash-pinned requirements-pincheck.txt before running with python -I.
+"""
 
 from pathlib import Path
 import re
 import subprocess
 import sys
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ".github/workflows/changes.yml"
@@ -12,43 +17,51 @@ CALLERS = (".github/workflows/ci.yml", "workflow-templates/starter-ci.yml")
 REPIN = "repin uses: to a fetchable commit carrying HEAD's changes.yml"
 
 
+class UniqueSafeLoader(yaml.SafeLoader):
+    """Reject ambiguous mappings instead of silently taking the last key."""
+
+    def construct_mapping(self, node, deep=False):
+        self.flatten_mapping(node)
+        keys = set()
+        for key_node, _ in node.value:
+            if not isinstance(key_node, yaml.ScalarNode):
+                raise ValueError("workflow mapping keys must be scalars")
+            key = self.construct_object(key_node, deep=deep)
+            if key in keys:
+                raise ValueError("duplicate workflow mapping key")
+            keys.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
+def load_workflow(text):
+    workflow = yaml.load(text, Loader=UniqueSafeLoader)
+    if not isinstance(workflow, dict):
+        raise ValueError("workflow must be a mapping")
+    return workflow
+
+
 def git(*args):
     return subprocess.run(["git", "-C", str(ROOT), *args],
                           capture_output=True, timeout=30)
 
 
-def plain_mapping_keys(lines):
-    """Fail closed on quoted, spaced, duplicate or merge keys, not parse YAML."""
-    keys = []
-    for line in lines:
-        match = re.fullmatch(r" *([A-Za-z_][A-Za-z0-9_-]*):(?:[ \t].*)?", line)
-        if match is None:
-            return False
-        keys.append(match.group(1))
-    return len(keys) == len(set(keys))
-
-
 def check(caller, current):
-    # Support only the shipped plain-key, two-space mapping shape. Validate
-    # boundaries before selecting uses; an unsupported neighbor must not leak in.
-    text = (ROOT / caller).read_text(encoding="utf-8")
-    roots = re.findall(r"(?m)^[^\s#].*$", text)
-    sections = re.findall(r"(?ms)^jobs:\n(.*?)(?=^[^\s#]|\Z)", text)
-    jobs = sections[0] if len(sections) == 1 and plain_mapping_keys(roots) else ""
-    headers = re.findall(r"(?m)^  [^\s#].*$", jobs)
-    blocks = re.findall(r"(?ms)^  changes:[ \t]*(?:#.*)?\n(.*?)(?=^  [^\s#]|\Z)", jobs)
-    block = blocks[0] if len(blocks) == 1 and plain_mapping_keys(headers) else ""
-    fields = re.findall(r"(?m)^    [^\s#].*$", block)
-    uses = re.findall(r"(?m)^    uses: (.+)$", block) if plain_mapping_keys(fields) else []
+    error = f"expected one active changes.yml uses: with a 40-character immutable SHA; {REPIN}"
+    try:
+        workflow = load_workflow((ROOT / caller).read_text(encoding="utf-8"))
+    except (yaml.YAMLError, ValueError) as exc:
+        # Parser exceptions can include source text; keep diagnostics structural.
+        raise ValueError(f"{error}; invalid or duplicate workflow YAML") from exc
+    jobs = workflow.get("jobs")
+    changes = jobs.get("changes") if isinstance(jobs, dict) else None
+    uses = changes.get("uses") if isinstance(changes, dict) else None
     match = re.fullmatch(
-        r"(?P<quote>['\"]?)TogetherWeOwn/\.github/\.github/workflows/changes\.yml@"
-        r"(?P<pin>[0-9a-f]{40})(?P=quote)(?:[ \t]+#.*)?[ \t]*",
-        uses[0],
-    ) if len(uses) == 1 else None
+        r"TogetherWeOwn/\.github/\.github/workflows/changes\.yml@([0-9a-f]{40})",
+        uses,
+    ) if isinstance(uses, str) else None
     if match is None:
-        raise ValueError(f"expected one active changes.yml uses: with a 40-character immutable SHA "
-                         f"and plain two-space mapping keys; {REPIN}")
-    pin = match.group("pin")
+        raise ValueError(error)
+    pin = match.group(1)
     # Same-PR and other branch commits are valid; do not require main ancestry.
     if git("cat-file", "-e", f"{pin}^{{commit}}").returncode:
         git("fetch", "origin", pin)
