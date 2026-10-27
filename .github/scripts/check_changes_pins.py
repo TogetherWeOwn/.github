@@ -17,19 +17,37 @@ def git(*args):
                           capture_output=True, timeout=30)
 
 
+def plain_mapping_keys(lines):
+    """Fail closed on quoted, spaced, duplicate or merge keys, not parse YAML."""
+    keys = []
+    for line in lines:
+        match = re.fullmatch(r" *([A-Za-z_][A-Za-z0-9_-]*):(?:[ \t].*)?", line)
+        if match is None:
+            return False
+        keys.append(match.group(1))
+    return len(keys) == len(set(keys))
+
+
 def check(caller, current):
-    # Like the other workflow contracts, use the shipped two-space job shape.
-    # Scope to the active changes job: a comment or neighboring job is not a pin.
-    jobs = (ROOT / caller).read_text(encoding="utf-8").partition("\njobs:\n")[2]
-    blocks = re.findall(r"(?ms)^  changes:[ \t]*\n(.*?)(?=^  [\w-]+:|\Z)", jobs)
-    uses = re.findall(r"(?m)^    uses: (.+)$", blocks[0]) if len(blocks) == 1 else []
+    # Support only the shipped plain-key, two-space mapping shape. Validate
+    # boundaries before selecting uses; an unsupported neighbor must not leak in.
+    text = (ROOT / caller).read_text(encoding="utf-8")
+    roots = re.findall(r"(?m)^[^\s#].*$", text)
+    sections = re.findall(r"(?ms)^jobs:\n(.*?)(?=^[^\s#]|\Z)", text)
+    jobs = sections[0] if len(sections) == 1 and plain_mapping_keys(roots) else ""
+    headers = re.findall(r"(?m)^  [^\s#].*$", jobs)
+    blocks = re.findall(r"(?ms)^  changes:[ \t]*(?:#.*)?\n(.*?)(?=^  [^\s#]|\Z)", jobs)
+    block = blocks[0] if len(blocks) == 1 and plain_mapping_keys(headers) else ""
+    fields = re.findall(r"(?m)^    [^\s#].*$", block)
+    uses = re.findall(r"(?m)^    uses: (.+)$", block) if plain_mapping_keys(fields) else []
     match = re.fullmatch(
         r"(?P<quote>['\"]?)TogetherWeOwn/\.github/\.github/workflows/changes\.yml@"
-        r"(?P<pin>[0-9a-f]{40})(?P=quote)[ \t]*(?:#.*)?",
+        r"(?P<pin>[0-9a-f]{40})(?P=quote)(?:[ \t]+#.*)?[ \t]*",
         uses[0],
     ) if len(uses) == 1 else None
     if match is None:
-        raise ValueError(f"expected one active changes.yml uses: with a 40-character immutable SHA; {REPIN}")
+        raise ValueError(f"expected one active changes.yml uses: with a 40-character immutable SHA "
+                         f"and plain two-space mapping keys; {REPIN}")
     pin = match.group("pin")
     # Same-PR and other branch commits are valid; do not require main ancestry.
     if git("cat-file", "-e", f"{pin}^{{commit}}").returncode:

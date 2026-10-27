@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Execute the required pincheck in local Git fixtures, without credentials."""
 
+from contextlib import redirect_stdout
+import importlib.util
+import io
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 CI = ".github/workflows/ci.yml"
@@ -112,8 +115,9 @@ class ChangesPinTests(unittest.TestCase):
         self.write(caller, text)
 
     def run_pincheck(self):
-        return subprocess.run(["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c",
-                               pincheck_commands()], cwd=self.repo, env=self.env,
+        # Unspecified Linux run steps use bash -e, without nounset/pipefail.
+        return subprocess.run(["bash", "-e", "-c", pincheck_commands()],
+                              cwd=self.repo, env=self.env,
                               text=True, capture_output=True, timeout=20)
 
     def assert_rejected(self, caller, reason):
@@ -233,6 +237,122 @@ class ChangesPinTests(unittest.TestCase):
                 self.assert_rejected(caller, "40-character")
                 self.write(caller, original)
 
+    def test_quoted_or_spaced_neighbor_cannot_supply_active_pin(self):
+        for caller in (CI, TEMPLATE):
+            original = (self.repo / caller).read_text(encoding="utf-8")
+            for key in ('"uses"', "'uses'", "uses ", "uses\t"):
+                for neighbor in ('"neighbor"', "'neighbor'", "neighbor ", "neighbor\t"):
+                    with self.subTest(caller=caller, key=key, neighbor=neighbor):
+                        self.write(caller, "name: fixture\non: workflow_dispatch\njobs:\n"
+                                   f"  changes:\n    {key}: {USES}{self.stale}\n"
+                                   f"  {neighbor}:\n    uses: {USES}{self.current}\n")
+                        self.assert_rejected(caller, "40-character")
+            self.write(caller, original)
+
+    def test_hash_suffix_is_part_of_ref_not_a_comment(self):
+        branch = self.current + "#mutable-ref"
+        self.git("check-ref-format", "--branch", branch)
+        self.git("update-ref", "refs/heads/" + branch, self.stale)
+        self.assertEqual(self.git("rev-parse", branch), self.stale)
+        for caller in (CI, TEMPLATE):
+            with self.subTest(caller=caller):
+                original = (self.repo / caller).read_text(encoding="utf-8")
+                self.repin(caller, branch)
+                self.assert_rejected(caller, "40-character")
+                self.write(caller, original)
+
+    def test_unsupported_mapping_shapes_fail_closed(self):
+        for caller in (CI, TEMPLATE):
+            original = (self.repo / caller).read_text(encoding="utf-8")
+            variants = [original.replace("\njobs:\n", '\n"jobs":\n'),
+                        original.replace("  changes:\n", '  "changes":\n'),
+                        original.replace("    uses: ", '    "uses": '),
+                        original.replace("    uses: ", "    uses : ")]
+            for variant in variants:
+                with self.subTest(caller=caller, variant=variant[:80]):
+                    self.write(caller, variant)
+                    self.assert_rejected(caller, "40-character")
+            self.write(caller, original)
+
+    def test_missing_head_source_reports_head_read_failure(self):
+        (self.repo / SOURCE).unlink()
+        self.commit()
+        result = self.run_pincheck()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"cannot read HEAD:{SOURCE}", result.stdout)
+        self.assertIn("restore", result.stdout)
+
+    def load_checker(self):
+        spec = importlib.util.spec_from_file_location("changes_pins", self.repo / CHECKER)
+        checker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        checker.ROOT = self.repo
+        return checker
+
+    def test_git_timeouts_are_bounded_and_reported(self):
+        checker = self.load_checker()
+        real_run = subprocess.run
+        for stage in ("show", "cat-file"):
+            with self.subTest(stage=stage):
+                def run(command, **kwargs):
+                    self.assertEqual(kwargs.get("timeout"), 30)
+                    if command[3] == stage:
+                        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+                    return real_run(command, env=self.env, **kwargs)
+
+                output = io.StringIO()
+                with mock.patch.object(checker.subprocess, "run", side_effect=run):
+                    with redirect_stdout(output):
+                        self.assertEqual(checker.main(), 1)
+                self.assertIn("timed out after 30 seconds", output.getvalue())
+                if stage == "cat-file":
+                    self.assertIn(CI, output.getvalue())
+
+    def test_failed_head_read_cannot_succeed_with_matching_stdout(self):
+        checker = self.load_checker()
+        real_run = subprocess.run
+        current = (self.repo / SOURCE).read_bytes()
+
+        def run(command, **kwargs):
+            if command[-2:] == ["show", f"HEAD:{SOURCE}"]:
+                return subprocess.CompletedProcess(command, 1, current, b"injected read error")
+            return real_run(command, env=self.env, **kwargs)
+
+        output = io.StringIO()
+        with mock.patch.object(checker.subprocess, "run", side_effect=run):
+            with redirect_stdout(output):
+                self.assertEqual(checker.main(), 1)
+        self.assertIn(f"cannot read HEAD:{SOURCE}", output.getvalue())
+
+    def test_git_os_errors_are_reported_for_head_and_caller(self):
+        checker = self.load_checker()
+        real_run = subprocess.run
+        for stage in ("show", "cat-file"):
+            with self.subTest(stage=stage):
+                def run(command, **kwargs):
+                    if command[3] == stage:
+                        raise OSError("injected Git execution failure")
+                    return real_run(command, env=self.env, **kwargs)
+
+                output = io.StringIO()
+                with mock.patch.object(checker.subprocess, "run", side_effect=run):
+                    with redirect_stdout(output):
+                        self.assertEqual(checker.main(), 1)
+                self.assertIn("injected Git execution failure", output.getvalue())
+                if stage == "cat-file":
+                    self.assertIn(CI, output.getvalue())
+
+    def test_new_suite_is_always_collected_by_required_gate(self):
+        text = (ROOT / CI).read_text(encoding="utf-8")
+        gate = job_block(text, "gate-selftest")
+        self.assertRegex(gate, r"(?m)^        run: python3 -I \.github/scripts/test_changes_pins\.py[ \t]*$")
+        self.assertNotIn("continue-on-error:", gate)
+        self.assertNotRegex(gate, r"(?m)^\s*(?:- )?if:")
+        aggregate = job_block(text, "ci-ok")
+        self.assertRegex(aggregate, r"needs: \[[^\n]*\bgate-selftest\b")
+        self.assertIn("if: always()", aggregate)
+        self.assertIn("sys.exit(1)", aggregate)
+
     def test_stale_test_guard_still_fails(self):
         self.write(GUARD, "changed guard\n")
         self.commit()
@@ -245,6 +365,8 @@ class ChangesPinTests(unittest.TestCase):
         self.write(WRAPPER, "jobs: {}\n")
         result = self.run_pincheck()
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("test-guard-pincheck: no pinned test-guard.yml", result.stdout)
+        self.assertNotIn("changes-pincheck:", result.stdout)
 
     def test_pincheck_failure_reaches_ci_ok(self):
         block = job_block((ROOT / CI).read_text(encoding="utf-8"), "ci-ok")
