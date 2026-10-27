@@ -146,6 +146,17 @@ exit 2
                                      result.stdout + result.stderr)
                     self.assertEqual(result.returncode, scan_exit,
                                      'clean, findings and CLI errors stay distinguishable')
+        for scan_exit in (0, 1, 2):
+            with self.subTest(config='absent-rules', cached=True, scan_exit=scan_exit):
+                self.log.write_text('')
+                (self.root / '.tier0-gate/semgrep-rules').mkdir(parents=True, exist_ok=True)
+                result = self.run_step(steps[0], TIER0_SEMGREP_CONFIG='absent-rules',
+                                       SCAN_EXIT=str(scan_exit))
+                calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+                self.assertEqual(calls, [['version'], ['scan', '--config', '.tier0-gate/semgrep-rules', '--error']],
+                                 result.stdout + result.stderr)
+                self.assertEqual(result.returncode, scan_exit,
+                                 'clean, findings and CLI errors stay distinguishable')
 
 
 if __name__ == '__main__':
