@@ -155,6 +155,12 @@ check('github.event.pull_request.draft' in (tier0.get('if') or ''),
       "tier-0 caller skips drafts like the other heavy jobs")
 ciok = cjobs.get('ci-ok', {})
 check('tier-0' in (ciok.get('needs') or []), "ci-ok needs the tier-0 caller")
+check('tier-0-selftest' in (ciok.get('needs') or []),
+      "ci-ok needs tier-0-selftest (regressions cannot merge green)")
+pin_steps = [s for s in cjobs.get('pincheck', {}).get('steps', [])
+             if s.get('name') == 'Tier-0 self-pin must carry the current gate files']
+check(len(pin_steps) == 1 and bool(pin_steps[0].get('run')),
+      "pincheck runs the Tier-0 self-pin freshness check")
 
 # 7. Supply-chain hygiene (dogfood): every checkout drops credentials, and
 #    no run: script expands a ${{ }} expression inline (env indirection only).
@@ -340,6 +346,54 @@ for job, (family, packages) in requirements.items():
                   r'(?:^|\s)--hash(?:=|\s+)sha256:[0-9a-fA-F]{64}(?=\s|$)', entries[0][1])),
                   f"{path} hashes {package}")
 
+# The caller's selftest is an installer too, including quoted venv executables
+# that do not begin with bare pip or python -m pip.
+selftest_installs = []
+for step in cjobs.get('tier-0-selftest', {}).get('steps', []):
+    script = (step.get('run') or '').replace('\\\n', ' ')
+    for line in script.splitlines():
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=';&|<>')
+        lexer.whitespace_split = True
+        words = list(lexer)
+        for index, word in enumerate(words[:-1]):
+            if re.fullmatch(r'(?:.*/)?pip[\d.]*', word) and words[index + 1] == 'install':
+                args = []
+                for arg in words[index + 2:]:
+                    if re.fullmatch(r'[;&|<>]+', arg):
+                        if re.search(r'[<>]', arg) and args and args[-1].isdigit():
+                            args.pop()  # file descriptor, not a package argument
+                        break
+                    args.append(arg)
+                selftest_installs.append(args)
+integrity(bool(selftest_installs), "tier-0-selftest has pip installers (including venv paths)")
+selftest_requirements = []
+for index, args in enumerate(selftest_installs):
+    files = []
+    valid = True
+    remaining = iter(args)
+    for arg in remaining:
+        if arg == '-r':
+            path = next(remaining, '')
+            valid = valid and bool(path) and Path(path).is_file()
+            files.append(path)
+        else:
+            valid = valid and arg in {'--require-hashes', '--disable-pip-version-check',
+                                      '-q', '--quiet', '--no-input', '--no-cache-dir'}
+    integrity(valid and bool(files) and '--require-hashes' in args,
+              f"tier-0-selftest pip install {index + 1} uses --require-hashes and only -r files")
+    selftest_requirements.extend(files)
+integrity('tier0/requirements-selftest.txt' in selftest_requirements,
+          "tier-0-selftest installs tier0/requirements-selftest.txt")
+selftest_path = Path('tier0/requirements-selftest.txt')
+integrity(selftest_path.is_file(), f"{selftest_path} exists")
+selftest_text = selftest_path.read_text().replace('\\\n', ' ') if selftest_path.is_file() else ''
+pyyaml = re.findall(r'(?im)^\s*pyyaml==([^\s]+)([^\n]*)', selftest_text)
+integrity(len(pyyaml) == 1 and pyyaml[0][0] == '6.0.2',
+          f"{selftest_path} pins pyyaml==6.0.2")
+integrity(len(pyyaml) == 1 and bool(re.search(
+          r'(?:^|\s)--hash(?:=|\s+)sha256:[0-9a-fA-F]{64}(?=\s|$)', pyyaml[0][1])),
+          f"{selftest_path} hashes PyYAML with SHA-256")
+
 for binary in ('actionlint', 'zizmor', 'gitleaks', 'squawk'):
     version_key = binary.upper() + '_VERSION'
     digest_key = binary.upper() + '_SHA256'
@@ -390,6 +444,8 @@ for job in requirements:
     expected = {'semgrep-rules', 'tier0'} if job == 'security' else {'tier0'}
     integrity(set(str(config.get('sparse-checkout', '')).split()) == expected,
               f"{job} side-checkout sparsely includes {sorted(expected)}")
+    integrity(config.get('sparse-checkout-cone-mode') is False,
+              f"{job} side-checkout disables cone mode (root files stay excluded)")
 
 sys.exit(1 if errors else 0)
 PY

@@ -172,6 +172,22 @@ class RealSemgrepContract(unittest.TestCase):
                 self.assert_rule_fixture(source, 'execute.py',
                                          'tier0-no-shell-exec-interpolation-python', expected)
 
+    def test_python_shell_exec_covers_run_check_output_and_check_call(self):
+        cases = (
+            ('command', 'cmd, shell=True', [('tier0-no-shell-exec-interpolation-python', 2)]),
+            ('interpolated', 'f"ls {directory}", shell=True',
+             [('tier0-no-shell-exec-interpolation-python', 2)]),
+            ('argv', '["ls", directory]', []),
+            ('argv_without_shell', '["ls", directory], shell=False', []),
+        )
+        for function in ('run', 'check_output', 'check_call'):
+            for fixture, arguments, expected in cases:
+                with self.subTest(function=function, fixture=fixture):
+                    self.assert_rule_fixture(
+                        f'import subprocess\nsubprocess.{function}({arguments})\n',
+                        'execute.py', 'tier0-no-shell-exec-interpolation-python', expected,
+                    )
+
     def test_invalid_configuration_is_a_cli_error_not_a_finding(self):
         result, payload = self.scan('colour = "blue"\n', invalid_config=True)
         self.assertNotIn(result.returncode, (0, 1), 'CLI errors must not masquerade as findings')
