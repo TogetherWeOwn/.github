@@ -352,19 +352,39 @@ selftest_installs = []
 for step in cjobs.get('tier-0-selftest', {}).get('steps', []):
     script = (step.get('run') or '').replace('\\\n', ' ')
     for line in script.splitlines():
-        lexer = shlex.shlex(line, posix=True, punctuation_chars=';&|<>')
+        # Bounded token inspection, not shell execution. Parentheses delimit a
+        # subshell just like ;/&& delimit commands; quotes retain venv paths.
+        lexer = shlex.shlex(line, posix=True, punctuation_chars='();&|<>')
         lexer.whitespace_split = True
-        words = list(lexer)
+        try:
+            words = list(lexer)
+        except ValueError:
+            integrity(False, 'tier-0-selftest has unsupported installer shell syntax')
+            continue
         for index, word in enumerate(words[:-1]):
-            if re.fullmatch(r'(?:.*/)?pip[\d.]*', word) and words[index + 1] == 'install':
+            if re.fullmatch(r'(?:.*/)?pip[\d.]*', word):
                 args = []
-                for arg in words[index + 2:]:
-                    if re.fullmatch(r'[;&|<>]+', arg):
-                        if re.search(r'[<>]', arg) and args and args[-1].isdigit():
-                            args.pop()  # file descriptor, not a package argument
+                for position in range(index + 1, len(words)):
+                    arg = words[position]
+                    if re.fullmatch(r'[();&|<>]+', arg):
+                        if re.search(r'[<>]', arg):
+                            if args and args[-1].isdigit():
+                                args.pop()  # file descriptor, not a package argument
+                            # Only a trailing redirection is supported. Never
+                            # silently drop arguments that follow its operand.
+                            tail = words[position + 1:]
+                            integrity('install' in args and bool(tail) and
+                                      not re.fullmatch(r'[();&|<>]+', tail[0]) and
+                                      (len(tail) == 1 or
+                                       re.fullmatch(r'[();&|]+', tail[1])),
+                                      'tier-0-selftest pip supports only trailing redirections')
                         break
                     args.append(arg)
-                selftest_installs.append(args)
+                if 'install' in args:
+                    # Include global options in the same strict allowlist as
+                    # install options. Unknown/value-taking options fail closed.
+                    args.remove('install')
+                    selftest_installs.append(args)
 integrity(bool(selftest_installs), "tier-0-selftest has pip installers (including venv paths)")
 selftest_requirements = []
 for index, args in enumerate(selftest_installs):
