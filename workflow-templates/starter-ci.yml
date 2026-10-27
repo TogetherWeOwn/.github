@@ -85,6 +85,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - run: echo "lint goes here (always runs)"
       # Tier 0 (CI-STANDARD rule 21): workflow lint, checksum-pinned.
       - name: Lint workflows (actionlint)
@@ -104,6 +106,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - run: echo "web tests go here"
 
   test-bot:
@@ -114,6 +118,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - run: echo "bot tests go here"
 
   secret-scan:
@@ -123,6 +129,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - run: echo "secret scan goes here (always runs)"
 
   ci-ok:
