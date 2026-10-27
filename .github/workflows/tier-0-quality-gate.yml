@@ -30,7 +30,11 @@
 #     and skips silently when neither matches — a docs-only PR runs the
 #     workflow-checks job and skips the other five.
 #   - All third-party actions are pinned by SHA (repo rule). Scanner
-#     binaries are pinned by version in `env:` below; bump them in one place.
+#     binaries are pinned by version AND SHA-256 digest in `env:` below;
+#     bump them in one place and re-verify each digest against the release
+#     checksums (actionlint, gitleaks) or the release-asset API digest
+#     (zizmor, squawk). Pip installs use --require-hashes against the
+#     gate-owned hashed requirements in tier0/ (see the env: block).
 #
 # SUPPLY-CHAIN HYGIENE (dogfooded: this file is clean under Gate 4 itself):
 #   - Every checkout sets `persist-credentials: false` — no job needs to
@@ -40,6 +44,16 @@
 #     job outputs and contexts cross into shell only through step `env:`
 #     (the zizmor-sanctioned indirection), so a crafted PR body, branch
 #     name or caller input cannot become shell code.
+#   - Every downloaded binary is verified with `sha256sum -c` against its
+#     `env:` digest before it runs; every pip install uses --require-hashes
+#     against a gate-owned hashed requirements file. Versions stay readable
+#     in `env:`; hashes live beside them (binaries) or in tier0/ (pip).
+#   - Gate-owned files (semgrep-rules/, tier0/) are read from a sparse
+#     checkout of this repo pinned at TIER0_SELF_PIN below (same pattern
+#     as pr-attestation.yml / review-rules.yml), never from the caller's
+#     tree: external adopters do not carry them. The pin names a commit
+#     whose semgrep-rules/ and tier0/ match HEAD (enforced by pincheck in
+#     ci.yml); after a squash-merge repin it to the merge commit on main.
 #
 # FEEDING ci-ok: this workflow ends in exactly one aggregator, `tier-0-ok`
 # (`if: ${{ !cancelled() }}`), so a consumer repo wires ONE context into its
@@ -71,7 +85,7 @@ on:
         default: 10
         type: number
       semgrep_config:
-        description: "Semgrep rules path (org starter pack lives at semgrep-rules/ in the gate repo)"
+        description: "Caller-owned Semgrep rules path in the caller repo; overrides the gate-owned starter pack when present, otherwise the gate-owned pack is used"
         required: false
         default: semgrep-rules
         type: string
@@ -81,13 +95,25 @@ permissions:
 
 env:
   ACTIONLINT_VERSION: "1.7.12"
+  ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8" # actionlint_1.7.12_checksums.txt
   ZIZMOR_VERSION: "1.30.1"
+  ZIZMOR_SHA256: "e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a" # release-asset API digest
   GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" # gitleaks_8.30.1_checksums.txt
   SQUAWK_VERSION: "2.68.0"
+  SQUAWK_SHA256: "53070672cbe0b8adce55372931d4435cc2395edd8b5736819a82e483b08d4d09" # release-asset API digest
   SEMGREP_VERSION: "1.133.0"
   SETUPTOOLS_VERSION: "80.9.0" # Semgrep's tracing dependency still imports pkg_resources.
   RUFF_VERSION: "0.17.2"
   MYPY_VERSION: "2.4.0"
+  VULTURE_VERSION: "2.16"
+  # Pinned commit carrying the gate-owned files checked out into .tier0-gate
+  # (semgrep-rules/, tier0/). Must stay a commit whose trees match HEAD for
+  # those paths; pincheck fails otherwise. Refresh after squash-merges.
+  TIER0_SELF_PIN: "dea6f2e725923753ae21f1c563bef627b69e2402"
+  # Pip installs reference tier0/requirements-<job>.txt with --require-hashes;
+  # the files pin these same versions with per-file hashes (regenerate with
+  # pip-compile after any bump; see the header of each file).
 
 jobs:
   # ------------------------------------------------------------------
@@ -192,6 +218,16 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+      # Gate-owned hashed pip pins (this workflow's own repo+SHA: external
+      # callers do not carry tier0/). Same pinned sparse pattern as
+      # pr-attestation.yml.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: TogetherWeOwn/.github
+          ref: ${{ env.TIER0_SELF_PIN }}
+          path: .tier0-gate
+          sparse-checkout: tier0
+          persist-credentials: false
       - name: TypeScript — tsc --strict plus typescript-eslint
         if: ${{ !cancelled() && needs.detect.outputs.has-ts == 'true' }}
         run: |
@@ -232,7 +268,7 @@ jobs:
         if: ${{ !cancelled() && needs.detect.outputs.has-python == 'true' }}
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check -q "ruff==${RUFF_VERSION}" "mypy==${MYPY_VERSION}" 2>&1 | tail -1
+          python3 -m pip install --disable-pip-version-check --require-hashes -q -r .tier0-gate/tier0/requirements-lint.txt 2>&1 | tail -1
           failed=0
           if [[ ! -e pyproject.toml && ! -e ruff.toml && ! -e .ruff.toml ]]; then echo "no ruff config — running ruff defaults"; fi
           python3 -m ruff check . || failed=1
@@ -299,6 +335,16 @@ jobs:
             git diff --name-only --no-renames --diff-filter=d "$base" HEAD -- > /tmp/tier0-changed.txt || git ls-files > /tmp/tier0-changed.txt
           fi
           echo "changed files: $(wc -l < /tmp/tier0-changed.txt)"
+      # Gate-owned hashed pip pins (this workflow's own repo+SHA: external
+      # callers do not carry tier0/). Same pinned sparse pattern as
+      # pr-attestation.yml.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: TogetherWeOwn/.github
+          ref: ${{ env.TIER0_SELF_PIN }}
+          path: .tier0-gate
+          sparse-checkout: tier0
+          persist-credentials: false
       - name: TypeScript — knip
         if: ${{ !cancelled() && needs.detect.outputs.has-ts == 'true' }}
         run: |
@@ -311,7 +357,7 @@ jobs:
         if: ${{ !cancelled() && needs.detect.outputs.has-python == 'true' }}
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check -q vulture 2>&1 | tail -1
+          python3 -m pip install --disable-pip-version-check --require-hashes -q -r .tier0-gate/tier0/requirements-unused.txt 2>&1 | tail -1
           grep '\.py$' /tmp/tier0-changed.txt > /tmp/changed-py.txt || true
           if [[ ! -s /tmp/changed-py.txt ]]; then echo "no changed Python files — skipping"; exit 0; fi
           # Intentional word-splitting of a file list below.
@@ -442,8 +488,10 @@ jobs:
         run: |
           set -euo pipefail
           curl -sSfL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -o /tmp/actionlint.tgz
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tgz" | sha256sum -c -
           tar -xzf /tmp/actionlint.tgz -C /tmp actionlint && sudo mv /tmp/actionlint /usr/local/bin/
           curl -sSfL "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/zizmor-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/zizmor.tgz
+          echo "${ZIZMOR_SHA256}  /tmp/zizmor.tgz" | sha256sum -c -
           rm -rf /tmp/zizmor-ex && mkdir -p /tmp/zizmor-ex
           tar -xzf /tmp/zizmor.tgz -C /tmp/zizmor-ex
           sudo mv "$(find /tmp/zizmor-ex -name zizmor -type f | head -1)" /usr/local/bin/zizmor
@@ -526,6 +574,19 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Gate-owned files (this workflow's own repo+SHA): the org Semgrep
+      # starter pack and the hashed pip pins. External callers do not carry
+      # them, so the caller's tree is only an override, never the default.
+      # Same pinned sparse pattern as pr-attestation.yml.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: TogetherWeOwn/.github
+          ref: ${{ env.TIER0_SELF_PIN }}
+          path: .tier0-gate
+          sparse-checkout: |
+            semgrep-rules
+            tier0
+          persist-credentials: false
       - name: Compute changed files for this job
         if: ${{ !cancelled() }}
         env:
@@ -556,6 +617,7 @@ jobs:
         run: |
           set -euo pipefail
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tgz
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -
           tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks && sudo mv /tmp/gitleaks /usr/local/bin/
           if [[ "$TIER0_EVENT" == "pull_request" ]]; then
             git cat-file -e "$TIER0_PR_BASE" || { echo "base not in local history; failing closed"; exit 1; }
@@ -569,15 +631,24 @@ jobs:
           TIER0_SEMGREP_CONFIG: ${{ inputs.semgrep_config }}
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check -q "semgrep==${SEMGREP_VERSION}" "setuptools==${SETUPTOOLS_VERSION}" 2>&1 | tail -1
+          python3 -m pip install --disable-pip-version-check --require-hashes -q -r .tier0-gate/tier0/requirements-security.txt 2>&1 | tail -1
           semgrep_scripts="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
           export PATH="$semgrep_scripts:$HOME/.local/bin:$PATH"
           command -v semgrep
           semgrep --version
+          # The caller's folder is an override; the gate-owned starter pack
+          # from .tier0-gate is the default; the registry is the last resort.
           if [[ -d "$TIER0_SEMGREP_CONFIG" ]]; then
-            semgrep scan --config "$TIER0_SEMGREP_CONFIG" --error --exclude='*.test.*' --exclude='test*' .
+            rules_dir="$TIER0_SEMGREP_CONFIG"
+          elif [[ -d .tier0-gate/semgrep-rules ]]; then
+            rules_dir=".tier0-gate/semgrep-rules"
           else
-            echo "rules folder '$TIER0_SEMGREP_CONFIG' not present — running Semgrep registry defaults (adopt the org rules folder to enable)"
+            rules_dir=""
+          fi
+          if [[ -n "$rules_dir" ]]; then
+            semgrep scan --config "$rules_dir" --error --exclude='*.test.*' --exclude='test*' .
+          else
+            echo "no org rules folder present — running Semgrep registry defaults"
             semgrep scan --config auto --error .
           fi
       - name: squawk on changed SQL migrations
@@ -585,6 +656,7 @@ jobs:
         run: |
           set -euo pipefail
           curl -sSfL "https://github.com/sbdchd/squawk/releases/download/v${SQUAWK_VERSION}/squawk-linux-x64" -o /tmp/squawk
+          echo "${SQUAWK_SHA256}  /tmp/squawk" | sha256sum -c -
           chmod +x /tmp/squawk && sudo mv /tmp/squawk /usr/local/bin/
           grep 'migrations\?/.*\.sql$' /tmp/tier0-changed.txt > /tmp/changed-sql.txt || true
           fail=0

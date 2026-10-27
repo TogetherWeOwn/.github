@@ -66,7 +66,13 @@ false-positive budget on day one.
   environment limit), `TIER0_COVERAGE_THRESHOLD`,
   `TIER0_MUTATION_BUDGET_MIN`, `TIER0_ENABLE_MUTATION`. Fails under
   threshold or on surviving mutants.
-- `semgrep-rules/` — copy the templates, name the repo's helpers/sinks.
+- `semgrep-rules/` — optional override, not a copy target. Gate 5 scans
+  with the gate-owned org starter pack by default (sparsely checked out
+  from this repo at the `TIER0_SELF_PIN` commit, so adopters get it with
+  zero files). Only add a caller-owned `semgrep-rules/` (or set
+  `semgrep_config:`) to replace the pack wholesale. Copy just the
+  templates to name the repo's helpers/sinks, then point
+  `semgrep_config:` at the copy.
 
 ## Limits
 
@@ -78,3 +84,11 @@ false-positive budget on day one.
   or knip.
 - Mutation coverage starts when the first repo adopts `.tier0-tests`;
   until then Gate 6 reports its own absence.
+- Supply chain: gate-downloaded scanner binaries are verified against
+  pinned SHA-256 digests before they run, and gate-owned pip packages
+  install with `--require-hashes` from `tier0/requirements-<job>.txt`.
+  Version bumps re-verify digests and regenerate the hashed files (see
+  the header of each file); the readable versions stay in the
+  workflow `env:` block. `TIER0_SELF_PIN` must keep naming a commit
+  whose `semgrep-rules/` and `tier0/` match HEAD (`pincheck` enforces
+  this); after a squash-merge, repin it to the merge commit on main.

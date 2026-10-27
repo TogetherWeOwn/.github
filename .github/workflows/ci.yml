@@ -167,6 +167,26 @@ jobs:
             exit 1
           fi
           echo "test-guard-pincheck: pin $PIN carries the current reusable"
+      - name: Tier-0 self-pin must carry the current gate files
+        run: |-
+          PIN="$(grep -o 'TIER0_SELF_PIN: "[0-9a-f]\{40\}"' .github/workflows/tier-0-quality-gate.yml | head -1 | cut -d'"' -f2)"
+          if [ -z "$PIN" ]; then
+            echo "::error::tier-0-pincheck: no TIER0_SELF_PIN: \"<sha>\" in tier-0-quality-gate.yml"
+            exit 1
+          fi
+          # Same repin flow as test-guard: the pin may name a commit on the
+          # PR branch; after a squash-merge with branch deletion, repin to
+          # the merge commit on main.
+          git fetch origin "$PIN" 2>/dev/null || true
+          if ! git cat-file -e "$PIN^{commit}" 2>/dev/null; then
+            echo "::error::tier-0-pincheck: pin $PIN is not fetchable (branch deleted?) — repin TIER0_SELF_PIN to a commit on main carrying semgrep-rules/ and tier0/"
+            exit 1
+          fi
+          if ! git diff --quiet "$PIN" HEAD -- semgrep-rules tier0; then
+            echo "::error::tier-0-pincheck: pin $PIN is stale for semgrep-rules/ or tier0/; repin TIER0_SELF_PIN to the commit carrying them"
+            exit 1
+          fi
+          echo "tier-0-pincheck: pin $PIN carries the current gate files"
 
   # Regression tests for the embedded test-guard gate (see the script).
   # Light (~30s) and always-on so gate changes can never merge red.
@@ -191,6 +211,27 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - run: python3 -m unittest discover -s .github/scripts -p 'test_pr_size*.py'
+
+  # Regression tests for the Tier-0 reusable gate: the structural shell
+  # contract, the file/tool hermetic suites, and the real-scanner suite
+  # against the pinned Semgrep. Light and always-on (no paths filter —
+  # this job feeds required `ci-ok`) so a gate regression can never
+  # merge green.
+  tier-0-selftest:
+    name: tier-0 selftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Structural contract and hermetic suites
+        run: |
+          python3 -m pip install --disable-pip-version-check -q "pyyaml==6.0.2" 2>&1 | tail -1
+          bash test_tier0_gate.sh
+          python3 -m unittest test_tier0_files test_tier0_tools
+      - name: Real-scanner suite with the pinned Semgrep
+        run: |
+          python3 -m pip install --disable-pip-version-check -q "semgrep==1.133.0" "setuptools==80.9.0" 2>&1 | tail -1
+          python3 -m unittest -v test_tier0_semgrep
 
   gradual-promote-selftest:
     name: gradual-promote selftest
@@ -236,7 +277,7 @@ jobs:
 
   ci-ok:
     name: ci-ok
-    needs: [changes, full_run, lint, test-web, test-bot, secret-scan, pincheck, gate-selftest, pr-size-selftest, gradual-promote-selftest, tier-0]
+    needs: [changes, full_run, lint, test-web, test-bot, secret-scan, pincheck, gate-selftest, pr-size-selftest, tier-0-selftest, gradual-promote-selftest, tier-0]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
