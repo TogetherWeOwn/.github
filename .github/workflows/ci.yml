@@ -124,8 +124,8 @@ jobs:
           persist-credentials: false
       - run: echo "secret scan goes here (always runs)"
 
-  # The test-guard wrapper calls the reusable by pinned path+ref; a
-  # forgotten repin means CI keeps exercising a stale gate. Light and
+  # The test-guard wrapper and both changes callers pin reusable sources;
+  # a forgotten repin means CI keeps exercising stale code. Light and
   # always-on (no paths filter — this job feeds required `ci-ok`).
   pincheck:
     name: pincheck
@@ -157,6 +157,8 @@ jobs:
             exit 1
           fi
           echo "test-guard-pincheck: pin $PIN carries the current reusable"
+      - name: Changes callers must carry the current reusable
+        run: python3 -I .github/scripts/check_changes_pins.py
 
   # Regression tests for the embedded test-guard gate (see the script).
   # Light (~30s) and always-on so gate changes can never merge red.
@@ -171,6 +173,8 @@ jobs:
       - run: bash .github/scripts/test-guard-selftest.sh
       - name: Checkout credentials and offline change-detection contracts
         run: python3 -I .github/scripts/test_checkout_credentials.py
+      - name: Required reusable pincheck regressions
+        run: python3 -I .github/scripts/test_changes_pins.py
 
   # Unit tests for the org PR-size labeller (stdlib unittest, seconds),
   # including the static check that every caller job in the shipped
