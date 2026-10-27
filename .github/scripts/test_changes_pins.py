@@ -441,13 +441,45 @@ class ChangesPinTests(unittest.TestCase):
         self.assertEqual(len(re.findall(r"--hash=sha256:[0-9a-f]{64}", requirements)), 2)
         self.assertEqual(yaml.__version__, "6.0.3")
 
-    def test_pincheck_failure_reaches_ci_ok(self):
-        jobs = yaml.safe_load((ROOT / CI).read_text(encoding="utf-8"))["jobs"]
+    def assert_mandatory_pincheck(self, text):
+        jobs = yaml.safe_load(text)["jobs"]
+        pincheck = jobs["pincheck"]
+        self.assertNotIn("if", pincheck)
+        self.assertNotIn("continue-on-error", pincheck)
+        for step in pincheck["steps"]:
+            self.assertNotIn("if", step)
+            self.assertNotIn("continue-on-error", step)
         aggregate = jobs["ci-ok"]
         self.assertIn("pincheck", aggregate["needs"])
         self.assertEqual(aggregate["if"], "always()")
+        self.assertNotIn("continue-on-error", aggregate)
+        for step in aggregate["steps"]:
+            self.assertNotIn("if", step)
+            self.assertNotIn("continue-on-error", step)
         self.assertTrue(any("sys.exit(1)" in step.get("run", "") for step in aggregate["steps"]))
-        self.assertNotIn("continue-on-error", jobs["pincheck"])
+
+    def test_pincheck_failure_reaches_ci_ok(self):
+        self.assert_mandatory_pincheck((ROOT / CI).read_text(encoding="utf-8"))
+
+    def test_pincheck_rejects_skipped_or_optional_enforcement(self):
+        original = (ROOT / CI).read_text(encoding="utf-8")
+        for key, value in [("if", "github.event_name == 'workflow_dispatch'"),
+                           ("if ", "github.event_name == 'workflow_dispatch'"),
+                           ('"if"', "github.event_name == 'workflow_dispatch'"),
+                           ("continue-on-error", "true"),
+                           ("continue-on-error ", "true"),
+                           ('"continue-on-error"', "true")]:
+            for target in ("job", "Wrapper pin must carry the current reusable",
+                           "Changes callers must carry the current reusable"):
+                with self.subTest(key=key, target=target):
+                    if target == "job":
+                        variant = original.replace("  pincheck:\n",
+                                                   f"  pincheck:\n    {key}: {value}\n")
+                    else:
+                        line = f"      - name: {target}\n"
+                        variant = original.replace(line, line + f"        {key}: {value}\n")
+                    with self.assertRaises(AssertionError):
+                        self.assert_mandatory_pincheck(variant)
 
 
 if __name__ == "__main__":
