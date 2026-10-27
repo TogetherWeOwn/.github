@@ -57,7 +57,18 @@ def checkout_steps(workflow, job, root=WORKFLOWS):
     for step in steps_in(workflow, job, root=root):
         uses = re.search(r"(?m)^\s*(?:- )?uses: (actions/checkout@[^\s#]+)", step)
         if uses is not None:
-            inputs = dict(re.findall(r"(?m)^          ([\w-]+): ([^\n#]*?)(?:\s+#.*)?$", step))
+            inputs = {}
+            with_block = re.search(r"(?m)^        with:\s*$", step)
+            if with_block is not None:
+                lines = step[with_block.end():].splitlines()
+                entries = []
+                for line in lines:
+                    if line.strip() and not line.startswith("          "):
+                        break
+                    entries.append(line)
+                inputs = dict(
+                    re.findall(r"(?m)^          ([\w-]+): ([^\n#]*?)(?:\s+#.*)?$", "\n".join(entries))
+                )
             result.append((uses.group(1), inputs))
     return result
 
@@ -120,6 +131,39 @@ class CheckoutCredentialTests(unittest.TestCase):
                 checkouts = checkout_steps("starter-ci", job, root=TEMPLATES)
                 self.assertEqual(len(checkouts), 1)
                 self.assertEqual(checkouts[0][0], CHECKOUT)
+
+    def test_checkout_inputs_come_only_from_the_with_mapping(self):
+        fixture = textwrap.dedent("""\
+            name: fixture
+
+            jobs:
+              env-only:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+                    env:
+                      persist-credentials: false
+                      fetch-depth: 0
+              with-then-env:
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+                    with:
+                      persist-credentials: false
+                      fetch-depth: 0
+                    env:
+                      persist-credentials: true
+                      fetch-depth: 99
+                      EXAMPLE_FLAG: enabled
+            """)
+        with tempfile.TemporaryDirectory(prefix="checkout-parser-scope-") as temporary:
+            root = Path(temporary)
+            (root / "parser-scope.yml").write_text(fixture, encoding="utf-8")
+            self.assertEqual(checkout_steps("parser-scope", "env-only", root=root),
+                             [(CHECKOUT, {})])
+            self.assertEqual(checkout_steps("parser-scope", "with-then-env", root=root),
+                             [(CHECKOUT, {"persist-credentials": "false",
+                                           "fetch-depth": "0"})])
 
     def test_test_guard_api_token_remains_step_scoped(self):
         steps = steps_in("test-guard", "gate")
