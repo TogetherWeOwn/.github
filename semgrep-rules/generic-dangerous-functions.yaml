@@ -67,17 +67,27 @@ rules:
   - id: tier0-no-shell-exec-interpolation-python
     languages: [python]
     severity: WARNING
-    message: "Shell execution with interpolated input — prefer argv arrays / shlex.join over string commands."
+    message: "Shell-enabled command execution — prefer argv arrays with shell disabled."
     metadata:
       tier0: "live"
     patterns:
       - pattern-either:
           - pattern: os.system(...)
-          - pattern: subprocess.run(..., shell=True, ...)
-          - pattern: subprocess.call(..., shell=True, ...)
-          - pattern: subprocess.check_call(..., shell=True, ...)
-          - pattern: subprocess.check_output(..., shell=True, ...)
-          - pattern: subprocess.Popen(..., shell=True, ...)
+          - pattern: os.popen(...)
+          - pattern: subprocess.getoutput(...)
+          - pattern: subprocess.getstatusoutput(...)
+          - patterns:
+              - pattern-either:
+                  - pattern: subprocess.run(..., shell=$SHELL, ...)
+                  - pattern: subprocess.call(..., shell=$SHELL, ...)
+                  - pattern: subprocess.check_call(..., shell=$SHELL, ...)
+                  - pattern: subprocess.check_output(..., shell=$SHELL, ...)
+                  - pattern: subprocess.Popen(..., shell=$SHELL, ...)
+              # Non-literal flags may enable a shell too; do not report clean
+              # merely because the caller uses 1 or another truthy value.
+              - pattern-not: $FUNC(..., shell=False, ...)
+              - pattern-not: $FUNC(..., shell=0, ...)
+              - pattern-not: $FUNC(..., shell=None, ...)
     paths:
       exclude:
         - "*.test.*"

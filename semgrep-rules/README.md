@@ -6,8 +6,11 @@ A rule that guesses at repo-specific names (authz helpers, grant writes)
 cannot clear that bar blind, so those ship as `paths:`-scoped templates
 each repo enables by naming its own functions — not as generic regexes.
 
-- `generic-dangerous-functions.yaml` — live: `eval`, shell-exec with
-  string interpolation. Language-scoped, low FP by construction.
+- `generic-dangerous-functions.yaml` — live, language-scoped: dynamic `eval`,
+  interpolated JavaScript/TypeScript shell commands, and Python shell-enabled
+  command execution. Python covers always-shell helpers and explicit `shell=`
+  flags unless statically `False`, `0` or `None`; unknown flags are conservative
+  findings. Argv calls without a shell flag are not shell sinks.
 - `generic-secrets-in-code.yaml` — live: hardcoded credential assignments
   outside test fixtures.
 - `template-authz-helper.yaml` — DISABLED template (stub callee matches
