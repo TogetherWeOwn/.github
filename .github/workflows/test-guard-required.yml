@@ -48,9 +48,11 @@ jobs:
     # Full pinned self-reference (not ./...): ruleset required
     # workflows execute from this repo at a pinned ref, and only the
     # full path+ref form is documented to resolve there. Pin to a reachable
-    # main commit carrying the reusable; a pre-merge SHA can stop resolving
-    # after squash merge and branch deletion. Repin on reusable updates.
-    uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@866275517a9875f02110f946411401db8907ec8a
+    # reviewed commit carrying the reusable. The current source is retained on
+    # fix/checkout-credential-source across squash merge; normalize to the main
+    # squash commit afterward. Retain source refs needed by queued/rerun/rollback
+    # workflows even after current callers have been repinned.
+    uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@773ee91a904b9e1b65eddaaad4400d36e05fa717
     # Private repos run the gate on the self-hosted pool (no Actions
     # spend); public repos stay on GitHub-hosted. Per-repo warn callers
     # pass their own pool instead (see TEST-GUARD.md).
