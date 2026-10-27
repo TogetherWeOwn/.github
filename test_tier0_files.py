@@ -74,6 +74,42 @@ class FileExecutionContract(unittest.TestCase):
             text=True, capture_output=True, timeout=15, check=False,
         )
 
+    def test_self_pincheck_reads_the_workflow_pin_and_checks_both_directories(self):
+        caller = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())
+        matches = [step for step in caller['jobs']['pincheck']['steps']
+                   if step.get('name') == 'Tier-0 self-pin must carry the current gate files']
+        self.assertEqual(len(matches), 1, 'one real self-pin freshness step required')
+        script = matches[0]['run']
+        paths = ('semgrep-rules/example.yaml', 'tier0/requirements-example.txt')
+        for path in paths:
+            self.write(path, 'before\n')
+        pin = self.commit()
+        workflow = '.github/workflows/tier-0-quality-gate.yml'
+        self.write(workflow, f'env:\n  TIER0_SELF_PIN: "{pin}"\n')
+        self.commit()
+        result = self.run_step(script)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        # A missing directory in git diff's pathspec would let its stale pin
+        # pass. Repinning to the commit carrying that directory must recover.
+        for path in paths:
+            with self.subTest(path=path):
+                self.write(path, 'after\n')
+                current = self.commit()
+                result = self.run_step(script)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.write(workflow, f'env:\n  TIER0_SELF_PIN: "{current}"\n')
+                self.commit()
+                result = self.run_step(script)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        for invalid_pin in ('', '0' * 40):
+            with self.subTest(pin=invalid_pin or 'missing'):
+                self.write(workflow, f'env:\n  TIER0_SELF_PIN: "{invalid_pin}"\n')
+                self.commit()
+                result = self.run_step(script)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def generators(self, commands):
         self.write('.tier0-generators', commands)
         self.commit()
