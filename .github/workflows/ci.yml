@@ -225,22 +225,27 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - name: Install the hashed selftest pins
+        run: |
+          set -euo pipefail
+          # A venv, not user-site: the scanner suite scrubs HOME, which hides
+          # user-site modules from the semgrep entry point. Every package is
+          # hashed (--require-hashes), and installing the security file also
+          # proves the gate's own pins install. Outside the workspace so no
+          # suite walks it.
+          venv="$RUNNER_TEMP/tier0-selftest-venv"
+          python3 -m venv "$venv"
+          "$venv/bin/pip" install --disable-pip-version-check --require-hashes -q -r tier0/requirements-security.txt -r tier0/requirements-selftest.txt 2>&1 | tail -1
+          echo "$venv/bin" >> "$GITHUB_PATH"
       - name: Structural contract and hermetic suites
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check -q "pyyaml==6.0.2" 2>&1 | tail -1
           bash test_tier0_gate.sh
           python3 -m unittest test_tier0_files test_tier0_tools
       - name: Real-scanner suite with the pinned Semgrep
         run: |
           set -euo pipefail
-          # A venv, not user-site: the scanner suite scrubs HOME, which hides
-          # user-site modules from the semgrep entry point. The hashed
-          # requirements file also proves the gate's security pins install.
-          python3 -m venv .tier0-selftest-venv
-          .tier0-selftest-venv/bin/pip install --disable-pip-version-check --require-hashes -q -r tier0/requirements-security.txt 2>&1 | tail -1
-          export PATH="$PWD/.tier0-selftest-venv/bin:$PATH"
-          export SEMGREP_BIN="$PWD/.tier0-selftest-venv/bin/semgrep"
+          export SEMGREP_BIN="$RUNNER_TEMP/tier0-selftest-venv/bin/semgrep"
           command -v semgrep
           semgrep --version
           python3 -m unittest -v test_tier0_semgrep

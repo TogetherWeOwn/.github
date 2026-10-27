@@ -54,6 +54,9 @@
 #     tree: external adopters do not carry them. The pin names a commit
 #     whose semgrep-rules/ and tier0/ match HEAD (enforced by pincheck in
 #     ci.yml); after a squash-merge repin it to the merge commit on main.
+#     Non-cone mode: cone mode always adds this repo's root files (its
+#     own test_tier0_*.py), which Gate 1 would then lint in every
+#     adopter's workspace.
 #
 # FEEDING ci-ok: this workflow ends in exactly one aggregator, `tier-0-ok`
 # (`if: ${{ !cancelled() }}`), so a consumer repo wires ONE context into its
@@ -227,6 +230,7 @@ jobs:
           ref: ${{ env.TIER0_SELF_PIN }}
           path: .tier0-gate
           sparse-checkout: tier0
+          sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: TypeScript — tsc --strict plus typescript-eslint
         if: ${{ !cancelled() && needs.detect.outputs.has-ts == 'true' }}
@@ -344,6 +348,7 @@ jobs:
           ref: ${{ env.TIER0_SELF_PIN }}
           path: .tier0-gate
           sparse-checkout: tier0
+          sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: TypeScript — knip
         if: ${{ !cancelled() && needs.detect.outputs.has-ts == 'true' }}
@@ -586,6 +591,7 @@ jobs:
           sparse-checkout: |
             semgrep-rules
             tier0
+          sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Compute changed files for this job
         if: ${{ !cancelled() }}
