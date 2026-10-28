@@ -357,7 +357,30 @@ class InstallerIntegrityContract(unittest.TestCase):
                 self.assert_rejected(script)
 
     def test_malformed_installer_syntax_has_a_rejection_diagnostic(self):
-        self.assert_rejected('pip install "fixture-not-installed')
+        scripts = (
+            'pip install "fixture-not-installed',
+            '(python3 -m pip install "fixture-not-installed',
+            '"$venv/bin/pip" install "fixture-not-installed',
+            'printf "%s\\n" "unterminated',
+        )
+        for script in scripts:
+            with self.subTest(text=script):
+                self.assert_rejected(script)
+
+    def test_hash_only_installers_keep_supported_trailing_redirections(self):
+        install = ' install --require-hashes -r tier0/requirements-selftest.txt'
+        scripts = (
+            'pip' + install + ' >/dev/null',
+            'pip -q' + install + ' 2>&1',
+            'python3 -m pip' + install + ' 2>/dev/null',
+            '"$venv/bin/pip"' + install + ' > "pip"',
+            '"$venv/bin/python" -m pip' + install + ' > ";"',
+            'pip' + install + ' 2>/dev/null;echo pip -q install inert',
+        )
+        for script in scripts:
+            with self.subTest(installer=script):
+                result = self.check_caller(script)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_hash_only_installers_are_accepted_across_supported_spellings(self):
         commands = (
@@ -376,6 +399,72 @@ class InstallerIntegrityContract(unittest.TestCase):
                     script += ')'
                 result = self.check_caller(script)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_unquoted_installer_words_in_ordinary_arguments_are_not_installers(self):
+        # Scanning every pip token confuses echo/printf/Python argv with commands.
+        scripts = (
+            'printf "%s\\n" pip -q install --no-index fixture-not-installed',
+            'echo pip -q install --no-index fixture-not-installed',
+            'printf "%s\\n" python3 -m pip -q install --no-index fixture-not-installed',
+            'echo python3 -m pip -q install --no-index fixture-not-installed',
+            'echo "$venv/bin/pip" -q install --no-index fixture-not-installed',
+            'printf "%s\\n" "$venv/bin/python" -m pip install fixture-not-installed',
+            'python3 -c "pass" pip -q install --no-index fixture-not-installed',
+            'python3 script.py -m pip install --no-index fixture-not-installed',
+            ('printf "%s\\n" pip install first pip -q install second '
+             'python3 -m pip install third'),
+            'echo pip pip install first "$venv/bin/pip" -q install second',
+        )
+        for script in scripts:
+            with self.subTest(text=script):
+                result = self.check_caller(script)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_inert_installer_arguments_stay_inert_across_command_separators(self):
+        scripts = (
+            'echo pip install first;printf "%s\\n" pip -q install second',
+            'printf "%s\\n" pip install first&&echo python3 -m pip install second',
+            'echo python3 -m pip install first||printf "%s\\n" pip install second',
+            'printf "%s\\n" pip install first|echo pip -q install second',
+            '(echo pip install first);printf "%s\\n" python3 -m pip install second',
+            'echo pip install first&printf "%s\\n" pip install second',
+            'echo pip install first\nprintf "%s\\n" pip -q install second',
+            'printf "%s\\n" ";" pip -q install --no-index fixture-not-installed',
+            'echo "&&" python3 -m pip install --no-index fixture-not-installed',
+            'printf "%s\\n" "|" pip install first "(" pip install second ")"',
+            'echo pip install first > pip;printf "%s\\n" pip install second',
+        )
+        for script in scripts:
+            with self.subTest(text=script):
+                result = self.check_caller(script)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_command_separators_still_expose_real_installers_after_inert_arguments(self):
+        # A first-token-only repair must not hide a later real installer.
+        commands = (
+            'echo pip install inert;pip install',
+            'printf "%s\\n" pip install inert&&python3 -m pip -q install',
+            'echo python3 -m pip install inert||"$venv/bin/pip" --quiet install',
+            'printf "%s\\n" pip install inert|"$venv/bin/python" -m pip install',
+            '(echo pip install inert;pip --no-input install',
+            'echo pip install inert&pip install',
+            'echo pip install inert\npython3 -m pip install',
+            '(echo pip install inert);("$venv/bin/pip" -q install',
+        )
+        for command in commands:
+            for hashed in (False, True):
+                with self.subTest(installer=command, hashed=hashed):
+                    script = command + (
+                        ' --require-hashes -r tier0/requirements-selftest.txt'
+                        if hashed else ' --no-index fixture-not-installed'
+                    )
+                    if command.endswith('install') and command.count('(') > command.count(')'):
+                        script += ')'
+                    if hashed:
+                        result = self.check_caller(script)
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    else:
+                        self.assert_rejected(script)
 
     def test_comments_and_quoted_command_text_are_not_installers(self):
         scripts = (

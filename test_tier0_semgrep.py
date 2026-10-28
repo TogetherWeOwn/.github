@@ -15,6 +15,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 RULES = ROOT / 'semgrep-rules'
+SUBPROCESS_BINDINGS = (
+    ('qualified', 'import subprocess', 'subprocess.'),
+    ('direct', 'from subprocess import run, call, check_call, check_output, Popen', ''),
+    ('module-alias', 'import subprocess as process', 'process.'),
+    ('function-alias', ('from subprocess import run as invoke_run, call as invoke_call, '
+                        'check_call as invoke_check_call, check_output as invoke_check_output, '
+                        'Popen as invoke_Popen'), 'invoke_'),
+)
 
 
 class RealSemgrepContract(unittest.TestCase):
@@ -223,6 +231,86 @@ class RealSemgrepContract(unittest.TestCase):
                     for function in functions
                 )
                 self.assert_rule_fixture(source, 'execute.py', rule, [])
+
+    def test_python_shell_exec_reports_unpacked_truthy_and_unknown_shell_flags(self):
+        # Losing **kwargs binding or import resolution misses real shell calls.
+        # These are scanner input only, never executed Python or shell commands.
+        rule = 'tier0-no-shell-exec-interpolation-python'
+        for binding, imported, prefix in SUBPROCESS_BINDINGS:
+            with self.subTest(binding=binding):
+                calls = []
+                for function in ('run', 'call', 'check_call', 'check_output', 'Popen'):
+                    for flag in ('True', '1', 'use_shell'):
+                        for quote in ('"', "'"):
+                            for fields in (
+                                f'{quote}shell{quote}: {flag}',
+                                (f'{quote}cwd{quote}: workspace, {quote}shell{quote}: {flag}, '
+                                 f'{quote}stdout{quote}: None'),
+                            ):
+                                calls.append(f'{prefix}{function}(command, **{{{fields}}})\n')
+                # 5 functions x 3 flags x 2 quotes x 2 dictionary shapes.
+                self.assert_rule_fixture(imported + '\n' + ''.join(calls), 'execute.py', rule,
+                                         [(rule, line) for line in range(2, 62)])
+
+    def test_python_shell_exec_allows_unpacked_falsy_flags_and_unrelated_keywords(self):
+        # Treating every **mapping as shell-enabled would reject all controls.
+        rule = 'tier0-no-shell-exec-interpolation-python'
+        for binding, imported, prefix in SUBPROCESS_BINDINGS:
+            with self.subTest(binding=binding):
+                calls = []
+                for function in ('run', 'call', 'check_call', 'check_output', 'Popen'):
+                    for flag in ('False', '0', 'None'):
+                        for quote in ('"', "'"):
+                            for fields in (
+                                f'{quote}shell{quote}: {flag}',
+                                (f'{quote}cwd{quote}: workspace, {quote}shell{quote}: {flag}, '
+                                 f'{quote}stdout{quote}: None'),
+                            ):
+                                calls.append(f'{prefix}{function}(command, **{{{fields}}})\n')
+                    calls.append(f'{prefix}{function}(command, **{{"cwd": workspace}})\n')
+                self.assert_rule_fixture(imported + '\n' + ''.join(calls), 'execute.py', rule, [])
+
+    def test_python_shell_exec_reports_ninth_positional_popen_shell_flags(self):
+        rule = 'tier0-no-shell-exec-interpolation-python'
+        for binding, imported, prefix in SUBPROCESS_BINDINGS:
+            with self.subTest(binding=binding):
+                calls = [
+                    f'{prefix}Popen(command, 0, None, None, None, None, None, True, {flag}{tail})\n'
+                    for flag in ('True', '1', 'use_shell')
+                    for tail in ('', ', workspace')
+                ]
+                self.assert_rule_fixture(imported + '\n' + ''.join(calls), 'execute.py', rule,
+                                         [(rule, line) for line in (2, 3, 4, 5, 6, 7)])
+
+    def test_python_shell_exec_allows_falsy_or_omitted_ninth_positional_popen_shell(self):
+        # The eighth argument (close_fds) must not be mistaken for shell; nor
+        # may a tenth positional cwd turn a safe ninth argument into a finding.
+        rule = 'tier0-no-shell-exec-interpolation-python'
+        for binding, imported, prefix in SUBPROCESS_BINDINGS:
+            with self.subTest(binding=binding):
+                calls = [
+                    f'{prefix}Popen(command, 0, None, None, None, None, None, True, {flag}{tail})\n'
+                    for flag in ('False', '0', 'None')
+                    for tail in ('', ', workspace')
+                ]
+                calls.append(f'{prefix}Popen(command, 0, None, None, None, None, None, True)\n')
+                self.assert_rule_fixture(imported + '\n' + ''.join(calls), 'execute.py', rule, [])
+
+    def test_python_shell_exec_keeps_exact_findings_for_mixed_shell_bindings(self):
+        # A first-match-only repair or broad suppression of a mixed file fails.
+        source = ('import subprocess\n'
+                  'from subprocess import run as invoke, Popen as spawn\n'
+                  'subprocess.run(command, **{"shell": True})\n'
+                  "subprocess.call(command, **{'shell': False})\n"
+                  'subprocess.check_call(command, **{"stdout": None, "shell": 1})\n'
+                  "subprocess.check_output(command, **{'shell': None})\n"
+                  "invoke(command, **{'shell': use_shell, 'cwd': workspace})\n"
+                  'spawn(command, 0, None, None, None, None, None, True, True)\n'
+                  'spawn(command, 0, None, None, None, None, None, True, False)\n'
+                  'subprocess.run(command, shell=True)\n')
+        rule = 'tier0-no-shell-exec-interpolation-python'
+        self.assert_rule_fixture(source, 'execute.py', rule,
+                                 [(rule, 3), (rule, 5), (rule, 7), (rule, 8), (rule, 10)])
 
     def test_invalid_configuration_is_a_cli_error_not_a_finding(self):
         result, payload = self.scan('colour = "blue"\n', invalid_config=True)
