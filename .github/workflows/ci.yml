@@ -140,7 +140,8 @@ jobs:
         id: yaml-dependency
         run: |
           python3 -m venv "$RUNNER_TEMP/pincheck-python"
-          "$RUNNER_TEMP/pincheck-python/bin/python" -m pip install --require-hashes --only-binary=:all: --disable-pip-version-check -r .github/scripts/requirements-pincheck.txt
+          "$RUNNER_TEMP/pincheck-python/bin/python" -m pip download --require-hashes --only-binary=:all: --disable-pip-version-check -r .github/scripts/requirements-pincheck.txt --dest "$RUNNER_TEMP/pincheck-wheels"
+          "$RUNNER_TEMP/pincheck-python/bin/python" -m pip install --no-index --find-links "$RUNNER_TEMP/pincheck-wheels" --require-hashes --only-binary=:all: --disable-pip-version-check -r .github/scripts/requirements-pincheck.txt
           echo "$RUNNER_TEMP/pincheck-python/bin" >> "$GITHUB_PATH"
       - name: Wrapper pin must carry the current reusable
         run: |-
@@ -180,7 +181,8 @@ jobs:
         id: yaml-dependency
         run: |
           python3 -m venv "$RUNNER_TEMP/pincheck-python"
-          "$RUNNER_TEMP/pincheck-python/bin/python" -m pip install --require-hashes --only-binary=:all: --disable-pip-version-check -r .github/scripts/requirements-pincheck.txt
+          "$RUNNER_TEMP/pincheck-python/bin/python" -m pip download --require-hashes --only-binary=:all: --disable-pip-version-check -r .github/scripts/requirements-pincheck.txt --dest "$RUNNER_TEMP/pincheck-wheels"
+          "$RUNNER_TEMP/pincheck-python/bin/python" -m pip install --no-index --find-links "$RUNNER_TEMP/pincheck-wheels" --require-hashes --only-binary=:all: --disable-pip-version-check -r .github/scripts/requirements-pincheck.txt
           echo "$RUNNER_TEMP/pincheck-python/bin" >> "$GITHUB_PATH"
       - run: bash .github/scripts/test-guard-selftest.sh
       - name: Checkout credentials and offline change-detection contracts

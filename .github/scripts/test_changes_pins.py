@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Execute the required pincheck in local Git fixtures, without credentials."""
+"""Execute required pincheck/bootstraps in local fixtures, without credentials.
+
+Local QA: provision RUNNER_TEMP/pincheck-wheels with hash-required pip download
+from requirements-pincheck.txt before running this suite. CI retains these wheels
+from its parser bootstrap; all test fixtures install offline from that directory.
+"""
 
 from contextlib import redirect_stdout
 import importlib.util
@@ -373,6 +378,7 @@ class ChangesPinTests(unittest.TestCase):
         gate = jobs["gate-selftest"]
         self.assertNotIn("if", gate)
         self.assertNotIn("continue-on-error", gate)
+        self.assertNotIn("needs", gate)
         collectors = [step for step in gate["steps"]
                       if step.get("run") == "python3 -I .github/scripts/test_changes_pins.py"]
         self.assertEqual(len(collectors), 1)
@@ -420,6 +426,91 @@ class ChangesPinTests(unittest.TestCase):
         self.assertIn("test-guard-pincheck: no pinned test-guard.yml", result.stdout)
         self.assertNotIn("changes-pincheck:", result.stdout)
 
+    def test_change_gated_dependencies_cannot_skip_mandatory_jobs(self):
+        original = (ROOT / CI).read_text(encoding="utf-8")
+        self.write(".github/scripts/test_changes_pins.py", Path(__file__).read_text(encoding="utf-8"))
+        contracts = {"pincheck": "test_pincheck_failure_reaches_ci_ok",
+                     "gate-selftest": "test_new_suite_is_always_collected_by_required_gate"}
+        for job, contract in contracts.items():
+            with self.subTest(job=job):
+                self.write(CI, original.replace(f"  {job}:\n",
+                                               f"  {job}:\n    needs: [test-web]\n"))
+                result = subprocess.run([sys.executable, "-BI", ".github/scripts/test_changes_pins.py",
+                                         f"ChangesPinTests.{contract}"], cwd=self.repo, env=self.env,
+                                        text=True, capture_output=True, timeout=20)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("'needs' unexpectedly found", result.stderr)
+        self.write(CI, original)
+
+    def assert_bootstrap_handoff(self, text, job):
+        # CI retains the hash-verified wheel; local QA provisions the same directory
+        # under RUNNER_TEMP. This fixture executes real venv/pip with no network.
+        wheelhouse = Path(os.environ["RUNNER_TEMP"]) / "pincheck-wheels"
+        self.assertTrue(any(wheelhouse.glob("*.whl")),
+                        "provision RUNNER_TEMP/pincheck-wheels with pip download --require-hashes")
+        clean = self.root / f"parser-free-{job}"
+        subprocess.run([sys.executable, "-I", "-m", "venv", "--without-pip", str(clean)],
+                       check=True, capture_output=True, timeout=20)
+        env = dict(self.env, PATH=os.pathsep.join([str(clean / "bin"), os.defpath]))
+        probe = subprocess.run(["python3", "-I", "-c", "import yaml"], env=env,
+                               text=True, capture_output=True, timeout=10)
+        self.assertNotEqual(probe.returncode, 0)
+        self.assertIn("No module named 'yaml'", probe.stderr)
+        runner = self.root / f"runner-{job}"
+        runner.mkdir()
+        github_path = runner / "github-path"
+        github_path.touch()
+        env.update(RUNNER_TEMP=str(runner), GITHUB_PATH=str(github_path),
+                   PIP_NO_INDEX="1", PIP_FIND_LINKS=str(wheelhouse), PIP_CONFIG_FILE=os.devnull,
+                   PIP_DISABLE_PIP_VERSION_CHECK="1")
+        steps = yaml.safe_load(text)["jobs"][job]["steps"]
+        install = next(step["run"] for step in steps if step.get("id") == "yaml-dependency")
+        self.write(".github/scripts/requirements-pincheck.txt",
+                   (ROOT / ".github/scripts/requirements-pincheck.txt").read_text(encoding="utf-8"))
+        result = subprocess.run(["bash", "-e", "-c", install], cwd=self.repo, env=env,
+                                text=True, capture_output=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # A new Actions step prepends GITHUB_PATH entries to its PATH.
+        env["PATH"] = os.pathsep.join([*reversed(github_path.read_text().splitlines()), env["PATH"]])
+        probe = subprocess.run(["python3", "-I", "-c",
+                                "import sys, yaml; print(sys.prefix); print(yaml.__version__)"],
+                               env=env, text=True, capture_output=True, timeout=10)
+        self.assertEqual(probe.returncode, 0, probe.stdout + probe.stderr)
+        self.assertEqual(probe.stdout.splitlines(), [str(runner / "pincheck-python"), "6.0.3"])
+        command = next(step["run"] for step in steps
+                       if step.get("run", "").startswith("python3 -I .github/scripts/"))
+        if job == "gate-selftest":
+            # Execute the real regression consumer with a selector, avoiding recursion
+            # into this bootstrap test while still exercising its Git fixture/checker.
+            self.write(".github/scripts/test_changes_pins.py", Path(__file__).read_text(encoding="utf-8"))
+            command = next(step["run"] for step in steps
+                           if step.get("run") == "python3 -I .github/scripts/test_changes_pins.py")
+            command += " ChangesPinTests.test_equal_content_pins_pass"
+        result = subprocess.run(["bash", "-e", "-c", command], cwd=self.repo, env=env,
+                                text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_bootstrap_activates_parser_for_both_real_consumers(self):
+        text = (ROOT / CI).read_text(encoding="utf-8")
+        for job in ("pincheck", "gate-selftest"):
+            with self.subTest(job=job):
+                self.assert_bootstrap_handoff(text, job)
+
+    def test_bootstrap_rejects_incorrect_environment_export(self):
+        text = (ROOT / CI).read_text(encoding="utf-8")
+        wrong = text.replace('echo "$RUNNER_TEMP/pincheck-python/bin"',
+                             'echo "$RUNNER_TEMP/pincheck-python"')
+        self.assertNotEqual(text, wrong)
+        for job in ("pincheck", "gate-selftest"):
+            with self.subTest(job=job):
+                with self.assertRaisesRegex(AssertionError, "No module named 'yaml'"):
+                    self.assert_bootstrap_handoff(wrong, job)
+
+    def test_python_314_wheel_is_hash_allowlisted(self):
+        requirements = (ROOT / ".github/scripts/requirements-pincheck.txt").read_text(encoding="utf-8")
+        self.assertIn("--hash=sha256:c458b6d084f9b935061bc36216e8a69a7e293a2f1e68bf956dcd9e6cbcd143f5",
+                      requirements)
+
     def test_yaml_dependency_is_required_before_both_consumers(self):
         jobs = yaml.safe_load((ROOT / CI).read_text(encoding="utf-8"))["jobs"]
         consumers = {"pincheck": "python3 -I .github/scripts/check_changes_pins.py",
@@ -433,12 +524,20 @@ class ChangesPinTests(unittest.TestCase):
             self.assertLess(index, next(i for i, step in enumerate(steps) if step.get("run") == command))
             self.assertNotIn("if", install)
             self.assertNotIn("continue-on-error", install)
-            for required in ("-m venv", "--require-hashes", "--only-binary=:all:",
-                             ".github/scripts/requirements-pincheck.txt", "$GITHUB_PATH"):
+            for required in ("-m venv", "$GITHUB_PATH"):
                 self.assertIn(required, install["run"])
+            pip_commands = [line for line in install["run"].splitlines() if " -m pip " in line]
+            self.assertEqual(len(pip_commands), 2)
+            for line in pip_commands:
+                for required in ("--require-hashes", "--only-binary=:all:",
+                                 ".github/scripts/requirements-pincheck.txt"):
+                    self.assertIn(required, line)
+            self.assertIn('download ', pip_commands[0])
+            self.assertIn('--dest "$RUNNER_TEMP/pincheck-wheels"', pip_commands[0])
+            self.assertIn('install --no-index --find-links "$RUNNER_TEMP/pincheck-wheels"', pip_commands[1])
         requirements = (ROOT / ".github/scripts/requirements-pincheck.txt").read_text(encoding="utf-8")
         self.assertIn("PyYAML==6.0.3", requirements)
-        self.assertEqual(len(re.findall(r"--hash=sha256:[0-9a-f]{64}", requirements)), 2)
+        self.assertEqual(len(re.findall(r"--hash=sha256:[0-9a-f]{64}", requirements)), 3)
         self.assertEqual(yaml.__version__, "6.0.3")
 
     def assert_mandatory_pincheck(self, text):
@@ -446,6 +545,7 @@ class ChangesPinTests(unittest.TestCase):
         pincheck = jobs["pincheck"]
         self.assertNotIn("if", pincheck)
         self.assertNotIn("continue-on-error", pincheck)
+        self.assertNotIn("needs", pincheck)
         for step in pincheck["steps"]:
             self.assertNotIn("if", step)
             self.assertNotIn("continue-on-error", step)
