@@ -83,11 +83,27 @@ rules:
                   - pattern: subprocess.check_call(..., shell=$SHELL, ...)
                   - pattern: subprocess.check_output(..., shell=$SHELL, ...)
                   - pattern: subprocess.Popen(..., shell=$SHELL, ...)
-              # Non-literal flags may enable a shell too; do not report clean
-              # merely because the caller uses 1 or another truthy value.
-              - pattern-not: $FUNC(..., shell=False, ...)
-              - pattern-not: $FUNC(..., shell=0, ...)
-              - pattern-not: $FUNC(..., shell=None, ...)
+                  - pattern: 'subprocess.run(..., **{..., "shell": $SHELL, ...}, ...)'
+                  - pattern: 'subprocess.call(..., **{..., "shell": $SHELL, ...}, ...)'
+                  - pattern: 'subprocess.check_call(..., **{..., "shell": $SHELL, ...}, ...)'
+                  - pattern: 'subprocess.check_output(..., **{..., "shell": $SHELL, ...}, ...)'
+                  - pattern: 'subprocess.Popen(..., **{..., "shell": $SHELL, ...}, ...)'
+                  # Each wrapper forwards positional arguments to Popen;
+                  # shell is its ninth parameter, not close_fds (the eighth).
+                  - pattern: subprocess.run($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
+                  - pattern: subprocess.call($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
+                  - pattern: subprocess.check_call($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
+                  - pattern: subprocess.check_output($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
+                  - pattern: subprocess.Popen($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
+              # Filter the bound value, not the entire call: a safe value in
+              # another argument must not suppress an enabled shell finding.
+              - metavariable-pattern:
+                  metavariable: $SHELL
+                  patterns:
+                    - pattern: $VALUE
+                    - pattern-not: "False"
+                    - pattern-not: "0"
+                    - pattern-not: "None"
     paths:
       exclude:
         - "*.test.*"

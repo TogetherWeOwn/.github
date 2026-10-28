@@ -8,9 +8,12 @@ each repo enables by naming its own functions — not as generic regexes.
 
 - `generic-dangerous-functions.yaml` — live, language-scoped: dynamic `eval`,
   interpolated JavaScript/TypeScript shell commands, and Python shell-enabled
-  command execution. Python covers always-shell helpers and explicit `shell=`
-  flags unless statically `False`, `0` or `None`; unknown flags are conservative
-  findings. Argv calls without a shell flag are not shell sinks.
+  command execution. Python covers always-shell helpers and shell flags supplied
+  by explicit `shell=`, literal `**{"shell": ...}` mappings, or Popen's ninth
+  positional parameter (including forwarding wrappers). Flags statically `False`,
+  `0` or `None` are excluded; unknown values in those bindings are conservative
+  findings. Plain argv calls are not shell sinks. This is syntactic matching,
+  not exhaustive analysis of dynamically constructed arguments.
 - `generic-secrets-in-code.yaml` — live: hardcoded credential assignments
   outside test fixtures.
 - `template-authz-helper.yaml` — DISABLED template (stub callee matches
