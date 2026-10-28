@@ -11,6 +11,8 @@
 #   * Job-level `if:` gating: heavy jobs run only when their area changed
 #     or when `full_run` is true. NEVER add workflow-level `on: pull_request:
 #     paths:` to this file: it would suppress the required `ci-ok` check.
+#   * `tier-0` job (same-repo reusable workflow): the Tier-0 deterministic
+#     quality gate dogfooding this repo report-only, fed into `ci-ok`.
 #   * One required aggregator `ci-ok` (`if: always()` over every gated job).
 #     Branch protection requires only `ci-ok` (plus pr-lint, secret scan).
 #   * Full suite on `push` to `main` and on the nightly schedule.
@@ -124,6 +126,24 @@ jobs:
           persist-credentials: false
       - run: echo "secret scan goes here (always runs)"
 
+  # Tier-0 dogfood (report-only): the reusable deterministic quality gate
+  # running against this repo's own diff, so the 20-PR false-positive
+  # measurement starts here. Same-repo caller, so no SHA to pin — and no
+  # timeout-minutes/runs-on on a uses: job (GitHub rejects them there);
+  # timeouts live inside the reusable workflow. Change-gated and
+  # draft-guarded like the other heavy jobs (Gate 6 budgets 30 minutes).
+  # Workspace-relative ./ (not the newer $/ self-repository form):
+  # actionlint 1.7.12 rejects $/ in uses:, so ./ stays until it parses.
+  tier-0:
+    name: tier-0 (report-only dogfood)
+    needs: [changes, full_run]
+    if: needs.full_run.outputs.force == 'true' || needs.changes.outputs.full_run == 'true' || (needs.changes.outputs.docs_only != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false))
+    uses: ./.github/workflows/tier-0-quality-gate.yml
+    with:
+      mode: report-only
+    permissions:
+      contents: read
+
   # The test-guard wrapper calls the reusable by pinned path+ref; a
   # forgotten repin means CI keeps exercising a stale gate. Light and
   # always-on (no paths filter — this job feeds required `ci-ok`).
@@ -157,6 +177,26 @@ jobs:
             exit 1
           fi
           echo "test-guard-pincheck: pin $PIN carries the current reusable"
+      - name: Tier-0 self-pin must carry the current gate files
+        run: |-
+          PIN="$(grep -o 'TIER0_SELF_PIN: "[0-9a-f]\{40\}"' .github/workflows/tier-0-quality-gate.yml | head -1 | cut -d'"' -f2)"
+          if [ -z "$PIN" ]; then
+            echo "::error::tier-0-pincheck: no TIER0_SELF_PIN: \"<sha>\" in tier-0-quality-gate.yml"
+            exit 1
+          fi
+          # Same repin flow as test-guard: the pin may name a commit on the
+          # PR branch; after a squash-merge with branch deletion, repin to
+          # the merge commit on main.
+          git fetch origin "$PIN" 2>/dev/null || true
+          if ! git cat-file -e "$PIN^{commit}" 2>/dev/null; then
+            echo "::error::tier-0-pincheck: pin $PIN is not fetchable (branch deleted?) — repin TIER0_SELF_PIN to a commit on main carrying semgrep-rules/ and tier0/"
+            exit 1
+          fi
+          if ! git diff --quiet "$PIN" HEAD -- semgrep-rules tier0; then
+            echo "::error::tier-0-pincheck: pin $PIN is stale for semgrep-rules/ or tier0/; repin TIER0_SELF_PIN to the commit carrying them"
+            exit 1
+          fi
+          echo "tier-0-pincheck: pin $PIN carries the current gate files"
 
   # Regression tests for the embedded test-guard gate (see the script).
   # Light (~30s) and always-on so gate changes can never merge red.
@@ -187,6 +227,44 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 -m unittest discover -s .github/scripts -p 'test_pr_size*.py'
+
+  # Regression tests for the Tier-0 reusable gate: the structural shell
+  # contract, the file/tool hermetic suites, and the real-scanner suite
+  # against the pinned Semgrep. Light and always-on (no paths filter —
+  # this job feeds required `ci-ok`) so a gate regression can never
+  # merge green.
+  tier-0-selftest:
+    name: tier-0 selftest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install the hashed selftest pins
+        run: |
+          set -euo pipefail
+          # A venv, not user-site: the scanner suite scrubs HOME, which hides
+          # user-site modules from the semgrep entry point. Every package is
+          # hashed (--require-hashes), and installing the security file also
+          # proves the gate's own pins install. Outside the workspace so no
+          # suite walks it.
+          venv="$RUNNER_TEMP/tier0-selftest-venv"
+          python3 -m venv "$venv"
+          "$venv/bin/pip" install --disable-pip-version-check --require-hashes -q -r tier0/requirements-security.txt -r tier0/requirements-selftest.txt 2>&1 | tail -1
+          echo "$venv/bin" >> "$GITHUB_PATH"
+      - name: Structural contract and hermetic suites
+        run: |
+          set -euo pipefail
+          bash test_tier0_gate.sh
+          python3 -m unittest test_tier0_files test_tier0_tools
+      - name: Real-scanner suite with the pinned Semgrep
+        run: |
+          set -euo pipefail
+          export SEMGREP_BIN="$RUNNER_TEMP/tier0-selftest-venv/bin/semgrep"
+          command -v semgrep
+          semgrep --version
+          python3 -m unittest -v test_tier0_semgrep
 
   gradual-promote-selftest:
     name: gradual-promote selftest
@@ -234,7 +312,7 @@ jobs:
 
   ci-ok:
     name: ci-ok
-    needs: [changes, full_run, lint, test-web, test-bot, secret-scan, pincheck, gate-selftest, pr-size-selftest, gradual-promote-selftest]
+    needs: [changes, full_run, lint, test-web, test-bot, secret-scan, pincheck, gate-selftest, pr-size-selftest, tier-0-selftest, gradual-promote-selftest, tier-0]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

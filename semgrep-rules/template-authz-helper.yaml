@@ -1,0 +1,22 @@
+# TEMPLATE — disabled until a repo names its own authz helper.
+#
+# The gate asks for "route handlers must call the authz helper". A generic
+# regex cannot know what a repo calls that function, so this rule ships
+# matching NOTHING through the named-call stub below. To enable, a repo
+# copies this file, replaces `__tier0_template_name_your_authz_helper__(...)`
+# with a rule for its handler and helper call shapes, and scopes it using
+# `paths.include` (for example, ['routes/*.ts']). Detecting a missing helper
+# call requires a handler pattern plus `pattern-not` for that helper, per
+# the Semgrep docs for the repo's language. Measure the false-positive rate
+# over 20 PRs before promoting the rule to required.
+rules:
+  - id: tier0-template-route-handlers-call-authz
+    languages: [javascript]
+    severity: WARNING
+    message: "TEMPLATE — route handler without a call to the repo authz helper. Name the helper to enable."
+    metadata:
+      tier0: "template-disabled"
+    # Matches nothing until a repo replaces this stub with its real helper
+    # call shape. A named-call pattern keeps the file valid Semgrep config
+    # (provable with `semgrep --validate`) while firing on zero code.
+    pattern: __tier0_template_name_your_authz_helper__(...)
