@@ -510,6 +510,44 @@ for (const status of [403, 404, 429, 500]) {
   });
 }
 
+for (const [field, value] of [
+  ["runId", EVIDENCE.runId + 1], ["attempt", EVIDENCE.attempt + 1],
+  ["workflow", ".github/workflows/other-staging.yml"], ["jobs", ["staging"]],
+]) {
+  test(`full-evidence planning refuses a different source ${field} before any publication`, async () => {
+    const selector = { ...source(), [field]: value };
+    const independent = await setup();
+    independent.api.run.id = selector.runId;
+    independent.api.run.run_attempt = selector.attempt;
+    independent.api.run.path = selector.workflow;
+    independent.api.jobs = independent.api.jobs.filter(({ name }) => selector.jobs.includes(name))
+      .map((job) => ({ ...job, run_id: selector.runId, run_attempt: selector.attempt }));
+    await independent.releaser.plan(deferredInput({ source: selector }));
+    assertNoMutations(independent.api);
+
+    const { api, releaser } = await setup();
+    await assert.rejects(releaser.plan(input({ source: selector })));
+    assertNoMutations(api);
+    assert.equal(api.refs.size, 0);
+    assert.equal(api.releases.size, 0);
+  });
+}
+
+test("matching source and full evidence remain valid through planning and publication", async () => {
+  const { api, releaser } = await setup();
+  const plan = await releaser.plan(input({ source: source() }));
+  assertNoMutations(api);
+  const frozen = copy(plan);
+  const result = await releaser.publish(JSON.parse(JSON.stringify(plan)));
+  assert.equal(result.created, true);
+  assert.equal(result.tag, frozen.tag);
+  assert.deepEqual(plan, frozen);
+  assert.deepEqual([...api.refs.keys()], [plan.tag]);
+  const start = api.calls.length;
+  assert.equal((await releaser.publish(plan)).created, false);
+  assertNoMutations(api, start);
+});
+
 test("deferred source planning freezes an eligible active run before jobs and artifact exist", async () => {
   const { api, releaser } = await deferredSetup();
   api.jobs = [];
@@ -1027,6 +1065,22 @@ test("a newer stable tag appearing after plan prevents moving Latest backwards",
   assert.equal(releaseBody(api).tag_name, plan.tag, "do not reallocate the deployed version");
 });
 
+test("a legacy daily November stable appearing after an October plan prevents advancing Latest", async () => {
+  const { api, releaser, plan } = await stableSetup();
+  const frozen = copy(plan);
+  const boundary = "v2026.11.01";
+  api.addRef(boundary, OLD, "commit", 1);
+  api.releases.set(boundary, { id: 99, tag_name: boundary, draft: false, prerelease: false,
+    published_at: "2026-11-01T12:00:00Z", html_url: `https://github.com/${REPOSITORY}/releases/tag/${boundary}` });
+  const result = await releaser.publish(JSON.parse(JSON.stringify(plan)));
+  assert.equal(result.created, true);
+  assert.equal(result.date, DATE);
+  assert.equal(result.tag, frozen.tag);
+  assert.equal(releaseBody(api).tag_name, frozen.tag, "the frozen deployed version is not reallocated");
+  assert.equal(releaseBody(api).make_latest, "false", "numeric legacy dates participate in Latest ordering");
+  assert.deepEqual(plan, frozen);
+});
+
 for (const channel of ["canary", "stable"]) {
   test(`${channel} dry-run revalidates but makes zero mutating requests`, async () => {
     const fixture = channel === "stable" ? await stableSetup() : await setup();
@@ -1064,6 +1118,56 @@ for (const [repository, namespace] of [
     if (namespace) assert.equal(releaseBody(api).make_latest, "false", "build namespace never advances Latest");
     await assert.rejects(releaser.plan(input({ policy: "direct-release", namespace, evidence: undefined })));
   });
+}
+
+test("Kagi direct-release refuses the same SHA under another operation without a second identity", async () => {
+  const { api, releaser } = await setup("TogetherWeOwn/kagi-shinobi");
+  const request = input({ channel: "stable", policy: "direct-release", namespace: "",
+    evidence: undefined, operation: "direct-release-first" });
+  const first = await releaser.plan(request);
+  await releaser.publish(first);
+  const start = api.calls.length;
+  assert.equal((await releaser.publish(copy(first))).created, false, "exact-operation replay stays allowed");
+  await assert.rejects(async () => {
+    const second = await releaser.plan({ ...request, operation: "direct-release-other" });
+    await releaser.publish(second);
+  });
+  assertNoMutations(api, start);
+  assert.deepEqual([...api.refs.keys()], [first.tag]);
+  assert.deepEqual([...api.releases.keys()], [first.tag]);
+});
+
+for (const channel of ["canary", "stable"]) {
+  for (const winner of ["earlier", "later"]) {
+    test(`two frozen ${channel} plans for one operation refuse a second identity when ${winner} date publishes first`, async () => {
+      const repository = channel === "stable" ? "TogetherWeOwn/kagi-shinobi" : REPOSITORY;
+      const fixture = await setup(repository);
+      const request = channel === "stable"
+        ? input({ channel, policy: "direct-release", evidence: undefined }) : input();
+      const earlier = JSON.parse(JSON.stringify(await fixture.releaser.plan(request)));
+      fixture.setClock("2026-10-29T00:00:10Z");
+      const later = JSON.parse(JSON.stringify(await fixture.releaser.plan(request)));
+      assert.notEqual(earlier.tag, later.tag);
+      assert.equal(earlier.date, DATE);
+      assert.equal(later.date, "2026-10-29");
+      assertNoMutations(fixture.api);
+      const first = winner === "earlier" ? earlier : later;
+      const second = winner === "earlier" ? later : earlier;
+      await fixture.releaser.publish(first);
+      const start = fixture.api.calls.length;
+      const { Releaser } = await engine();
+      const nextJob = new Releaser({ api: fixture.api, repository,
+        now: () => new Date("2026-10-29T00:00:20Z") });
+      await assert.rejects(nextJob.publish(copy(second)), "publication must recheck operation identity, not only exact tag");
+      assertNoMutations(fixture.api, start);
+      assert.deepEqual([...fixture.api.refs.keys()], [first.tag]);
+      assert.deepEqual([...fixture.api.releases.keys()], channel === "stable" ? [first.tag] : []);
+      const replay = await nextJob.publish(copy(first));
+      assert.equal(replay.created, false);
+      assert.equal(replay.tag, first.tag);
+      assertNoMutations(fixture.api, start);
+    });
+  }
 }
 
 test("Routeware direct-release cannot silently publish root stable product releases", async () => {
@@ -1114,6 +1218,35 @@ for (const legacy of [false, true]) {
     assert.ok(notes.includes("AFTER-ELIGIBLE-BOUNDARY"));
     assert.ok(!notes.includes("DO-NOT-INCLUDE-PRE-BOUNDARY"));
     assert.ok(!notes.includes("DO-NOT-INCLUDE-FUTURE-OR-UNREACHABLE"));
+  });
+}
+
+for (const legacyFirst of [false, true]) {
+  test(`mixed canonical and legacy history selects the newer reachable legacy boundary (${legacyFirst ? "legacy" : "canonical"} listed first)`, async () => {
+    const { api, releaser } = await setup();
+    const canonical = "v2025.1231.0";
+    const legacy = "v2026.10.27";
+    const refs = [[canonical, OLD], [legacy, OTHER]];
+    if (legacyFirst) refs.reverse();
+    refs.forEach(([tag, sha], page) => api.addRef(tag, sha, "commit", page));
+    api.releases.set(legacy, { id: 99, tag_name: legacy, draft: false, prerelease: false,
+      published_at: "2026-10-27T12:00:00Z", html_url: `https://github.com/${REPOSITORY}/releases/tag/${legacy}` });
+    const after = { sha: SHA, message: "feat: AFTER-NEWER-LEGACY-BOUNDARY" };
+    const between = { sha: OTHER, message: "fix: DO-NOT-REPEAT-BETWEEN-RELEASES" };
+    const before = { sha: OLD, message: "fix: DO-NOT-REPEAT-BEFORE-BOTH-RELEASES" };
+    api.commitMessages = [after, between, before];
+    api.compareMessages.set(OLD, [after, between]);
+    api.compareMessages.set(OTHER, [after]);
+    const canary = await releaser.plan(input());
+    await releaser.publish(canary);
+    const plan = await releaser.plan(input({ channel: "stable", sourceCanary: canary.tag }));
+    assert.equal(plan.date, DATE);
+    assert.equal(plan.version, "2026.1028.0");
+    await releaser.publish(plan);
+    const notes = releaseBody(api).body;
+    assert.ok(notes.includes("AFTER-NEWER-LEGACY-BOUNDARY"));
+    assert.ok(!notes.includes("DO-NOT-REPEAT-BETWEEN-RELEASES"), "older canonical tags must not outrank newer legacy dates");
+    assert.ok(!notes.includes("DO-NOT-REPEAT-BEFORE-BOTH-RELEASES"));
   });
 }
 
