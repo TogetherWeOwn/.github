@@ -93,6 +93,17 @@ class FakeGitHub {
 
   resolve(ref) { return this.refs.get(ref)?.object.sha ?? ref; }
 
+  listedCommit(ref) {
+    // GET /tags reports the commit, unlike GET /git/refs which reports the tag object.
+    let object = ref.object;
+    const visited = new Set();
+    while (object.type === "tag" && this.objects.has(object.sha) && !visited.has(object.sha)) {
+      visited.add(object.sha);
+      object = this.objects.get(object.sha).object;
+    }
+    return object.sha;
+  }
+
   history(path) {
     const [base] = this.path(path).split("/compare/")[1].split("...");
     return this.compareMessages.get(this.resolve(base)) ?? this.commitMessages;
@@ -117,7 +128,7 @@ class FakeGitHub {
     if (p === `${root}/tags`) {
       this.pageVisits.push(...this.refPages.map((_, index) => index + 1));
       return this.refPages.flat().map((ref) => ({
-        name: ref.ref.slice("refs/tags/".length), commit: { sha: ref.object.sha },
+        name: ref.ref.slice("refs/tags/".length), commit: { sha: this.listedCommit(ref) },
       }));
     }
     if (new RegExp(`/actions/runs/${this.run.id}(?:/attempts/${this.run.run_attempt})?/jobs$`).test(p)) {
@@ -268,6 +279,19 @@ test("offline fake follows both ref pages and rejects unknown endpoints", async 
   assert.deepEqual(api.pageVisits, [1, 2]);
   await assert.rejects(api.request("GET", `/repos/${REPOSITORY}/not-a-github-route`), { status: 500 });
   assertNoMutations(api);
+});
+
+test("fake /tags lists peeled commits while /git/ref retains the annotation object", async () => {
+  const api = new FakeGitHub();
+  const object = "1".repeat(40);
+  api.addRef("v2026.1028.0", object, "tag");
+  api.objects.set(object, { sha: object, object: { type: "tag", sha: "2".repeat(40) } });
+  api.objects.set("2".repeat(40), { sha: "2".repeat(40), object: { type: "commit", sha: SHA } });
+  const tags = await api.paginate(`/repos/${REPOSITORY}/tags`);
+  assert.equal(tags[0].commit.sha, SHA);
+  const ref = await api.request("GET", `/repos/${REPOSITORY}/git/ref/tags/v2026.1028.0`);
+  assert.equal(ref.object.type, "tag");
+  assert.equal(ref.object.sha, object);
 });
 
 test("tags consumes every page and recursively peels annotated tags", async () => {
