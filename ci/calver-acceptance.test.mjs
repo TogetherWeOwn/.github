@@ -173,7 +173,7 @@ class FakeGitHub {
       if (new RegExp(`/actions/runs/${this.run.id}(?:/attempts/${this.run.run_attempt})?/jobs$`).test(p)) {
         return { total_count: this.jobs.length, jobs: copy(this.jobs.slice(0, 1)) };
       }
-      if (p === `${root}/actions/artifacts/77`) return copy(this.artifact);
+      if (p === `${root}/actions/artifacts/${this.artifact?.id}`) return copy(this.artifact);
       if (p === `${root}/actions/runs/901/artifacts`) return { total_count: 1, artifacts: [copy(this.artifact)] };
       if (p === `${root}/actions/workflows/81` || p === `${root}/actions/workflows/staging.yml`) {
         return { id: 81, path: EVIDENCE.workflow, state: "active" };
@@ -237,6 +237,32 @@ const input = (extra = {}) => ({
   channel: "canary", sha: SHA, operation: "staging-run-901-attempt-2",
   policy: "staged-promotion", evidence: copy(EVIDENCE), ...extra,
 });
+
+const source = () => {
+  const { runId, attempt, workflow, jobs } = copy(EVIDENCE);
+  return { runId, attempt, workflow, jobs };
+};
+const deferredInput = (extra = {}) => input({ evidence: undefined, source: source(), ...extra });
+
+async function deferredSetup() {
+  const fixture = await setup();
+  fixture.api.run.status = "in_progress";
+  fixture.api.run.conclusion = null;
+  fixture.api.jobs.forEach((job) => {
+    job.status = "in_progress";
+    job.conclusion = null;
+    job.completed_at = null;
+  });
+  return fixture;
+}
+
+function completeRequiredJobs(api) {
+  api.jobs.forEach((job) => {
+    job.status = "completed";
+    job.conclusion = "success";
+    job.completed_at = "2026-10-28T10:04:00Z";
+  });
+}
 
 async function stableSetup() {
   const fixture = await setup();
@@ -484,6 +510,229 @@ for (const status of [403, 404, 429, 500]) {
   });
 }
 
+test("deferred source planning freezes an eligible active run before jobs and artifact exist", async () => {
+  const { api, releaser } = await deferredSetup();
+  api.jobs = [];
+  api.artifact = null;
+  const plan = await releaser.plan(deferredInput());
+  assert.deepEqual(plan.source, source());
+  assert.equal(plan.version, "2026.1028.0-canary.0");
+  assert.equal(plan.sha, SHA);
+  assert.deepEqual(plan, JSON.parse(JSON.stringify(plan)));
+  assert.deepEqual(plan, await releaser.plan(deferredInput()));
+  assert.ok(api.calls.some(({ path }) => path.includes("/actions/runs/901/attempts/2")),
+    "the source selector must independently resolve through GitHub");
+  assert.ok(!api.calls.some(({ path }) => /\/artifacts(?:\/|\?|$)/.test(path)),
+    "pre-build planning must not require an artifact that cannot exist yet");
+  assertNoMutations(api);
+});
+
+for (const [name, change] of unsafeEvidence.filter(([name]) => [
+  "foreign repository", "foreign head repository", "different SHA", "manual dispatch",
+  "pull request", "wrong branch", "failed run", "wrong workflow", "different attempt",
+].includes(name))) {
+  test(`deferred source planning refuses ${name}`, async () => {
+    const { api, releaser } = await deferredSetup();
+    if (name === "failed run") api.run.status = "completed";
+    change(api);
+    await assert.rejects(releaser.plan(deferredInput()));
+    assertNoMutations(api);
+  });
+}
+
+for (const [name, value] of [
+  ["empty jobs", { ...source(), jobs: [] }],
+  ["duplicate jobs", { ...source(), jobs: ["staging", "staging"] }],
+  ["zero run", { ...source(), runId: 0 }],
+  ["zero attempt", { ...source(), attempt: 0 }],
+  ["non-workflow path", { ...source(), workflow: "../staging.yml" }],
+]) {
+  test(`deferred source planning refuses malformed selector: ${name}`, async () => {
+    const { api, releaser } = await deferredSetup();
+    await assert.rejects(releaser.plan(deferredInput({ source: value })));
+    assertNoMutations(api);
+  });
+}
+
+for (const status of [403, 404, 429, 500]) {
+  test(`deferred source lookup HTTP ${status} is not an eligible active run`, async () => {
+    const { api, releaser } = await deferredSetup();
+    api.fault = (_, path) => path.includes("/actions/") ? httpError(status) : null;
+    await assert.rejects(releaser.plan(deferredInput()), { status });
+    assertNoMutations(api);
+  });
+}
+
+test("deferred canary publishes after named jobs succeed while its successor publisher is active", async () => {
+  const { Releaser } = await engine();
+  const { api, releaser } = await deferredSetup();
+  const plan = JSON.parse(JSON.stringify(await releaser.plan(deferredInput())));
+  const frozen = copy(plan);
+  completeRequiredJobs(api);
+  api.jobs.push({ id: 600, name: "publish-canary", run_id: EVIDENCE.runId,
+    run_attempt: EVIDENCE.attempt, head_sha: SHA, status: "in_progress", conclusion: null });
+  const publisher = new Releaser({ api, repository: REPOSITORY,
+    now: () => new Date("2026-10-29T00:00:10Z") });
+  const start = api.calls.length;
+  const result = await publisher.publish(plan, { evidence: copy(EVIDENCE) });
+  assert.equal(result.created, true);
+  assert.equal(result.date, DATE);
+  assert.equal(result.tag, frozen.tag);
+  assert.deepEqual(plan, frozen, "publication must not mutate the frozen pre-build plan");
+  assert.ok(api.calls.slice(start).some(({ path }) => path.includes("/attempts/2/jobs")));
+  assert.ok(api.calls.slice(start).some(({ path }) => path.includes("/actions/artifacts/77")));
+  assert.deepEqual(api.mutations().map(({ path }) => path.split(`/repos/${REPOSITORY}`)[1]),
+    ["/git/tags", "/git/refs"]);
+  assert.equal(api.releases.size, 0);
+  const message = api.mutations()[0].body.message;
+  // The contract fixes the structured payload, not an optional annotation format prefix.
+  const annotation = JSON.parse(message.slice(message.indexOf("{")));
+  assert.deepEqual(annotation.publicationEvidence, EVIDENCE);
+  const annotatedPlan = annotation.plan ?? Object.fromEntries(
+    Object.entries(annotation).filter(([key]) => key !== "publicationEvidence"));
+  assert.deepEqual(annotatedPlan, frozen, "the annotation retains the unchanged portable plan");
+  const replayStart = api.calls.length;
+  assert.equal((await publisher.publish(copy(plan), { evidence: copy(EVIDENCE) })).created, false);
+  assertNoMutations(api, replayStart);
+});
+
+test("deferred canary dry-run requires the same completed-job proof and makes zero writes", async () => {
+  const { api, releaser } = await deferredSetup();
+  const plan = await releaser.plan(deferredInput());
+  completeRequiredJobs(api);
+  const start = api.calls.length;
+  const result = await releaser.publish(plan, { evidence: copy(EVIDENCE), dryRun: true });
+  assert.equal(result.dryRun, true);
+  assert.equal(result.created, false);
+  assertNoMutations(api, start);
+  api.jobs[1].conclusion = "failure";
+  await assert.rejects(releaser.publish(plan, { evidence: copy(EVIDENCE), dryRun: true }));
+  assertNoMutations(api, start);
+});
+
+test("a deferred source selector alone never authorizes publication", async () => {
+  const { api, releaser } = await deferredSetup();
+  const plan = await releaser.plan(deferredInput());
+  completeRequiredJobs(api);
+  const start = api.calls.length;
+  await assert.rejects(releaser.publish(plan));
+  assertNoMutations(api, start);
+});
+
+for (const [name, change] of unsafeEvidence.filter(([name]) => name !== "running source workflow")) {
+  test(`deferred publication re-fetches and refuses unsafe evidence: ${name}`, async () => {
+    const { api, releaser } = await deferredSetup();
+    const plan = await releaser.plan(deferredInput());
+    completeRequiredJobs(api);
+    if (name === "failed run") api.run.status = "completed";
+    change(api);
+    const start = api.calls.length;
+    await assert.rejects(releaser.publish(copy(plan), { evidence: copy(EVIDENCE) }));
+    assertNoMutations(api, start);
+  });
+}
+
+for (const [name, change] of [
+  ["job from another run", (api) => { api.jobs[1].run_id++; }],
+  ["job from another SHA", (api) => { api.jobs[1].head_sha = OTHER; }],
+  ["cancelled completed run", (api) => { api.run.status = "completed"; api.run.conclusion = "cancelled"; }],
+]) {
+  test(`deferred publication refuses ${name}`, async () => {
+    const { api, releaser } = await deferredSetup();
+    const plan = await releaser.plan(deferredInput());
+    completeRequiredJobs(api);
+    change(api);
+    const start = api.calls.length;
+    await assert.rejects(releaser.publish(plan, { evidence: copy(EVIDENCE) }));
+    assertNoMutations(api, start);
+  });
+}
+
+for (const field of ["runId", "attempt", "workflow", "jobs", "artifactId", "artifactName", "artifactDigest"]) {
+  test(`deferred replay refuses changed ${field} even when GitHub validates the replacement proof`, async () => {
+    const { api, releaser } = await deferredSetup();
+    const plan = await releaser.plan(deferredInput());
+    completeRequiredJobs(api);
+    await releaser.publish(plan, { evidence: copy(EVIDENCE) });
+    const evidence = copy(EVIDENCE);
+    if (field === "runId") {
+      evidence.runId++;
+      api.run.id = evidence.runId;
+      api.jobs.forEach((job) => { job.run_id = evidence.runId; });
+      api.artifact.workflow_run.id = evidence.runId;
+    }
+    if (field === "attempt") {
+      evidence.attempt++;
+      api.run.run_attempt = evidence.attempt;
+      api.jobs.forEach((job) => { job.run_attempt = evidence.attempt; });
+    }
+    if (field === "workflow") {
+      evidence.workflow = ".github/workflows/another-staging.yml";
+      api.run.path = evidence.workflow;
+    }
+    if (field === "jobs") {
+      evidence.jobs = ["different-certification"];
+      api.jobs = [{ ...api.jobs[0], name: evidence.jobs[0] }];
+    }
+    if (field === "artifactId") { evidence.artifactId++; api.artifact.id = evidence.artifactId; }
+    if (field === "artifactName") { evidence.artifactName = "replacement-certificate"; api.artifact.name = evidence.artifactName; }
+    if (field === "artifactDigest") { evidence.artifactDigest = `sha256:${"e".repeat(64)}`; api.artifact.digest = evidence.artifactDigest; }
+    const start = api.calls.length;
+    await assert.rejects(releaser.publish(copy(plan), { evidence }));
+    assertNoMutations(api, start);
+    assert.equal(api.refs.size, 1);
+  });
+}
+
+for (const field of ["runId", "attempt", "workflow", "jobs"]) {
+  test(`deferred portable plan binds frozen source ${field}`, async () => {
+    const { api, releaser } = await deferredSetup();
+    const plan = JSON.parse(JSON.stringify(await releaser.plan(deferredInput())));
+    completeRequiredJobs(api);
+    plan.source[field] = field === "jobs" ? ["staging"] : field === "workflow"
+      ? ".github/workflows/other.yml" : plan.source[field] + 1;
+    const start = api.calls.length;
+    await assert.rejects(releaser.publish(plan, { evidence: copy(EVIDENCE) }));
+    assertNoMutations(api, start);
+  });
+}
+
+test("same-source same-SHA deferred canary under another operation refuses without new writes", async () => {
+  const { api, releaser } = await deferredSetup();
+  const first = await releaser.plan(deferredInput());
+  completeRequiredJobs(api);
+  await releaser.publish(first, { evidence: copy(EVIDENCE) });
+  const start = api.calls.length;
+  await assert.rejects(async () => {
+    const second = await releaser.plan(deferredInput({ operation: "another-operation" }));
+    await releaser.publish(second, { evidence: copy(EVIDENCE) });
+  });
+  assertNoMutations(api, start);
+  assert.deepEqual([...api.refs.keys()], [first.tag]);
+});
+
+test("stable cannot use deferred planning or the active-run canary publication exception", async () => {
+  const { api, releaser } = await deferredSetup();
+  const canary = await releaser.plan(deferredInput());
+  completeRequiredJobs(api);
+  await releaser.publish(canary, { evidence: copy(EVIDENCE) });
+  const start = api.calls.length;
+  await assert.rejects(releaser.plan(deferredInput({ channel: "stable", sourceCanary: canary.tag })));
+  await assert.rejects(releaser.plan(input({ channel: "stable", sourceCanary: canary.tag })));
+  assertNoMutations(api, start);
+  api.run.status = "completed";
+  api.run.conclusion = "success";
+  const stable = await releaser.plan(input({ channel: "stable", sourceCanary: canary.tag }));
+  api.run.status = "in_progress";
+  api.run.conclusion = null;
+  const beforePublish = api.calls.length;
+  await assert.rejects(releaser.publish(stable));
+  assertNoMutations(api, beforePublish);
+  api.run.status = "completed";
+  api.run.conclusion = "success";
+  assert.ok((await releaser.publish(stable)).releaseUrl);
+});
+
 test("canary publish annotates provenance, creates only a tag, and exact replay is idempotent", async () => {
   const { api, releaser } = await setup();
   const plan = await releaser.plan(input());
@@ -582,15 +831,18 @@ test("a plan cannot be published by another repository's Releaser", async () => 
   assertNoMutations(foreign);
 });
 
-for (const exact of [true, false]) {
-  test(`a ref creation race is ${exact ? "accepted only for exact annotation and SHA" : "rejected for foreign annotation"}`, async () => {
+for (const mode of ["exact annotation and SHA", "foreign annotation", "foreign SHA"]) {
+  const exact = mode === "exact annotation and SHA";
+  test(`a ref creation race is ${exact ? "accepted only for" : "rejected for"} ${mode}`, async () => {
     const { api, releaser } = await setup();
     const plan = await releaser.plan(input());
     api.onRefCreate = (name, body, fake) => {
       if (exact) fake.addRef(name, body.sha, "tag");
       else {
         const other = "9".repeat(40);
-        fake.objects.set(other, { sha: other, tag: name, message: "foreign operation", object: { type: "commit", sha: SHA } });
+        fake.objects.set(other, { sha: other, tag: name,
+          message: mode === "foreign SHA" ? fake.objects.get(body.sha).message : "foreign operation",
+          object: { type: "commit", sha: mode === "foreign SHA" ? OTHER : SHA } });
         fake.addRef(name, other, "tag");
       }
     };
