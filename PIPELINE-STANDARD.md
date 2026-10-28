@@ -75,24 +75,36 @@ Adopted in two-bot-next #755 and two-web-next #629. Never freeze main to deploy.
 
 ## 5. Release
 
-- **The release PR must never need a merge freeze.** It is regenerated on every push to main, so it is always
-  current. It merges through the same gates as any other PR: deterministic release tests, required checks, and
-  Paperclip Review 5/5 via the review gate. The host approves the `pull_request` workflow runs on
-  `release-please--*` branches automatically (they come from `github-actions[bot]`).
-### 5a. Release train (host-automated, two-bot-next and two-web-next)
+- **Applications use numeric CalVer:** stable `YYYY.MDD.P` (`vYYYY.MDD.P`), staging
+  `YYYY.MDD.P-canary.N` (`canary/vYYYY.MDD.P-canary.N`). Month is not zero-padded;
+  day is two digits. Examples: `2026.105.0`, `2026.303.0`, `2026.1028.0`.
+- The [shared releaser](actions/calver/README.md) and its step adapter share one
+  implementation. Callers pin both workflow and tooling to the same full commit
+  SHA. Package/plugin/API compatibility versions remain SemVer.
+- Counters come from complete repository tag history, not npm publications. This
+  adopts upstream Paperclip's syntax, not its nightly/beta/three-day-soak policy.
+  Existing staging, approval, artifact, smoke, takeover and rollback gates stay.
+- A caller's transaction boundary spans plan, version stamping, deploy and publish.
+  Planning is otherwise advisory. Publish the exact frozen version after the
+  required successful deployment evidence; never relabel a stamped build after
+  a collision. Promotion uses its attempt's UTC date and the same saved artifact.
+- Only stables create Releases. Canary tags carry source run/attempt/artifact
+  provenance. Historical repairs and Routeware build releases never regress Latest.
+- TWO bot keeps its daily live-production digest, quiet-day/rollback checks and
+  legacy repair/SBOM adapters outside the production workflow. Kagi keeps its
+  release-selection and package/tag equality gate; it releases before deployment.
+  Routeware keeps SemVer API tags and a separate `build/` CalVer namespace; its
+  disabled production lane stays disabled.
+- Do not globally enable immutable Releases: asynchronous bot SBOM uploads and
+  repairs require mutable assets. Never move tags or freeze main for a release.
 
-When a `release-please--*` PR is open, the host `release-train.timer` runs the merge freeze those repos' own
-`docs/releases.md` describes:
+### 5a. No host release train
 
-1. It adds a temporary ruleset `release-train-freeze (host, auto)` that blocks updates to main for everyone except
-   the host App.
-2. It dispatches `release.yml` on main, which regenerates the release PR against the frozen tip.
-3. The review gate requests one Paperclip Review once CI is green.
-4. Once the head's parent is main, every check is green and the review is 5/5, the train merges with
-   `--match-head-commit` and lifts the freeze.
-
-A freeze lifts itself after 60 minutes at most, and a failed train waits 6 hours before retrying. Push-to-main
-release runs (tag and publish) are unchanged. Agents never freeze main by hand.
+The old release-please/host-timer merge-freeze description is retired. Do not
+create a host timer, cron, ruleset mutation or release train for this migration.
+Use existing GitHub workflows and native task dependencies/monitors. GitHub
+concurrency preserves a running transaction with `cancel-in-progress: false`, but
+pending runs can replace older pending runs: it is not a FIFO deployment queue.
 
 ## 6. Self-blocking anti-patterns (each measured on 2026-10-10)
 

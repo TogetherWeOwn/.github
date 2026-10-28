@@ -171,6 +171,10 @@ jobs:
       - run: bash .github/scripts/test-guard-selftest.sh
       - name: Checkout credentials and offline change-detection contracts
         run: python3 -I .github/scripts/test_checkout_credentials.py
+      - name: CalVer engine and adapter acceptance tests (required)
+        run: node --test ci/calver*.test.mjs
+      - name: CalVer caller pins carry the current tooling
+        run: node actions/calver/check-pins.mjs
 
   # Unit tests for the org PR-size labeller (stdlib unittest, seconds),
   # including the static check that every caller job in the shipped

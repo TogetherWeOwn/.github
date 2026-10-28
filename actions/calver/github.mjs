@@ -1,0 +1,85 @@
+const API_ORIGIN = 'https://api.github.com';
+const MAX_BYTES = 256 * 1024 * 1024;
+
+export class GitHub {
+  constructor({ token, fetchImpl = fetch, readOnly = false }) {
+    if (!token) throw new Error('repository-local GitHub token required');
+    this.token = token;
+    this.fetch = fetchImpl;
+    this.readOnly = readOnly;
+  }
+
+  async page(method, path, body) {
+    const url = new URL(path, API_ORIGIN);
+    if (url.origin !== API_ORIGIN || !url.pathname.startsWith('/repos/') || url.username || url.password || url.hash) throw new Error('refuse nonrepository GitHub API URL');
+    if (this.readOnly && method !== 'GET') throw new Error('read-only invocation cannot mutate GitHub');
+    const response = await this.fetch(url.href, {
+      method,
+      headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      redirect: 'error',
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) {
+      // Do not echo upstream bodies or request headers: they can contain tokens
+      // or private metadata. Preserve the actual HTTP status for exact handling.
+      const error = new Error(`GitHub ${method} ${url.pathname}: HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    const chunks = [];
+    let bytes = 0;
+    for await (const chunk of response.body) {
+      bytes += chunk.byteLength;
+      if (bytes > MAX_BYTES) throw new Error('GitHub response exceeds 256 MiB');
+      chunks.push(chunk);
+    }
+    const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (data?.truncated === true || data?.incomplete_results === true) throw new Error('GitHub response is incomplete');
+    return { data, link: response.headers.get('link'), bytes };
+  }
+
+  async request(method, path, body) {
+    return (await this.page(method, path, body)).data;
+  }
+
+  async paginate(path, key) {
+    const all = [];
+    const seen = new Set();
+    let next = path;
+    let bytes = 0;
+    let expected = null;
+    for (let page = 0; next; page += 1) {
+      const url = new URL(next, API_ORIGIN);
+      if (page >= 10000 || seen.has(url.href)) throw new Error('cyclic or excessive GitHub pagination');
+      seen.add(url.href);
+      const result = await this.page('GET', next);
+      bytes += result.bytes;
+      if (bytes > MAX_BYTES) throw new Error('GitHub history exceeds 256 MiB');
+      const items = key ? result.data[key] : result.data;
+      if (!Array.isArray(items)) throw new Error('invalid GitHub list response');
+      const count = key === 'commits' ? result.data.total_commits : result.data.total_count;
+      if (count !== undefined) {
+        if (!Number.isSafeInteger(count) || count < 0 || (expected !== null && expected !== count)) throw new Error('changing GitHub pagination count');
+        expected = count;
+      }
+      all.push(...items);
+      if (all.length > 100000) throw new Error('GitHub list exceeds item bound');
+      next = null;
+      if (result.link) {
+        for (const link of result.link.split(',')) {
+          const match = /^\s*<([^>]+)>;\s*rel="([a-z]+)"\s*$/.exec(link);
+          if (!match) throw new Error('malformed GitHub pagination Link');
+          if (match[2] === 'next') {
+            if (next) throw new Error('ambiguous GitHub pagination');
+            next = match[1];
+            const candidate = new URL(next, API_ORIGIN);
+            if (candidate.origin !== API_ORIGIN || candidate.pathname !== url.pathname || candidate.searchParams.get('per_page') !== url.searchParams.get('per_page')) throw new Error('GitHub pagination changed endpoint');
+          }
+        }
+      }
+    }
+    if (expected !== null && all.length !== expected) throw new Error('truncated or duplicated GitHub list');
+    return all;
+  }
+}

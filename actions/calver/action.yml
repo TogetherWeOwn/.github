@@ -1,0 +1,63 @@
+name: CalVer application release
+description: Plan or publish an operation-bound application version without deploying or rebuilding
+inputs:
+  request:
+    description: JSON request; phase plan with input, or phase publish with the exact saved plan and optional dryRun/repair booleans
+    required: true
+  runs-on-json:
+    description: Explicit existing runner JSON; public callers use the JSON string ubuntu-latest
+    required: true
+  private-runner-json:
+    description: Existing CI_OVERFLOW_RUNNER repository variable for private callers; never a hosted fallback
+    required: false
+    default: ''
+  token:
+    description: Repository-local token (read for plan; contents write plus Actions read for publication)
+    required: false
+    default: ${{ github.token }}
+outputs:
+  plan:
+    description: Portable frozen JSON plan, not a runner-local filename
+    value: ${{ steps.release.outputs.plan }}
+  version:
+    description: Numeric CalVer identity
+    value: ${{ steps.release.outputs.version }}
+  tag:
+    description: Exact immutable tag name
+    value: ${{ steps.release.outputs.tag }}
+  sha:
+    description: Independently verified main-reachable commit
+    value: ${{ steps.release.outputs.sha }}
+  release-date:
+    description: Frozen UTC transaction date
+    value: ${{ steps.release.outputs.release-date }}
+  previous-stable-tag:
+    description: Reachable previous notes boundary, empty for initial history
+    value: ${{ steps.release.outputs.previous-stable-tag }}
+  created:
+    description: Whether this publication created a tag or Release
+    value: ${{ steps.release.outputs.created }}
+  release-url:
+    description: Stable Release URL, empty for canaries
+    value: ${{ steps.release.outputs.release-url }}
+  provenance-id:
+    description: Operation-bound plan identifier
+    value: ${{ steps.release.outputs.provenance-id }}
+  skipped:
+    description: True for a classified live-digest quiet-day, rollback or daily-cadence skip
+    value: ${{ steps.release.outputs.skipped }}
+  reason:
+    description: Classified live-digest skip code
+    value: ${{ steps.release.outputs.reason }}
+runs:
+  using: composite
+  steps:
+    - id: release
+      shell: bash
+      env:
+        CALVER_TOOLING_ROOT: ${{ github.action_path }}
+        CALVER_REQUEST: ${{ inputs.request }}
+        CALVER_RUNNER_JSON: ${{ inputs.runs-on-json }}
+        CALVER_PRIVATE_RUNNER_JSON: ${{ inputs.private-runner-json }}
+        CALVER_TOKEN: ${{ inputs.token }}
+      run: node "$CALVER_TOOLING_ROOT/cli.mjs"

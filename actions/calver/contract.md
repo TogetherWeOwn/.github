@@ -30,10 +30,23 @@ injected function returning a Date, defaulting to the real clock. `api` provides
 `paginate(path, key?)`, returning the complete array (following all Link pages).
 HTTP errors expose numeric `status`. Only a 404 from an exact lookup is absence.
 
+REST routes for fake API adapters (prefix `/repos/{repository}`): paginated
+`/tags?per_page=100`; exact `/git/ref/tags/{encodeURIComponent(tag)}`;
+`/git/tags/{objectSha}`; `/git/commits/{sha}`; `/compare/{sha}...main`;
+`/actions/runs/{runId}/attempts/{attempt}`; paginated
+`/actions/runs/{runId}/attempts/{attempt}/jobs?per_page=100` with key `jobs`;
+`/actions/artifacts/{artifactId}`; paginated initial notes
+`/commits?sha={sha}&per_page=100`, or `/compare/{encodedPreviousTag}...{sha}?per_page=100`
+with key `commits`; `/releases/tags/{encodedTag}`. Mutations: POST `/git/tags`,
+POST `/git/refs`, and stable-only POST `/releases`. Responses use GitHub's standard
+REST shapes, including exact ref name/object and tag-object SHA/message/target.
+The exported `GitHub` transport in `github.mjs` implements Link pagination;
+`Releaser.tags()` tests can inject a complete-array fake `paginate`.
+
 - `tags()` returns all `{name, sha}` refs, peeling annotated tags recursively,
   refusing noncommit/cyclic/bounded-out targets and ambiguous duplicate names.
 - `plan(input)` is read-only and returns a JSON-serializable plan.
-- `publish(plan, {dryRun = false, repair = false} = {})` revalidates the plan and
+- `publish(plan, {dryRun = false, repair = false, evidence} = {})` revalidates the plan and
   evidence. Returns the plan plus `{created, releaseUrl, dryRun}`. An existing
   exact operation/version/SHA is idempotent. Same-tag other-SHA and same-SHA
   other-operation are hard failures. A missing stable Release requires explicit
@@ -70,19 +83,30 @@ A staged `evidence` object selects `runId`, `attempt`, `workflow` (exact
 `.github/workflows/*.yml` path), `jobs` (nonempty exact required job names),
 `artifactId`, `artifactName` and `artifactDigest` (`sha256:` + 64 lowercase hex).
 The engine reads the run attempt, complete jobs and artifact metadata from
-GitHub. Require same repository and SHA, `push` on `main`, completed successful
-run and each uniquely named required job, immutable unexpired artifact bound to
+GitHub. Require same repository and SHA, `push` on `main`, and each uniquely named
+required job completed successfully, an immutable unexpired artifact bound to
 that run and SHA, and exact artifact identity/digest. Required jobs must actually
 run: skipped, failed, missing, duplicate, manual/fault-injection evidence fails.
 Callers select the eligible artifact using their existing stronger certificates;
 this minimal check does not replace archive/member/image verification.
 
+**Pre-build planning:** a canary plan can instead supply `source` containing only
+`runId`, `attempt`, `workflow`, `jobs`. This selector is independently verified
+against GitHub, but is NOT a certificate: the artifact does not exist yet. Supply
+the full `evidence` to `publish(plan, {evidence})` after deployment/certification.
+It must match the frozen selector. The tag annotation stores the unchanged plan
+plus `publicationEvidence`; an exact replay must match that proof too. This
+avoids requiring an artifact ID before building/version stamping. A canary
+publisher can be a successor job in its still-in-progress source run ONLY after
+all named deploy/certification jobs actually completed successfully. Failed,
+skipped or missing jobs still refuse. A completed run must be successful.
+
 A stable staged promotion additionally requires an exact source canary on this
 SHA whose annotation contains the same source run/attempt/artifact identity.
-Publish re-fetches evidence and the source canary. Publication inside a running
-source workflow must use the completed required-job boundary; a run that is not
-yet completed is not accepted by this v1 interface. Publish from a success-only
-follow-up or a completed-run caller, not by weakening the check.
+Stable promotion requires the source run fully completed successfully; it cannot
+use the active-canary exception. Publish re-fetches evidence and the source
+canary. This corrects the initial contract's impossible pre-build artifact
+requirement and its self-deadlocking whole-run check for an in-run publisher.
 
 ## Notes and Latest
 
