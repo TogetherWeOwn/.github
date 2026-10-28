@@ -83,20 +83,40 @@ rules:
                   - pattern: subprocess.check_call(..., shell=$SHELL, ...)
                   - pattern: subprocess.check_output(..., shell=$SHELL, ...)
                   - pattern: subprocess.Popen(..., shell=$SHELL, ...)
-                  - pattern: 'subprocess.run(..., **{..., "shell": $SHELL, ...}, ...)'
-                  - pattern: 'subprocess.call(..., **{..., "shell": $SHELL, ...}, ...)'
-                  - pattern: 'subprocess.check_call(..., **{..., "shell": $SHELL, ...}, ...)'
-                  - pattern: 'subprocess.check_output(..., **{..., "shell": $SHELL, ...}, ...)'
-                  - pattern: 'subprocess.Popen(..., **{..., "shell": $SHELL, ...}, ...)'
-                  # Each wrapper forwards positional arguments to Popen;
-                  # shell is its ninth parameter, not close_fds (the eighth).
+              # Filter the bound value, not the entire call: a safe value in
+              # another argument must not suppress an enabled shell finding.
+              - metavariable-pattern:
+                  metavariable: $SHELL
+                  patterns:
+                    - pattern: $VALUE
+                    - pattern-not: "False"
+                    - pattern-not: "0"
+                    - pattern-not: "None"
+          # Literal mapping merges: dict displays are order-blind to `...`,
+          # so one merged `{"shell": False, **{"shell": True}}` needs its
+          # effective (last-wins) value resolved from the mapping text. The
+          # regex below reports exactly when the last shell entry is not a
+          # falsy literal, at any literal nesting depth a test can write.
+          - patterns:
+              - pattern-either:
+                  - pattern: 'subprocess.run(..., **$KWARGS, ...)'
+                  - pattern: 'subprocess.call(..., **$KWARGS, ...)'
+                  - pattern: 'subprocess.check_call(..., **$KWARGS, ...)'
+                  - pattern: 'subprocess.check_output(..., **$KWARGS, ...)'
+                  - pattern: 'subprocess.Popen(..., **$KWARGS, ...)'
+              - metavariable-regex:
+                  metavariable: $KWARGS
+                  regex: >-
+                    (?s:.*(?:"shell"|'shell')\s*:\s*(?!\s*(?:False|0|None)(?![\w.]))(?:(?!(?:"shell"|'shell')\s*:).)*\s*\z)
+          - patterns:
+              # Each wrapper forwards positional arguments to Popen;
+              # shell is its ninth parameter, not close_fds (the eighth).
+              - pattern-either:
                   - pattern: subprocess.run($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
                   - pattern: subprocess.call($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
                   - pattern: subprocess.check_call($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
                   - pattern: subprocess.check_output($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
                   - pattern: subprocess.Popen($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
-              # Filter the bound value, not the entire call: a safe value in
-              # another argument must not suppress an enabled shell finding.
               - metavariable-pattern:
                   metavariable: $SHELL
                   patterns:
