@@ -117,6 +117,15 @@ function numericStable(tag, namespace = '') {
   if (!tag.startsWith(`${prefix}v`)) return null;
   const version = tag.slice(prefix.length + 1);
   if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version) || version.length > 100) return null;
+  // The bot's legacy daily tags use YYYY.MM.DD, not CalVer MDD.P.
+  // Normalize their real calendar date before ordering migration boundaries.
+  const daily = /^([1-9][0-9]{3})\.([0-9]{2})\.([0-9]{2})$/.exec(version);
+  if (daily) {
+    try {
+      calendarDate(`${daily[1]}-${daily[2]}-${daily[3]}`);
+      return [BigInt(daily[1]), BigInt(`${Number(daily[2])}${daily[3]}`), 0n];
+    } catch { /* Other numeric legacy versions retain their numeric ordering. */ }
+  }
   return version.split('.').map(BigInt);
 }
 
@@ -141,7 +150,8 @@ export function renderNotes(commits, { repository = '', sections = DEFAULT_SECTI
     let desc = match.groups.desc.trim();
     const pr = / \(#([0-9]+)\)$/.exec(desc);
     if (pr) desc = desc.slice(0, pr.index);
-    parsed.push({ sha: commit.sha, type: match.groups.type, scope: match.groups.scope?.trim() || '', desc, pr: pr?.[1], breaking: Boolean(match.groups.bang) || /^BREAKING[ -]CHANGE: /m.test(body.join('\n')) });
+    const breakingNote = /^BREAKING[ -]CHANGE: ([\s\S]*)/m.exec(body.join('\n'))?.[1].trim() || '';
+    parsed.push({ sha: commit.sha, type: match.groups.type, scope: match.groups.scope?.trim() || '', desc, pr: pr?.[1], breakingNote, breaking: Boolean(match.groups.bang) || Boolean(breakingNote) });
   }
   const url = repository ? `https://github.com/${repository}` : '';
   const entry = commit => `* ${commit.scope ? `**${commit.scope}:** ` : ''}${commit.desc}${commit.pr && url ? ` ([#${commit.pr}](${url}/issues/${commit.pr}))` : ''}${url ? ` ([${commit.sha.slice(0, 7)}](${url}/commit/${commit.sha}))` : ` (${commit.sha.slice(0, 7)})`}`;
@@ -150,7 +160,7 @@ export function renderNotes(commits, { repository = '', sections = DEFAULT_SECTI
   const add = (heading, items) => {
     if (items.length) lines.push(`### ${heading}`, '', ...items.sort(sort).map(entry), '');
   };
-  add('⚠ BREAKING CHANGES', parsed.filter(commit => commit.breaking));
+  add('⚠ BREAKING CHANGES', parsed.filter(commit => commit.breaking).map(commit => ({ ...commit, desc: commit.breakingNote ? `${commit.desc}\n\n  ${commit.breakingNote.replaceAll('\n', '\n  ')}` : commit.desc })));
   const groups = new Map();
   for (const section of sections) {
     requireValue(section && typeof section.type === 'string' && typeof section.section === 'string', 'invalid notes section');
@@ -239,34 +249,34 @@ export class Releaser {
     requireValue(e && Number.isSafeInteger(e.runId) && e.runId > 0 && Number.isSafeInteger(e.attempt) && e.attempt > 0, 'source run/attempt required');
     requireValue(typeof e.workflow === 'string' && /^\.github\/workflows\/[a-zA-Z0-9_-]+\.ya?ml$/.test(e.workflow), 'exact workflow path required');
     requireValue(Array.isArray(e.jobs) && e.jobs.length > 0 && e.jobs.length <= 100 && new Set(e.jobs).size === e.jobs.length && e.jobs.every(job => typeof job === 'string' && job.length > 0 && job.length <= 200), 'required executed job names required');
-    return { runId: e.runId, attempt: e.attempt, workflow: e.workflow, jobs: e.jobs };
+    return { runId: e.runId, attempt: e.attempt, workflow: e.workflow, jobs: [...e.jobs] };
   }
 
-  async verifyRun(input, source, planning = false) {
+  async verifyRun(input, source, { allowActive = false, planning = false } = {}) {
     const e = this.sourceSelection(source);
     const run = await this.api.request('GET', `${this.base}/actions/runs/${e.runId}/attempts/${e.attempt}`);
     const complete = run.status === 'completed' && run.conclusion === 'success';
     // A canary publisher can be a successor job in the same transaction run.
     // Its named deploy/certification jobs must already be completed below;
     // requiring its own whole run to finish would make publication impossible.
-    const activeCanary = input.channel === 'canary' && run.status === 'in_progress' && run.conclusion === null;
-    requireValue(run.id === e.runId && run.run_attempt === e.attempt && run.repository?.full_name === this.repository && run.head_repository?.full_name === this.repository && run.head_sha === input.sha && run.head_branch === 'main' && run.event === 'push' && run.path === e.workflow && (complete || activeCanary), `unsafe staging run${planning ? ' selector' : ''}: require eligible same-repository main push attempt`);
+    const activeCanary = allowActive && input.channel === 'canary' && run.status === 'in_progress' && run.conclusion === null;
+    requireValue(run.id === e.runId && run.run_attempt === e.attempt && run.repository?.full_name === this.repository && run.head_repository?.full_name === this.repository && Number.isSafeInteger(run.repository?.id) && run.repository.id > 0 && run.head_repository.id === run.repository.id && run.head_sha === input.sha && run.head_branch === 'main' && run.event === 'push' && run.path === e.workflow && (complete || activeCanary), `unsafe staging run${planning ? ' selector' : ''}: require eligible same-repository main push attempt`);
     return run;
   }
 
-  async verifyEvidence(input) {
+  async verifyEvidence(input, { allowActive = false } = {}) {
     if (input.policy !== 'staged-promotion') return;
     const e = input.evidence;
     requireValue(e && Number.isSafeInteger(e.artifactId) && e.artifactId > 0, 'source artifact required');
     requireValue(typeof e.artifactName === 'string' && e.artifactName.length > 0 && e.artifactName.length <= 200 && /^sha256:[0-9a-f]{64}$/.test(e.artifactDigest), 'immutable artifact identity required');
-    const run = await this.verifyRun(input, e);
+    const run = await this.verifyRun(input, e, { allowActive });
     const jobs = await this.api.paginate(`${this.base}/actions/runs/${e.runId}/attempts/${e.attempt}/jobs?per_page=100`, 'jobs');
     for (const name of e.jobs) {
       const found = jobs.filter(job => job.name === name);
-      requireValue(found.length === 1 && found[0].run_id === e.runId && found[0].head_sha === input.sha && found[0].status === 'completed' && found[0].conclusion === 'success' && found[0].started_at && found[0].completed_at, `required staging job not executed successfully: ${name}`);
+      requireValue(found.length === 1 && found[0].run_id === e.runId && found[0].run_attempt === e.attempt && found[0].head_sha === input.sha && found[0].status === 'completed' && found[0].conclusion === 'success' && Number.isFinite(Date.parse(found[0].started_at)) && Date.parse(found[0].started_at) >= Date.parse(run.run_started_at) && Number.isFinite(Date.parse(found[0].completed_at)) && Date.parse(found[0].completed_at) >= Date.parse(found[0].started_at), `required staging job not executed successfully: ${name}`);
     }
     const artifact = await this.api.request('GET', `${this.base}/actions/artifacts/${e.artifactId}`);
-    requireValue(artifact.id === e.artifactId && artifact.name === e.artifactName && artifact.digest === e.artifactDigest && artifact.expired === false && artifact.size_in_bytes > 0 && artifact.workflow_run?.id === e.runId && artifact.workflow_run?.head_sha === input.sha && artifact.workflow_run?.head_branch === 'main', 'artifact identity or source mismatch');
+    requireValue(artifact.id === e.artifactId && artifact.name === e.artifactName && artifact.digest === e.artifactDigest && artifact.expired === false && artifact.size_in_bytes > 0 && artifact.workflow_run?.id === e.runId && artifact.workflow_run?.repository_id === run.repository.id && artifact.workflow_run?.head_repository_id === run.head_repository.id && artifact.workflow_run?.head_sha === input.sha && artifact.workflow_run?.head_branch === 'main', 'artifact identity or source mismatch');
     requireValue(Number.isFinite(Date.parse(artifact.created_at)) && Number.isFinite(Date.parse(run.run_started_at)) && Date.parse(artifact.created_at) >= Date.parse(run.run_started_at) && Number.isFinite(Date.parse(artifact.expires_at)) && Date.parse(artifact.expires_at) > this.now().getTime(), 'artifact is expired or from a prior attempt');
     if (input.channel === 'stable') {
       const parsed = parseTag(input.sourceCanary, input.namespace || '');
@@ -310,17 +320,26 @@ export class Releaser {
       legacy.sort((a, b) => compareNumeric(numericStable(b.name), numericStable(a.name)));
       candidates.push(...legacy);
     }
+    candidates.sort((a, b) => compareNumeric(numericStable(b.name, input.namespace), numericStable(a.name, input.namespace)));
     for (const tag of candidates) if (await this.reachable(tag.sha, input.sha)) return tag.name;
     return null;
   }
 
+  assertOperation(prior, input) {
+    if (prior.channel !== input.channel || prior.namespace !== (input.namespace || '')) return;
+    if (prior.sha === input.sha) requireValue(prior.operation === input.operation, 'SHA already published under a different operation');
+    if (prior.operation === input.operation && input.id) requireValue(prior.id === input.id, 'operation already belongs to a different frozen plan');
+  }
+
   async plan(input) {
+    input = { ...input, latest: input.latest || (input.namespace ? 'never' : 'auto') };
     this.policy(input);
     await this.verifySha(input.sha);
     if (input.policy === 'staged-promotion' && input.channel === 'canary' && !input.evidence) {
-      await this.verifyRun(input, input.source, true);
+      await this.verifyRun(input, input.source, { allowActive: true, planning: true });
     } else await this.verifyEvidence(input);
-    const source = input.policy === 'staged-promotion' ? this.sourceSelection(input.source || input.evidence) : null;
+    const source = input.policy === 'staged-promotion' ? this.sourceSelection(input.evidence || input.source) : null;
+    if (input.policy === 'staged-promotion' && input.source && input.evidence) requireValue(canonical(this.sourceSelection(input.source)) === canonical(source), 'source selector differs from verified evidence');
     const date = input.repairDate ? calendarDate(input.repairDate) : this.now().toISOString().slice(0, 10);
     requireValue(date <= this.now().toISOString().slice(0, 10), 'repair date cannot be in the future');
     const tags = await this.tags();
@@ -328,6 +347,7 @@ export class Releaser {
     for (const tag of tags) {
       if (!tag.annotation?.startsWith('calver-plan-v1\n')) continue;
       const { publicationEvidence, ...prior } = this.provenance(tag);
+      this.assertOperation(prior, input);
       if (prior.operation !== input.operation || prior.channel !== input.channel || prior.namespace !== (input.namespace || '')) continue;
       requireValue(prior.sha === input.sha && prior.policy === input.policy && canonical(prior.source) === canonical(source) && canonical(prior.evidence) === canonical(input.evidence || null) && prior.sourceCanary === (input.sourceCanary || null) && prior.latest === (input.latest || 'auto') && prior.repairDate === (input.repairDate || null), 'operation identity already used for a different release');
       return prior;
@@ -365,7 +385,7 @@ export class Releaser {
       if (plan.evidence) requireValue(canonical(proof) === canonical(plan.evidence), 'cannot replace a prestamped artifact identity');
     } else requireValue(!evidence, 'repository exception does not accept staged proof');
     await this.verifySha(plan.sha);
-    await this.verifyEvidence({ ...plan, evidence: proof });
+    await this.verifyEvidence({ ...plan, evidence: proof }, { allowActive: plan.channel === 'canary' && plan.evidence === null });
     const matches = ref => {
       const record = this.provenance(ref);
       return record.id === plan.id && canonical(record.publicationEvidence) === canonical(proof);
@@ -379,6 +399,9 @@ export class Releaser {
     if (release) requireValue(existing && release.tag_name === plan.tag && release.draft === false && release.prerelease === false && release.body?.includes(`<!-- calver-plan:${plan.id} -->`), 'existing release provenance mismatch');
     if (existing && plan.channel === 'stable' && !release) requireValue(repair, 'tag exists without Release: explicit repair required');
     const allTags = await this.tags();
+    for (const tag of allTags) {
+      if (tag.annotation?.startsWith('calver-plan-v1\n')) this.assertOperation(this.provenance(tag), plan);
+    }
     const stableVersion = numericStable(`${namespacePrefix(plan.namespace)}v${plan.version.replace(/-canary\.[0-9]+$/, '')}`, plan.namespace);
     const historical = allTags.some(tag => {
       const other = numericStable(tag.name, plan.namespace);
@@ -396,10 +419,13 @@ export class Releaser {
       } catch (error) {
         if (error.status !== 422) throw error;
         existing = await this.ref(plan.tag);
-        requireValue(existing && matches(existing), 'allocation collision; deployment version must not change');
+        if (!existing) throw error;
+        requireValue(matches(existing), 'allocation collision; deployment version must not change');
       }
-      const verified = await this.ref(plan.tag);
-      requireValue(verified && matches(verified), 'published tag verification failed');
+      if (created) {
+        const verified = await this.ref(plan.tag);
+        requireValue(verified && matches(verified), 'published tag verification failed');
+      }
     }
     if (plan.channel === 'canary') return { ...plan, created, releaseUrl: '', dryRun: false };
     if (release) return { ...plan, created: false, releaseUrl: release.html_url, dryRun: false };
@@ -409,6 +435,7 @@ export class Releaser {
     } catch (error) {
       if (error.status !== 422) throw error;
       published = await this.optional(releasePath);
+      if (!published) throw error;
       requireValue(published?.tag_name === plan.tag && published.draft === false && published.prerelease === false && published.body?.includes(`<!-- calver-plan:${plan.id} -->`), 'Release creation failed without an exact concurrent match');
     }
     requireValue(published?.tag_name === plan.tag && typeof published.html_url === 'string' && published.html_url.startsWith(`https://github.com/${this.repository}/releases/tag/`), 'invalid published Release response');

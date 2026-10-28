@@ -24,6 +24,8 @@ on:
         value: ${{ jobs.plan.outputs.tag || jobs.publish.outputs.tag }}
       sha:
         value: ${{ jobs.plan.outputs.sha || jobs.publish.outputs.sha }}
+      date:
+        value: ${{ jobs.plan.outputs.date || jobs.publish.outputs.date }}
       release-date:
         value: ${{ jobs.plan.outputs.release-date || jobs.publish.outputs.release-date }}
       previous-stable-tag:
@@ -32,8 +34,14 @@ on:
         value: ${{ jobs.publish.outputs.created || 'false' }}
       release-url:
         value: ${{ jobs.publish.outputs.release-url }}
+      provenance:
+        value: ${{ jobs.plan.outputs.provenance || jobs.publish.outputs.provenance }}
       provenance-id:
         value: ${{ jobs.plan.outputs.provenance-id || jobs.publish.outputs.provenance-id }}
+      skipped:
+        value: ${{ jobs.plan.outputs.skipped || 'false' }}
+      reason:
+        value: ${{ jobs.plan.outputs.reason }}
 
 permissions:
   contents: read
@@ -55,9 +63,13 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
       sha: ${{ steps.release.outputs.sha }}
+      date: ${{ steps.release.outputs.date }}
       release-date: ${{ steps.release.outputs.release-date }}
       previous-stable-tag: ${{ steps.release.outputs.previous-stable-tag }}
+      provenance: ${{ steps.release.outputs.provenance }}
       provenance-id: ${{ steps.release.outputs.provenance-id }}
+      skipped: ${{ steps.release.outputs.skipped }}
+      reason: ${{ steps.release.outputs.reason }}
     steps:
       - name: Require immutable shared tooling pin
         env:
@@ -89,11 +101,15 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
       sha: ${{ steps.release.outputs.sha }}
+      date: ${{ steps.release.outputs.date }}
       release-date: ${{ steps.release.outputs.release-date }}
       previous-stable-tag: ${{ steps.release.outputs.previous-stable-tag }}
       created: ${{ steps.release.outputs.created }}
       release-url: ${{ steps.release.outputs.release-url }}
+      provenance: ${{ steps.release.outputs.provenance }}
       provenance-id: ${{ steps.release.outputs.provenance-id }}
+      skipped: ${{ steps.release.outputs.skipped }}
+      reason: ${{ steps.release.outputs.reason }}
     steps:
       - name: Require immutable shared tooling pin
         env:

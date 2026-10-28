@@ -28,8 +28,11 @@ outputs:
   sha:
     description: Independently verified main-reachable commit
     value: ${{ steps.release.outputs.sha }}
-  release-date:
+  date:
     description: Frozen UTC transaction date
+    value: ${{ steps.release.outputs.date }}
+  release-date:
+    description: Alias for date
     value: ${{ steps.release.outputs.release-date }}
   previous-stable-tag:
     description: Reachable previous notes boundary, empty for initial history
@@ -40,8 +43,11 @@ outputs:
   release-url:
     description: Stable Release URL, empty for canaries
     value: ${{ steps.release.outputs.release-url }}
-  provenance-id:
+  provenance:
     description: Operation-bound plan identifier
+    value: ${{ steps.release.outputs.provenance }}
+  provenance-id:
+    description: Alias for provenance
     value: ${{ steps.release.outputs.provenance-id }}
   skipped:
     description: True for a classified live-digest quiet-day, rollback or daily-cadence skip

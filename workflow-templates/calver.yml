@@ -1,0 +1,90 @@
+name: CalVer read-only acceptance
+
+# Public-repository template: validate an already successful staging build.
+# Configure the exact workflow/job/artifact names below for the real caller.
+# This does not deploy, certify a build itself, or create tags/Releases.
+# Live integration belongs inside the existing serialized release transaction;
+# see actions/calver/examples.md, including the private-runner variant.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact lowercase source commit, independently checked against main
+        required: true
+        type: string
+      source-run-id:
+        description: Successful main-push staging run ID (not this dispatch)
+        required: true
+        type: string
+      source-attempt:
+        description: Exact successful source attempt
+        required: true
+        type: string
+      artifact-id:
+        description: Immutable certified artifact ID from that attempt
+        required: true
+        type: string
+      artifact-name:
+        description: Exact certified artifact name
+        required: true
+        type: string
+      artifact-digest:
+        description: GitHub archive digest, sha256 followed by a colon and 64 lowercase hex characters
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Construct request without executing caller source
+        id: request
+        env:
+          SOURCE_SHA: ${{ inputs.sha }}
+          SOURCE_RUN: ${{ inputs.source-run-id }}
+          SOURCE_ATTEMPT: ${{ inputs.source-attempt }}
+          ARTIFACT_ID: ${{ inputs.artifact-id }}
+          ARTIFACT_NAME: ${{ inputs.artifact-name }}
+          ARTIFACT_DIGEST: ${{ inputs.artifact-digest }}
+        run: |
+          node --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs';
+          const evidence = {
+            runId: Number(process.env.SOURCE_RUN), attempt: Number(process.env.SOURCE_ATTEMPT),
+            workflow: '.github/workflows/deploy-staging.yml',
+            jobs: ['deploy-staging', 'certify-promotion'],
+            artifactId: Number(process.env.ARTIFACT_ID), artifactName: process.env.ARTIFACT_NAME,
+            artifactDigest: process.env.ARTIFACT_DIGEST,
+          };
+          const request = { phase: 'plan', input: {
+            channel: 'canary', sha: process.env.SOURCE_SHA, policy: 'staged-promotion',
+            operation: `staging/${evidence.runId}/${evidence.attempt}`, evidence,
+          } };
+          appendFileSync(process.env.GITHUB_OUTPUT, `request=${JSON.stringify(request)}\n`);
+          JS
+      - name: Plan (read only)
+        id: plan
+        uses: TogetherWeOwn/.github/actions/calver@0b8dafc688df4f9b4df46964eec0c4e306bc2ff2
+        with:
+          runs-on-json: '"ubuntu-latest"'
+          request: ${{ steps.request.outputs.request }}
+      - name: Carry the exact portable plan into a dry-run publication
+        id: publication
+        env:
+          FROZEN_PLAN: ${{ steps.plan.outputs.plan }}
+        run: |
+          node --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs';
+          const request = { phase: 'publish', plan: JSON.parse(process.env.FROZEN_PLAN), dryRun: true };
+          appendFileSync(process.env.GITHUB_OUTPUT, `request=${JSON.stringify(request)}\n`);
+          JS
+      - name: Independently revalidate publication (zero writes)
+        uses: TogetherWeOwn/.github/actions/calver@0b8dafc688df4f9b4df46964eec0c4e306bc2ff2
+        with:
+          runs-on-json: '"ubuntu-latest"'
+          request: ${{ steps.publication.outputs.request }}

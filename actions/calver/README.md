@@ -68,8 +68,10 @@ the exact saved plan in the publication request. It must match the frozen source
 selector and is stored as `publicationEvidence` in the tag annotation; retries
 must match that exact proof. No version is reallocated or plan rewritten.
 
-A canary publisher may be a successor job inside its still-in-progress source
-run after all named jobs completed successfully, so the outer transaction lock
+Only a **deferred-source** canary publisher may be a successor job inside its
+still-in-progress source run after all named jobs completed successfully. A plan
+created with full evidence requires a completed successful run at both planning
+and publication. With a deferred source, the outer transaction lock
 can remain held. This is not permission to publish before deployment: missing,
 skipped, failed and running required jobs all refuse. Stable promotion does not
 allow that in-progress exception. A follow-up's default `github.sha` is not the
@@ -77,7 +79,8 @@ selected source SHA. Callers must retain their stronger normal-vs-recovery/fault
 certificate checks: this generic tool does not parse application-specific receipts.
 
 The action returns a portable JSON `plan` plus `version`, `tag`, `sha`,
-`release-date`, `previous-stable-tag`, `created`, `release-url` and `provenance-id`.
+`date` (alias `release-date`), `previous-stable-tag`, `created`, `release-url`
+and `provenance` (alias `provenance-id`).
 Carry that plan through the transaction without editing it. Publish with:
 
 ```json
@@ -108,6 +111,9 @@ A provenance annotation binds repository, operation, policy, channel, SHA,
 version/date, source canary and artifact identity. Its deterministic ID detects
 changed plans; it is not a cryptographic signature or replacement for workflow
 trust and token permissions. A same-SHA arbitrary tag is not an idempotency key.
+A SHA already published for a channel/namespace cannot be republished under a
+different operation ID, including repository exceptions. Publication also checks
+that an operation does not already belong to a different frozen plan.
 
 Tags are created through Git objects/refs, never moved or deleted. Stable Releases
 are created against the verified existing tag. A 422 is not blindly retried:
@@ -118,8 +124,8 @@ change the operation ID just to get past a refusal. Existing legacy repair adapt
 remain responsible for their legacy tags; the new engine does not adopt arbitrary
 old tags as its own operation provenance.
 
-Historical repair never moves Latest backwards. Build-namespace Releases require
-`latest: "never"`. Other new application stables explicitly become Latest only
+Historical repair never moves Latest backwards. Build-namespace Releases default
+to `latest: "never"` and refuse an explicit `auto`. Other new application stables explicitly become Latest only
 when no numerically later stable exists. This comparison is protected by the same
 caller writer lock; GitHub does not offer compare-and-swap for Latest. The engine
 cannot compensate for independent writers ignoring the transaction contract.

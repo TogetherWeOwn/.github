@@ -1,0 +1,5 @@
+{
+  "name": "CalVer: read-only acceptance",
+  "description": "Plan and dry-run a CalVer publication against a real successful staging run and immutable artifact; no deployments, tags or Releases.",
+  "iconName": "octicon tag"
+}

@@ -97,8 +97,10 @@ the full `evidence` to `publish(plan, {evidence})` after deployment/certificatio
 It must match the frozen selector. The tag annotation stores the unchanged plan
 plus `publicationEvidence`; an exact replay must match that proof too. This
 avoids requiring an artifact ID before building/version stamping. A canary
-publisher can be a successor job in its still-in-progress source run ONLY after
-all named deploy/certification jobs actually completed successfully. Failed,
+publisher using this deferred-source plan can be a successor job in its
+still-in-progress source run ONLY after all named deploy/certification jobs
+actually completed successfully. Full-evidence plans require completed successful
+runs at both planning and publication; they do not use this exception. Failed,
 skipped or missing jobs still refuse. A completed run must be successful.
 
 A stable staged promotion additionally requires an exact source canary on this

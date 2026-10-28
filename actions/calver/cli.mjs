@@ -22,10 +22,10 @@ async function main() {
   const { created, releaseUrl, dryRun, ...frozenPlan } = result;
   const values = {
     plan: JSON.stringify(frozenPlan), version: result.version, tag: result.tag,
-    sha: result.sha, 'release-date': result.date,
+    sha: result.sha, date: result.date, 'release-date': result.date,
     'previous-stable-tag': result.previousStableTag || '',
     created: String(result.created === true), 'release-url': result.releaseUrl || '',
-    'provenance-id': result.id,
+    provenance: result.id, 'provenance-id': result.id,
   };
   const output = Object.entries(values).map(([key, value]) => `${key}=${value}\n`).join('');
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, output);
