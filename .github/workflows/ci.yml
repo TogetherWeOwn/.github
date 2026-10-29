@@ -189,6 +189,12 @@ jobs:
         run: python3 -I .github/scripts/test_checkout_credentials.py
       - name: Required reusable pincheck regressions
         run: python3 -I .github/scripts/test_changes_pins.py
+      # Fetch/check the pinned source object before acceptance inspects it;
+      # preserve the existing shallow checkout/credential contract.
+      - name: CalVer caller pins carry the current tooling
+        run: node actions/calver/check-pins.mjs
+      - name: CalVer engine and adapter acceptance tests (required)
+        run: node --test ci/calver*.test.mjs
 
   # Unit tests for the org PR-size labeller (stdlib unittest, seconds),
   # including the static check that every caller job in the shipped

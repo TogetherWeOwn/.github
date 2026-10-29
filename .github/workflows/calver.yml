@@ -1,0 +1,130 @@
+name: Shared CalVer releaser
+
+on:
+  workflow_call:
+    inputs:
+      request:
+        description: JSON plan or publish request (see actions/calver/contract.md)
+        type: string
+        required: true
+      tooling-sha:
+        description: Full immutable TogetherWeOwn/.github commit; must match the caller workflow pin
+        type: string
+        required: true
+      runs-on-json:
+        description: Explicit existing routing; public callers use '"ubuntu-latest"'
+        type: string
+        required: true
+    outputs:
+      plan:
+        value: ${{ jobs.plan.outputs.plan || jobs.publish.outputs.plan }}
+      version:
+        value: ${{ jobs.plan.outputs.version || jobs.publish.outputs.version }}
+      tag:
+        value: ${{ jobs.plan.outputs.tag || jobs.publish.outputs.tag }}
+      sha:
+        value: ${{ jobs.plan.outputs.sha || jobs.publish.outputs.sha }}
+      date:
+        value: ${{ jobs.plan.outputs.date || jobs.publish.outputs.date }}
+      release-date:
+        value: ${{ jobs.plan.outputs.release-date || jobs.publish.outputs.release-date }}
+      previous-stable-tag:
+        value: ${{ jobs.plan.outputs.previous-stable-tag || jobs.publish.outputs.previous-stable-tag }}
+      created:
+        value: ${{ jobs.publish.outputs.created || 'false' }}
+      release-url:
+        value: ${{ jobs.publish.outputs.release-url }}
+      provenance:
+        value: ${{ jobs.plan.outputs.provenance || jobs.publish.outputs.provenance }}
+      provenance-id:
+        value: ${{ jobs.plan.outputs.provenance-id || jobs.publish.outputs.provenance-id }}
+      skipped:
+        value: ${{ jobs.plan.outputs.skipped || 'false' }}
+      reason:
+        value: ${{ jobs.plan.outputs.reason }}
+
+permissions:
+  contents: read
+
+# Deliberately no invocation-local concurrency lock. It cannot serialize the
+# caller deployment between plan and publish. The caller owns that transaction.
+# Public scheduling ignores arbitrary runner input. A missing/non-self-hosted
+# private configuration evaluates to null and fails closed, not paid fallback.
+jobs:
+  plan:
+    if: fromJSON(inputs.request).phase != 'publish'
+    runs-on: ${{ fromJSON(github.event.repository.private && startsWith(vars.CI_OVERFLOW_RUNNER, '["self-hosted",') && vars.CI_OVERFLOW_RUNNER || (!github.event.repository.private && '"ubuntu-latest"') || 'null') }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      plan: ${{ steps.release.outputs.plan }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      sha: ${{ steps.release.outputs.sha }}
+      date: ${{ steps.release.outputs.date }}
+      release-date: ${{ steps.release.outputs.release-date }}
+      previous-stable-tag: ${{ steps.release.outputs.previous-stable-tag }}
+      provenance: ${{ steps.release.outputs.provenance }}
+      provenance-id: ${{ steps.release.outputs.provenance-id }}
+      skipped: ${{ steps.release.outputs.skipped }}
+      reason: ${{ steps.release.outputs.reason }}
+    steps:
+      - name: Require immutable shared tooling pin
+        env:
+          TOOLING_SHA: ${{ inputs.tooling-sha }}
+        run: '[[ "$TOOLING_SHA" =~ ^[0-9a-f]{40}$ ]]'
+      - name: Checkout shared tooling, never caller code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: TogetherWeOwn/.github
+          ref: ${{ inputs.tooling-sha }}
+          path: .calver-tooling
+          persist-credentials: false
+      - id: release
+        uses: ./.calver-tooling/actions/calver
+        with:
+          request: ${{ inputs.request }}
+          runs-on-json: ${{ inputs.runs-on-json }}
+          private-runner-json: ${{ vars.CI_OVERFLOW_RUNNER }}
+
+  publish:
+    if: fromJSON(inputs.request).phase == 'publish'
+    runs-on: ${{ fromJSON(github.event.repository.private && startsWith(vars.CI_OVERFLOW_RUNNER, '["self-hosted",') && vars.CI_OVERFLOW_RUNNER || (!github.event.repository.private && '"ubuntu-latest"') || 'null') }}
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      plan: ${{ steps.release.outputs.plan }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      sha: ${{ steps.release.outputs.sha }}
+      date: ${{ steps.release.outputs.date }}
+      release-date: ${{ steps.release.outputs.release-date }}
+      previous-stable-tag: ${{ steps.release.outputs.previous-stable-tag }}
+      created: ${{ steps.release.outputs.created }}
+      release-url: ${{ steps.release.outputs.release-url }}
+      provenance: ${{ steps.release.outputs.provenance }}
+      provenance-id: ${{ steps.release.outputs.provenance-id }}
+      skipped: ${{ steps.release.outputs.skipped }}
+      reason: ${{ steps.release.outputs.reason }}
+    steps:
+      - name: Require immutable shared tooling pin
+        env:
+          TOOLING_SHA: ${{ inputs.tooling-sha }}
+        run: '[[ "$TOOLING_SHA" =~ ^[0-9a-f]{40}$ ]]'
+      - name: Checkout shared tooling, never caller code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: TogetherWeOwn/.github
+          ref: ${{ inputs.tooling-sha }}
+          path: .calver-tooling
+          persist-credentials: false
+      - id: release
+        uses: ./.calver-tooling/actions/calver
+        with:
+          request: ${{ inputs.request }}
+          runs-on-json: ${{ inputs.runs-on-json }}
+          private-runner-json: ${{ vars.CI_OVERFLOW_RUNNER }}
