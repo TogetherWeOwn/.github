@@ -32,7 +32,11 @@ or describe the problem in your own words. Name branches after the change
 ## 4. Reviews
 
 - Address every review finding, or reply with why it does not apply.
-- One review per PR; fixes after a changes-verdict stay on the same review thread.
-- Docs, specs, test scripts, fixtures and CI-only changes need one reviewer pass.
+- Review comes from the required review-app checks: `Devin Review` on every repo
+  and `CodeRabbit` on public repos. Each reviews every push to the PR. No
+  approving review is required, whatever the change type (see
+  [PIPELINE-STANDARD.md](PIPELINE-STANDARD.md) §1).
+- Fix findings on the same PR and reply on the finding's thread; do not open a
+  new PR to get a fresh review.
 - Ask for a security review when the diff touches auth, sessions, secrets,
   permissions, payments or public exposure.
