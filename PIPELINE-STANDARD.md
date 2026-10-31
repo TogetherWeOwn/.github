@@ -9,27 +9,26 @@ Every repo links this file from its CONTRIBUTING.md or README. New repos start f
 
 ## 1. Review
 
-- **Paperclip Review runs once per CI-green, non-draft head.** The host review gate (`review-gate.timer`, every
-  5 min) finds open non-draft PRs whose head has every non-review check green and no review yet. It then requests
-  exactly ONE Paperclip Review for that head, and it does this for every author, host-authored PRs included. To get
-  reviewed: make CI green and keep the PR non-draft. Nothing else is needed.
-- **No automatic review on `opened`, `synchronize` or `reopened`, and none on drafts.** Those reviews were mostly
-  superseded by the next push before they finished. Marking a draft "ready for review" still triggers one.
-- **First review on Opus; re-reviews on Sonnet.** Once a PR's review card holds a completed assessment, later
-  reviews of that PR run on Sonnet 5.5 (`review_model_router`).
-- **Reviewer concurrency follows Claude's pace.** The cap is whatever the remaining weekly Claude allowance
-  sustains until reset (`apply_caps.py`), with a minimum of 2. Reviews queue rather than burn the week early.
-- **Authors:** ask for a re-review with `@togetherweown-reviewer review this PR` only once CI is green on the
-  new head. Do not push while a review is running unless the push fixes that review's findings, because every
-  push supersedes the running review.
-- The required check is `Paperclip Review` 5/5 on the exact head. Never fake it, and never bypass it.
+- **Required checks come from the ruleset.** Every protect-main ruleset requires the repo's CI, `Devin Review`
+  and, on public repos, `CodeRabbit`. No approving review is required. Read the live set with
+  `gh api repos/<repo>/rules/branches/main`.
+- **The Paperclip Review check is retired (2026-10-31).** No ruleset requires it. Do not wait for it, and do not
+  ask anyone to run or waive it.
+- **Answer every finding.** Fix each review finding, or reply on the PR with evidence of why it does not apply.
+- **Batch fixes.** Push the fixes for one review round together. Every push re-runs CI and the reviews.
+- Never fake or bypass a required check.
 
 ## 2. Merge
 
+- **The agent that did the work merges it (owner decision 2026-10-31).** A PR merges with no owner approval once
+  every required check is green and each finding is fixed or answered with evidence.
+- **Production deploys need the owner.** If a merge to the default branch deploys production (today two-web-next
+  and two-bot-next), the merge needs the owner's approval through `request_confirmation` on the card. So does
+  every other production deploy, such as a manual dispatch or promotion.
 - **No rebase churn.** Every repo's rulesets have `strict_required_status_checks_policy=false`, so a BEHIND PR
   merges as-is once its checks and review pass.
 - **Rule:** never update-branch, rebase or merge main into a PR unless it is DIRTY (has conflicts). Each refresh
-  pushes a new head, re-runs all CI and supersedes that head's Paperclip Review.
+  pushes a new head and re-runs all CI and the reviews.
 - Host `pr_automerge.sh` enables `--auto --squash` and no longer runs update-branch, except for repos that are
   strict.
 

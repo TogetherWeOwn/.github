@@ -111,7 +111,7 @@ time, money and resources.
     shared hosted concurrency (seen 2026-10-04: an ops-tooling burst queued
     TWO Next ~25 min). Clean up stale PRs and old runs.
 21. **Tier 0 before LLM review (2026-10-10).** Deterministic checks catch what
-    a linter can, so the Paperclip Review spends its rounds on judgment. Every
+    a linter can, so the review apps spend their rounds on judgment. Every
     repo runs, inside `ci-ok`: actionlint (checksum-pinned) and zizmor on
     workflows; gitleaks; each generator re-run plus `git diff --exit-code`
     (schema, OpenAPI, lockfiles, vendored lists); and the stack's strict
@@ -119,9 +119,9 @@ time, money and resources.
     rule here or a repo lint. Measured 2026-10-09: about 35% of 146 structured
     review findings were catchable this way, and workflow logic was the
     largest single class.
-22. **Review only green heads; no pushes during review.** Paperclip Review is
-    requested once per CI-green, non-draft head. The author batches all
-    findings of a round into one push after the review completes. Measured
+22. **No pushes during review.** The author batches all findings of a review
+    round into one push after the reviews (CodeRabbit on public repos, Devin
+    Review) complete. Measured
     2026-10-10: 45% of review rows were superseded or incomplete, mostly
     from pushes while a review was queued or running.
 
@@ -149,7 +149,7 @@ time, money and resources.
     - **Nightly:** against staging, to catch drift no PR causes (third-party
       scripts, CDN, content).
     Agents fix failures; a budget is raised (ratchet) or lowered only in its own
-    justified PR, and Paperclip Review treats loosening as a finding. Template:
+    justified PR, and reviewers treat loosening as a finding. Template:
     `workflow-templates/web-quality.yml`. Reference implementation:
     togetherweown/two-web-next.
 
