@@ -37,8 +37,9 @@ time, money and resources.
    hangs on "Expected — waiting" forever.
 3. **One required aggregator.** Each repo has one required check, `ci-ok`
    (`if: always()`, `needs:` every gated job), which passes when every needed
-   job succeeded or was skipped. Branch protection requires only `ci-ok`
-   (plus pr-lint, secret scan), so gating can never block merges.
+   job succeeded or was skipped. Of the CI jobs, branch protection requires
+   only `ci-ok` (plus pr-lint, secret scan), so gating can never block merges.
+   The ruleset also requires `Devin Review` and, on public repos, `CodeRabbit`.
 4. **Full-run triggers.** Changes to dependency manifests or lockfiles,
    `.github/**`, shared/common code, build/tooling config, or the
    change-detection filter itself make EVERYTHING run. Include root AND
