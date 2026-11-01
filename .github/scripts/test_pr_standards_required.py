@@ -98,15 +98,27 @@ class InternalReferences(unittest.TestCase):
 
     def test_local_and_private_addresses_fail(self):
         for b in ("see http://localhost:8080/x", "runs on 127.0.0.1:3100", "host 192.168.1.10 is up",
-                  "db at 10.0.4.7", "proxy 172.20.0.3", "tailnet 100.101.2.3"):
+                  "db at 10.0.4.7", "proxy 172.20.0.3", "tailnet 100.101.2.3",
+                  "open http://localhost", "ping 127.0.0.1"):
             with self.subTest(b=b):
                 self.assertFails(run(body=CLEAN_BODY + b + "\n"), "address")
 
     def test_versions_and_public_ips_pass(self):
-        for b in ("bump to 10.2.3", "lib 1.10.0.4", "DNS 8.8.8.8", "172.32.0.1 is public"):
+        for b in ("bump to 10.2.3", "lib 1.10.0.4", "DNS 8.8.8.8", "172.32.0.1 is public",
+                  "upgrade to 10.256.300.999", "bind to localhost in dev"):
             with self.subTest(b=b):
                 code, out = run(body=CLEAN_BODY + b + "\n")
                 self.assertEqual(code, 0, out)
+
+    def test_addresses_only_warn_on_bot_and_fork_prs(self):
+        notes = CLEAN_BODY + "Fix HMR on http://localhost:5173/\n"
+        for kw in ({"author": "dependabot[bot]", "title": "build(deps): bump vite"}, {"fork": "true"}):
+            with self.subTest(kw=kw):
+                code, out = run(body=notes, commits=["fix: bind dev server to 0.0.0.0:8080"], **kw)
+                self.assertEqual(code, 0, out)
+                self.assertIn("::warning title=Internal reference in the PR body", out)
+        self.assertFails(run(body=CLEAN_BODY + "TWO-5\n", author="dependabot[bot]",
+                             title="build(deps): bump vite"), "tracker id")
 
     def test_github_lookalike_host_is_not_exempt(self):
         self.assertFails(run(body=CLEAN_BODY + "https://notgithub.com/TWO-123\n"), "tracker id")
