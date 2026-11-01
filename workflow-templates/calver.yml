@@ -69,7 +69,7 @@ jobs:
           JS
       - name: Plan (read only)
         id: plan
-        uses: TogetherWeOwn/.github/actions/calver@27d1baf5d85e87a60ef814de34fbca88b71e7633
+        uses: TogetherWeOwn/.github/actions/calver@0e66226c3a5b4dd4afaf8cc526ae4dee8b54ea11
         with:
           runs-on-json: '"ubuntu-latest"'
           request: ${{ steps.request.outputs.request }}
@@ -84,7 +84,7 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `request=${JSON.stringify(request)}\n`);
           JS
       - name: Independently revalidate publication (zero writes)
-        uses: TogetherWeOwn/.github/actions/calver@27d1baf5d85e87a60ef814de34fbca88b71e7633
+        uses: TogetherWeOwn/.github/actions/calver@0e66226c3a5b4dd4afaf8cc526ae4dee8b54ea11
         with:
           runs-on-json: '"ubuntu-latest"'
           request: ${{ steps.publication.outputs.request }}
