@@ -21,12 +21,12 @@ concurrency:
 
 jobs:
   plan-version:
-    uses: TogetherWeOwn/.github/.github/workflows/calver.yml@6f75694fdc95748e9af19bdedc72873c108f1922
+    uses: TogetherWeOwn/.github/.github/workflows/calver.yml@1e3c0c04b15a31baf498398417d98e44d0d8cbdb
     permissions:
       contents: read
       actions: read
     with:
-      tooling-sha: 6f75694fdc95748e9af19bdedc72873c108f1922
+      tooling-sha: 1e3c0c04b15a31baf498398417d98e44d0d8cbdb
       runs-on-json: '"ubuntu-latest"'
       # Trusted caller context constructs JSON; never evaluate user JSON as shell.
       request: ${{ needs.context.outputs.plan-request }}
@@ -54,7 +54,7 @@ running required-certification job or to replace real gates with an echo step.
 ```yaml
 # Planning job: contents:read, actions:read. Source run/attempt are known now;
 # artifact ID/digest are intentionally unavailable until after upload.
-- uses: TogetherWeOwn/.github/actions/calver@6f75694fdc95748e9af19bdedc72873c108f1922
+- uses: TogetherWeOwn/.github/actions/calver@1e3c0c04b15a31baf498398417d98e44d0d8cbdb
   id: version
   with:
     runs-on-json: '"ubuntu-latest"'
@@ -62,7 +62,7 @@ running required-certification job or to replace real gates with an echo step.
 
 # Separate successor publication job: contents:write, actions:read.
 # It consumes the saved plan plus the actual immutable artifact proof.
-- uses: TogetherWeOwn/.github/actions/calver@6f75694fdc95748e9af19bdedc72873c108f1922
+- uses: TogetherWeOwn/.github/actions/calver@1e3c0c04b15a31baf498398417d98e44d0d8cbdb
   if: success()
   id: publication
   with:
