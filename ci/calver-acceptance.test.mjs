@@ -1191,6 +1191,107 @@ test("the scoped TWO bot stable live-digest exception does not assert a rollout"
     "the releaser must never create deployments, dispatch workflows or edit repository settings");
 });
 
+// The bot's release-please `changelog-sections` (Common Changelog headings).
+const BOT_SECTIONS = [
+  { type: "perf", section: "Changed" },
+  { type: "refactor", section: "Changed", hidden: true },
+  { type: "revert", section: "Changed", hidden: false },
+  { type: "feat", section: "Added" },
+  { type: "fix", section: "Fixed" },
+  { type: "security", section: "Fixed" },
+  { type: "docs", section: "Documentation", hidden: true },
+];
+const digestInput = (extra = {}) => input({
+  channel: "stable", policy: "live-digest", evidence: undefined, sections: copy(BOT_SECTIONS), ...extra,
+});
+
+test("caller sections freeze into the plan and render the published notes", async () => {
+  const { api, releaser } = await setup("TogetherWeOwn/two-bot-next");
+  api.commitMessages = [
+    { sha: SHA, message: "security(deps): patch the token parser" },
+    { sha: OTHER, message: "feat: add search" },
+    { sha: OLD, message: "docs: document migration" },
+  ];
+  const plan = await releaser.plan(digestInput());
+  // `hidden: false` normalizes away; the frozen copy is the validated shape.
+  assert.deepEqual(plan.sections, BOT_SECTIONS.map(({ hidden, ...rest }) =>
+    hidden ? { ...rest, hidden: true } : rest));
+  assert.deepEqual(plan.sections.find(({ type }) => type === "revert"), { type: "revert", section: "Changed" });
+  assert.deepEqual(plan.sections.find(({ type }) => type === "security"), { type: "security", section: "Fixed" });
+  await releaser.publish(plan);
+  const notes = releaseBody(api).body;
+  assert.ok(notes.includes("### Added") && notes.includes("### Fixed"));
+  assert.ok((notes.split("### Fixed")[1] ?? "").includes("patch the token parser"));
+  assert.ok(!notes.includes("document migration"));
+  assert.ok(!notes.includes("Bug Fixes"));
+});
+
+test("omitted sections freeze as null and keep the built-in notes", async () => {
+  const { api, releaser } = await setup("TogetherWeOwn/two-bot-next");
+  const plan = await releaser.plan(digestInput({ sections: undefined }));
+  assert.equal(plan.sections, null);
+  await releaser.publish(plan);
+  assert.ok(releaseBody(api).body.includes("### Features"));
+});
+
+test("sections are part of the plan identity, not a publish-time override", async () => {
+  const { releaser } = await setup("TogetherWeOwn/two-bot-next");
+  const withSections = await releaser.plan(digestInput());
+  const { releaser: other } = await setup("TogetherWeOwn/two-bot-next");
+  const without = await other.plan(digestInput({ sections: undefined }));
+  assert.notEqual(withSections.id, without.id);
+  const tampered = copy(withSections);
+  tampered.sections = [{ type: "security", section: "Security" }, ...tampered.sections];
+  await assert.rejects(releaser.publish(tampered), /integrity/);
+});
+
+test("a plan frozen before sections existed still publishes and recovers", async () => {
+  // Rebuild a pre-sections plan: same payload minus the field, identity
+  // recomputed the documented way (sha256 over canonical JSON).
+  const { createHash } = await import("node:crypto");
+  const canonical = (value) => Array.isArray(value) ? `[${value.map(canonical).join(",")}]`
+    : value && typeof value === "object" ? `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`
+    : JSON.stringify(value);
+  const { api, releaser } = await setup("TogetherWeOwn/two-bot-next");
+  const { sections, id, ...rest } = await releaser.plan(digestInput({ sections: undefined }));
+  const legacy = { ...rest, id: createHash("sha256").update(canonical(rest)).digest("hex") };
+  assert.ok(!("sections" in legacy));
+  await releaser.publish(legacy);
+  assert.ok(releaseBody(api).body.includes("### Features"), "legacy plan must render built-in sections");
+  assert.deepEqual(await releaser.plan(digestInput({ sections: undefined })), legacy);
+});
+
+test("a prototype-smuggled hidden flag cannot change a frozen plan's notes", async () => {
+  const { releaser } = await setup("TogetherWeOwn/two-bot-next");
+  const plan = await releaser.plan(digestInput());
+  Object.setPrototypeOf(plan.sections[0], { hidden: true });
+  await assert.rejects(releaser.publish(plan), /section/i);
+});
+
+test("an operation retry recovers its sections and refuses different ones", async () => {
+  const { releaser } = await setup("TogetherWeOwn/two-bot-next");
+  const plan = await releaser.plan(digestInput());
+  await releaser.publish(plan);
+  assert.deepEqual(await releaser.plan(digestInput()), plan);
+  await assert.rejects(releaser.plan(digestInput({ sections: undefined })), /different release/);
+  await assert.rejects(releaser.plan(digestInput({
+    sections: BOT_SECTIONS.map((s) => s.type === "security" ? { ...s, section: "Security" } : s),
+  })), /different release/);
+});
+
+for (const [label, sections] of [
+  ["duplicate type", [{ type: "fix", section: "Fixed" }, { type: "fix", section: "Other" }]],
+  ["section with newline", [{ type: "fix", section: "Fixed\n## injected" }]],
+  ["oversized list", Array.from({ length: 33 }, (_, i) => ({ type: `t${"x".repeat(i)}`, section: "S" }))],
+  ["non-boolean hidden", [{ type: "fix", section: "Fixed", hidden: 1 }]],
+]) {
+  test(`planning refuses invalid caller sections: ${label}`, async () => {
+    const { api, releaser } = await setup("TogetherWeOwn/two-bot-next");
+    await assert.rejects(releaser.plan(digestInput({ sections })), /section/i);
+    assertNoMutations(api);
+  });
+}
+
 for (const legacy of [false, true]) {
   test(`release notes use ${legacy ? "a legacy daily release" : "the reachable previous stable"} boundary, not future/unreachable tags`, async () => {
     const { api, releaser } = await setup();
@@ -1455,7 +1556,7 @@ test("production-promotion sections change the plan identity", async () => {
   const withSections = await releaser.plan(productionInput());
   const defaults = await releaser.plan(productionInput({ sections: undefined }));
   assert.notEqual(withSections.id, defaults.id);
-  assert.equal("sections" in defaults, false, "plans without sections keep the original shape");
+  assert.equal(defaults.sections, null, "omitted sections freeze as null (built-in headings)");
 });
 
 test("an exact production retry can repair a historical Release after a newer stable exists", async () => {

@@ -21,15 +21,32 @@ function requireValue(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-// Caller notes grouping (release-please `changelog-sections` shape), frozen
-// into the plan so a replay renders the same notes.
-function validateSections(sections) {
-  requireValue(Array.isArray(sections) && sections.length > 0 && sections.length <= 50 && sections.every(item => item && typeof item === 'object' && !Array.isArray(item) && Object.keys(item).every(key => ['type', 'section', 'hidden'].includes(key)) && typeof item.type === 'string' && /^[a-z]{1,30}$/.test(item.type) && typeof item.section === 'string' && /^[^\r\n]{1,100}$/.test(item.section) && (item.hidden === undefined || typeof item.hidden === 'boolean')), 'sections must be 1-50 {type, section, hidden?} entries');
-}
-
-// The frozen plan form: `hidden` only when true, so a replay compares equal.
-function frozenSections(sections) {
-  return sections ? sections.map(({ type, section, hidden }) => (hidden ? { type, section, hidden: true } : { type, section })) : null;
+// Caller sections use the release-please `changelog-sections` shape. Returns
+// null when omitted (built-in sections apply), otherwise a validated copy in
+// caller order with `hidden: false` normalized away, so equivalent inputs
+// freeze to the same plan identity. Bounds keep a frozen plan and its note
+// headings small and free of markdown/control injection from a bad config.
+export function normalizeSections(sections) {
+  if (sections === undefined || sections === null) return null;
+  requireValue(Array.isArray(sections) && sections.length >= 1 && sections.length <= 32, 'sections must be an array of 1 to 32 entries');
+  const types = new Set();
+  let visible = false;
+  const normalized = sections.map(section => {
+    // Plain data only, with own properties: plan identity hashes own
+    // enumerable keys, so an inherited value must never change rendering.
+    requireValue(section && typeof section === 'object' && !Array.isArray(section) && [Object.prototype, null].includes(Object.getPrototypeOf(section)), 'each section must be a plain object');
+    requireValue(Object.hasOwn(section, 'type') && Object.hasOwn(section, 'section') && Object.keys(section).every(key => ['type', 'section', 'hidden'].includes(key)), 'section entries may only set type, section and hidden');
+    requireValue(typeof section.type === 'string' && /^[a-z]{1,32}$/.test(section.type), 'section type must be 1 to 32 lowercase letters');
+    requireValue(!types.has(section.type), `duplicate section type: ${section.type}`);
+    types.add(section.type);
+    requireValue(typeof section.section === 'string' && section.section.length >= 1 && section.section.length <= 80 && section.section.trim() === section.section && !/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(section.section) && !section.section.startsWith('#'), 'section heading must be 1 to 80 trimmed characters without controls or a leading #');
+    const hidden = Object.hasOwn(section, 'hidden') ? section.hidden : undefined;
+    requireValue(hidden === undefined || typeof hidden === 'boolean', 'section hidden must be a boolean');
+    if (!hidden) visible = true;
+    return hidden ? { type: section.type, section: section.section, hidden: true } : { type: section.type, section: section.section };
+  });
+  requireValue(visible, 'sections must leave at least one visible section');
+  return normalized;
 }
 
 function calendarDate(value) {
@@ -150,8 +167,9 @@ function compareNumeric(a, b) {
 
 // Conventional Commit parsing/grouping follows the existing daily-digest
 // renderer; unlike its subprocess interface, API JSON bodies have no argv cap.
-export function renderNotes(commits, { repository = '', sections = DEFAULT_SECTIONS } = {}) {
+export function renderNotes(commits, { repository = '', sections } = {}) {
   requireValue(Array.isArray(commits), 'commits must be an array');
+  const effectiveSections = normalizeSections(sections) || DEFAULT_SECTIONS;
   let bytes = 0;
   const parsed = [];
   for (const commit of commits) {
@@ -176,8 +194,7 @@ export function renderNotes(commits, { repository = '', sections = DEFAULT_SECTI
   };
   add('⚠ BREAKING CHANGES', parsed.filter(commit => commit.breaking).map(commit => ({ ...commit, desc: commit.breakingNote ? `${commit.desc}\n\n  ${commit.breakingNote.replaceAll('\n', '\n  ')}` : commit.desc })));
   const groups = new Map();
-  for (const section of sections) {
-    requireValue(section && typeof section.type === 'string' && typeof section.section === 'string', 'invalid notes section');
+  for (const section of effectiveSections) {
     if (section.hidden) continue;
     if (!groups.has(section.section)) groups.set(section.section, new Set());
     groups.get(section.section).add(section.type);
@@ -258,7 +275,6 @@ export class Releaser {
     if (input.policy === 'direct-release') requireValue(input.channel === 'stable' && ((this.repository === 'TogetherWeOwn/kagi-shinobi' && !input.namespace) || (this.repository === 'TogetherWeOwn/routeware-shadow-api' && input.namespace === 'build' && input.latest === 'never')), 'direct-release requires an explicit repository exception');
     if (input.policy === 'production-promotion') requireValue(input.channel === 'stable' && !input.namespace && !input.sourceCanary, 'production-promotion is root stable only, without a source canary');
     if (input.namespace) requireValue(input.latest === 'never', 'build namespace cannot advance API Latest');
-    if (input.sections !== undefined && input.sections !== null) validateSections(input.sections);
   }
 
   sourceSelection(e) {
@@ -351,6 +367,9 @@ export class Releaser {
     const parsed = parseTag(plan.tag, plan.namespace);
     requireValue(parsed && parsed.version === plan.version && parsed.date === calendarDate(plan.date) && parsed.channel === plan.channel && SHA.test(plan.sha), 'plan version binding mismatch');
     requireValue(plan.repairDate === null || plan.repairDate === plan.date, 'repair date mismatch');
+    // Plans frozen before caller sections existed carry no field; both that
+    // and an explicit null mean the built-in sections.
+    normalizeSections(plan.sections);
   }
 
   async previousStable(tags, input) {
@@ -380,6 +399,7 @@ export class Releaser {
   async plan(input) {
     input = { ...input, latest: input.latest || (input.namespace ? 'never' : 'auto') };
     this.policy(input);
+    const sections = normalizeSections(input.sections);
     await this.verifySha(input.sha);
     if (input.policy === 'staged-promotion' && input.channel === 'canary' && !input.evidence) {
       await this.verifyRun(input, input.source, { allowActive: true, planning: true });
@@ -397,7 +417,7 @@ export class Releaser {
       const { publicationEvidence, ...prior } = this.provenance(tag);
       this.assertOperation(prior, input);
       if (prior.operation !== input.operation || prior.channel !== input.channel || prior.namespace !== (input.namespace || '')) continue;
-      requireValue(prior.sha === input.sha && prior.policy === input.policy && canonical(prior.source) === canonical(source) && canonical(prior.evidence) === canonical(input.evidence || null) && prior.sourceCanary === (input.sourceCanary || null) && prior.latest === (input.latest || 'auto') && prior.repairDate === (input.repairDate || null) && canonical(prior.sections || null) === canonical(frozenSections(input.sections)), 'operation identity already used for a different release');
+      requireValue(prior.sha === input.sha && prior.policy === input.policy && canonical(prior.source) === canonical(source) && canonical(prior.evidence) === canonical(input.evidence || null) && prior.sourceCanary === (input.sourceCanary || null) && prior.latest === (input.latest || 'auto') && prior.repairDate === (input.repairDate || null) && canonical(normalizeSections(prior.sections)) === canonical(sections), 'operation identity already used for a different release');
       return prior;
     }
     if (input.policy === 'live-digest' && !input.repairDate) {
@@ -409,8 +429,7 @@ export class Releaser {
       if (stables.some(tag => parseTag(tag.name)?.date === date || tag.name === `v${date.replaceAll('-', '.')}`)) skip('digest-already-published', 'daily digest already published for this UTC date');
     }
     const allocated = allocateVersion({ tags: tags.map(tag => tag.name), date, channel: input.channel, namespace: input.namespace || '' });
-    const payload = { schema: 'calver-plan-v1', repository: this.repository, ...allocated, sha: input.sha, operation: input.operation, policy: input.policy, latest: input.latest || 'auto', repairDate: input.repairDate || null, sourceCanary: input.sourceCanary || null, source, evidence: input.evidence || null };
-    if (input.sections) payload.sections = frozenSections(input.sections);
+    const payload = { schema: 'calver-plan-v1', repository: this.repository, ...allocated, sha: input.sha, operation: input.operation, policy: input.policy, latest: input.latest || 'auto', repairDate: input.repairDate || null, sourceCanary: input.sourceCanary || null, source, evidence: input.evidence || null, sections };
     payload.previousStableTag = await this.previousStable(tags, payload);
     return { ...payload, id: identity(payload) };
   }
@@ -435,7 +454,7 @@ export class Releaser {
       ? `${this.base}/compare/${tagPath(plan.previousStableTag)}...${plan.sha}?per_page=100`
       : `${this.base}/commits?sha=${plan.sha}&per_page=100`;
     const commits = await this.api.paginate(query, plan.previousStableTag ? 'commits' : undefined);
-    const body = renderNotes(commits.map(commit => ({ sha: commit.sha, message: commit.commit.message })), { repository: this.repository, ...(plan.sections ? { sections: plan.sections } : {}) });
+    const body = renderNotes(commits.map(commit => ({ sha: commit.sha, message: commit.commit.message })), { repository: this.repository, sections: plan.sections });
     return `${body}\n<!-- calver-plan:${plan.id} -->\n\nSource: ${plan.sha}${plan.sourceCanary ? `; canary: ${plan.sourceCanary}` : ''}${plan.evidence ? `; run: https://github.com/${this.repository}/actions/runs/${plan.evidence.runId}/attempts/${plan.evidence.attempt}; artifact: ${plan.evidence.artifactId} (${plan.evidence.artifactDigest})` : ''}\n`;
   }
 

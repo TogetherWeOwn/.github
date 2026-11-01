@@ -186,7 +186,13 @@ the caller still owns scheduling its job on the existing approved runner. No new
 runner spend, security settings or host automation is introduced.
 
 Notes reuse the existing web/bot Conventional Commit parser, grouping, scope/PR
-links and BREAKING CHANGE handling. History intake is bounded at **256 MiB**, not
+links and BREAKING CHANGE handling. A plan may carry caller `sections` in the
+release-please `changelog-sections` shape (`{type, section, hidden?}`); they
+are validated and bounded at plan time, frozen into the plan identity, and
+used instead of the built-in sections (Features, Bug Fixes, Performance
+Improvements, Reverts, Documentation). That is how the bot keeps its Common
+Changelog headings (Changed/Added/Fixed, with `security` under Fixed) after
+migrating to the shared releaser. History intake is bounded at **256 MiB**, not
 mistakenly lowered to the bot's 32 MiB subprocess limit. Publication uses a JSON
 HTTP body, not a large argv value. Output notes exceeding a conservative 120,000
 byte GitHub body budget fail before the first write rather than silently truncate.
