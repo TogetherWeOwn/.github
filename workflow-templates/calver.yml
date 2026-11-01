@@ -1,10 +1,11 @@
 name: CalVer read-only acceptance
 
-# Public-repository template: validate an already successful staging build.
+# Repository template (public or private, both on ubuntu-latest): validate an
+# already successful staging build.
 # Configure the exact workflow/job/artifact names below for the real caller.
 # This does not deploy, certify a build itself, or create tags/Releases.
 # Live integration belongs inside the existing serialized release transaction;
-# see actions/calver/examples.md, including the private-runner variant.
+# see actions/calver/examples.md.
 on:
   workflow_dispatch:
     inputs:
@@ -69,7 +70,7 @@ jobs:
           JS
       - name: Plan (read only)
         id: plan
-        uses: TogetherWeOwn/.github/actions/calver@cf983076f568407ce2dceb6eeabd1beb2e1e28c6
+        uses: TogetherWeOwn/.github/actions/calver@6f75694fdc95748e9af19bdedc72873c108f1922
         with:
           runs-on-json: '"ubuntu-latest"'
           request: ${{ steps.request.outputs.request }}
@@ -84,7 +85,7 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `request=${JSON.stringify(request)}\n`);
           JS
       - name: Independently revalidate publication (zero writes)
-        uses: TogetherWeOwn/.github/actions/calver@cf983076f568407ce2dceb6eeabd1beb2e1e28c6
+        uses: TogetherWeOwn/.github/actions/calver@6f75694fdc95748e9af19bdedc72873c108f1922
         with:
           runs-on-json: '"ubuntu-latest"'
           request: ${{ steps.publication.outputs.request }}

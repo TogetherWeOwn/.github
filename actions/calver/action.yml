@@ -5,12 +5,8 @@ inputs:
     description: JSON request; phase plan with input, or phase publish with the exact saved plan and optional dryRun/repair booleans
     required: true
   runs-on-json:
-    description: Explicit existing runner JSON; public callers use the JSON string ubuntu-latest
+    description: Explicit runner JSON; every caller uses the JSON string ubuntu-latest
     required: true
-  private-runner-json:
-    description: Existing CI_OVERFLOW_RUNNER repository variable for private callers; never a hosted fallback
-    required: false
-    default: ''
   token:
     description: Repository-local token (read for plan; contents write plus Actions read for publication)
     required: false
@@ -64,6 +60,5 @@ runs:
         CALVER_TOOLING_ROOT: ${{ github.action_path }}
         CALVER_REQUEST: ${{ inputs.request }}
         CALVER_RUNNER_JSON: ${{ inputs.runs-on-json }}
-        CALVER_PRIVATE_RUNNER_JSON: ${{ inputs.private-runner-json }}
         CALVER_TOKEN: ${{ inputs.token }}
       run: node "$CALVER_TOOLING_ROOT/cli.mjs"

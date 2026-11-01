@@ -9,7 +9,7 @@ on:
   workflow_call:
     inputs:
       runs-on-json:
-        description: 'Runner labels; private callers use their existing self-hosted pool.'
+        description: 'Runner labels as JSON, e.g. ["ubuntu-latest"].'
         required: false
         type: string
         default: '["ubuntu-latest"]'

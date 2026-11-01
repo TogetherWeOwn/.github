@@ -224,8 +224,15 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          # Full history: test_hosted_runners reads every pinned reusable
+          # revision (pins on no branch are fetched by sha).
+          fetch-depth: 0
           persist-credentials: false
       - run: python3 -m unittest discover -s .github/scripts -p 'test_pr_standards_required.py'
+      # Every workflow here, and every pinned reusable revision, must run on
+      # GitHub-hosted runners: a required check whose runner never starts
+      # blocks every merge.
+      - run: python3 -m unittest discover -s .github/scripts -p 'test_hosted_runners.py'
 
   gradual-promote-selftest:
     name: gradual-promote selftest

@@ -10,15 +10,16 @@ concurrency:
   cancel-in-progress: true
 jobs:
   rules:
-    uses: TogetherWeOwn/.github/.github/workflows/review-rules.yml@63699075b492914c137281acffd4c89e51cc1c4c
+    uses: TogetherWeOwn/.github/.github/workflows/review-rules.yml@6f75694fdc95748e9af19bdedc72873c108f1922
     with:
       packs: rust,ts,python-shell-ci,php,security
       mode: warn
+      runs-on-json: '["ubuntu-latest"]'
   review-rules:
     name: review-rules
     needs: rules
     if: always()
-    runs-on: ${{ fromJSON(github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
       - name: Re-export the bare shadow check

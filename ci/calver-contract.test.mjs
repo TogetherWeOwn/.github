@@ -118,29 +118,17 @@ test("allocation cannot round an exhausted safe numeric counter into a collision
   }
 });
 
-test("runner policy accepts only ubuntu-latest on public repos", async () => {
+test("runner policy accepts only ubuntu-latest on public and private repos", async () => {
   const { validateRunner } = await engine();
-  assert.equal(validateRunner('"ubuntu-latest"', "public", undefined), "ubuntu-latest");
-  for (const runner of [undefined, "", "ubuntu-latest", '"ubuntu-24.04"', '"ubuntu-latest-4-cores"',
-    '["ubuntu-latest"]', '["self-hosted","linux"]', '"windows-latest"', '{}', 'null']) {
-    assert.throws(() => validateRunner(runner, "public", '["self-hosted","linux"]'));
+  for (const visibility of ["public", "private"]) {
+    assert.equal(validateRunner('"ubuntu-latest"', visibility), "ubuntu-latest");
+    for (const runner of [undefined, "", "ubuntu-latest", '"ubuntu-24.04"', '"ubuntu-latest-4-cores"',
+      '["ubuntu-latest"]', '["self-hosted","linux"]', '"windows-latest"', '{}', 'null']) {
+      assert.throws(() => validateRunner(runner, visibility));
+    }
   }
-});
-
-test("private runner labels must match explicit configuration without paid fallback", async () => {
-  const { validateRunner } = await engine();
-  const labels = ["self-hosted", "linux", "release-fixture"];
-  const configured = JSON.stringify(labels);
-  assert.deepEqual(validateRunner(configured, "private", configured), labels);
-  for (const [runner, visibility, config] of [
-    [configured, "private", undefined], ['"ubuntu-latest"', "private", configured],
-    ['["self-hosted","linux","other"]', "private", configured],
-    ['["self-hosted","linux"]', "private", configured],
-    ['["self-hosted","linux","release-fixture","extra"]', "private", configured],
-    ['"ubuntu-latest"', "private", '"ubuntu-latest"'],
-    [configured, "unknown", configured], [configured, undefined, configured],
-  ]) {
-    assert.throws(() => validateRunner(runner, visibility, config));
+  for (const visibility of ["unknown", undefined]) {
+    assert.throws(() => validateRunner('"ubuntu-latest"', visibility));
   }
 });
 

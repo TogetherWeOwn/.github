@@ -17,10 +17,10 @@ only); its public test seam is below. No caller code is executed by the releaser
   `{version, tag, date, channel, namespace}`. `tags` is an array of tag-name
   strings. Stable P is one above the greatest stable P for that date, starting
   at zero. Canary uses the next stable base and one above its highest N.
-- `validateRunner(runnerJson, visibility, privateRunnerJson)` returns the parsed
-  labels: public repositories require exactly `"ubuntu-latest"`; private
-  repositories must match the explicit configured self-hosted labels. No
-  default, paid-hosted fallback or caller-only visibility assertion.
+- `validateRunner(runnerJson, visibility)` returns the parsed runner: public
+  and private repositories both require exactly `"ubuntu-latest"`, and the
+  visibility must be `public` or `private`. No default, larger hosted runner or
+  caller-only visibility assertion.
 - `normalizeSections(sections)` returns null for an omitted/null value, else a
   validated copy of release-please-shaped `changelog-sections` entries
   (`{type, section, hidden?}`) in caller order, with `hidden: false` dropped.

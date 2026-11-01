@@ -21,12 +21,12 @@ concurrency:
 
 jobs:
   plan-version:
-    uses: TogetherWeOwn/.github/.github/workflows/calver.yml@cf983076f568407ce2dceb6eeabd1beb2e1e28c6
+    uses: TogetherWeOwn/.github/.github/workflows/calver.yml@6f75694fdc95748e9af19bdedc72873c108f1922
     permissions:
       contents: read
       actions: read
     with:
-      tooling-sha: cf983076f568407ce2dceb6eeabd1beb2e1e28c6
+      tooling-sha: 6f75694fdc95748e9af19bdedc72873c108f1922
       runs-on-json: '"ubuntu-latest"'
       # Trusted caller context constructs JSON; never evaluate user JSON as shell.
       request: ${{ needs.context.outputs.plan-request }}
@@ -38,12 +38,10 @@ jobs:
   # its job grants contents:write and actions:read to this same reusable.
 ```
 
-For a private caller, replace `runs-on-json` with
-`${{ vars.CI_OVERFLOW_RUNNER }}` (the existing explicitly configured self-hosted
-JSON labels, beginning with `self-hosted`), without a hosted default or new pool.
+Private callers pass the same `runs-on-json: '"ubuntu-latest"'`.
 The wrapper checks out `TogetherWeOwn/.github` separately at `tooling-sha`; it
 does not accidentally look for shared scripts in a default caller checkout.
-Public callers always schedule the standard free `ubuntu-latest`.
+Every caller schedules the standard GitHub-hosted `ubuntu-latest`.
 
 ## Step adapter in the caller's existing serialized transaction
 
@@ -56,7 +54,7 @@ running required-certification job or to replace real gates with an echo step.
 ```yaml
 # Planning job: contents:read, actions:read. Source run/attempt are known now;
 # artifact ID/digest are intentionally unavailable until after upload.
-- uses: TogetherWeOwn/.github/actions/calver@cf983076f568407ce2dceb6eeabd1beb2e1e28c6
+- uses: TogetherWeOwn/.github/actions/calver@6f75694fdc95748e9af19bdedc72873c108f1922
   id: version
   with:
     runs-on-json: '"ubuntu-latest"'
@@ -64,7 +62,7 @@ running required-certification job or to replace real gates with an echo step.
 
 # Separate successor publication job: contents:write, actions:read.
 # It consumes the saved plan plus the actual immutable artifact proof.
-- uses: TogetherWeOwn/.github/actions/calver@cf983076f568407ce2dceb6eeabd1beb2e1e28c6
+- uses: TogetherWeOwn/.github/actions/calver@6f75694fdc95748e9af19bdedc72873c108f1922
   if: success()
   id: publication
   with:

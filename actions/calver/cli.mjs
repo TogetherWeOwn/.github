@@ -15,7 +15,7 @@ async function main() {
   const releaser = new Releaser({ api, repository });
   const metadata = await api.request('GET', `/repos/${repository}`);
   if (metadata.full_name !== repository || typeof metadata.private !== 'boolean') throw new Error('repository metadata mismatch');
-  validateRunner(process.env.CALVER_RUNNER_JSON, metadata.private ? 'private' : 'public', process.env.CALVER_PRIVATE_RUNNER_JSON);
+  validateRunner(process.env.CALVER_RUNNER_JSON, metadata.private ? 'private' : 'public');
   const result = request.phase === 'plan'
     ? await releaser.plan(request.input)
     : await releaser.publish(request.plan, { dryRun: request.dryRun === true, repair: request.repair === true, evidence: request.evidence });

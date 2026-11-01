@@ -111,17 +111,10 @@ export function allocateVersion({ tags, date, channel, namespace = '' }) {
   return { version, tag, date, channel, namespace };
 }
 
-export function validateRunner(runnerJson, visibility, privateRunnerJson) {
+export function validateRunner(runnerJson, visibility) {
+  requireValue(visibility === 'public' || visibility === 'private', 'unknown repository visibility');
   const runner = JSON.parse(runnerJson);
-  if (visibility === 'public') {
-    requireValue(runner === 'ubuntu-latest', 'public caller requires free ubuntu-latest');
-  } else {
-    requireValue(visibility === 'private', 'unknown repository visibility');
-    requireValue(typeof privateRunnerJson === 'string' && privateRunnerJson.length > 0, 'private runner configuration required');
-    const configured = JSON.parse(privateRunnerJson);
-    requireValue(Array.isArray(configured) && configured.length >= 2 && configured.includes('self-hosted') && configured.every(label => typeof label === 'string' && /^[a-zA-Z0-9_-]+$/.test(label)), 'private configuration must be explicit self-hosted labels');
-    requireValue(JSON.stringify(runner) === JSON.stringify(configured), 'private runner differs from existing configured routing');
-  }
+  requireValue(runner === 'ubuntu-latest', 'caller requires standard ubuntu-latest');
   return runner;
 }
 

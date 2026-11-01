@@ -96,13 +96,9 @@ jobs:
     uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@<pinned-sha>
 ```
 
-Private repos must not burn GitHub-hosted minutes: pass the repo's
-self-hosted pool via the `runs-on-json` input (default `["ubuntu-latest"]`):
-
-```yaml
-    with:
-      runs-on-json: '["self-hosted","two-selfhosted"]'
-```
+Public and private repos alike run on GitHub-hosted `ubuntu-latest` (the
+`runs-on-json` default). The org has no self-hosted runners; private repos
+spend a few seconds of Actions minutes per PR.
 
 Enforce (step 4) does NOT use this caller: it uses the required
 workflow `.github/workflows/test-guard-required.yml` in this repo

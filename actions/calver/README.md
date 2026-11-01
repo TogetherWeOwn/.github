@@ -176,14 +176,12 @@ accepted by the shared tool. Adapter-only workflow-dispatch/SBOM permissions sta
 in the adapter. GITHUB_TOKEN-created tags/Releases do not trigger ordinary
 downstream workflows: call/dispatch the intended next workflow explicitly.
 
-Public callers schedule only the free standard `ubuntu-latest`. Private callers
-must supply their existing self-hosted `CI_OVERFLOW_RUNNER` labels explicitly.
-The wrapper chooses routing from repository context/configuration, not arbitrary
-input, and refuses a missing/non-self-hosted private configuration instead of
-falling back to hosted compute. The action rechecks visibility from GitHub and
-compares inputs to configured labels before any mutation. When used as a step,
-the caller still owns scheduling its job on the existing approved runner. No new
-runner spend, security settings or host automation is introduced.
+Every caller, public or private, schedules the standard GitHub-hosted
+`ubuntu-latest`; there is no self-hosted pool. The wrapper fixes routing itself,
+not from arbitrary input, and the action rechecks visibility from GitHub and
+refuses any `runs-on-json` other than `"ubuntu-latest"` before any mutation.
+When used as a step, the caller still owns scheduling its job. No larger
+runners, security settings or host automation are introduced.
 
 Notes reuse the existing web/bot Conventional Commit parser, grouping, scope/PR
 links and BREAKING CHANGE handling. A plan may carry caller `sections` in the
