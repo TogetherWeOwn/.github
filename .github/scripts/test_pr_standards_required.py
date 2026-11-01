@@ -105,7 +105,8 @@ class InternalReferences(unittest.TestCase):
 
     def test_versions_and_public_ips_pass(self):
         for b in ("bump to 10.2.3", "lib 1.10.0.4", "DNS 8.8.8.8", "172.32.0.1 is public",
-                  "upgrade to 10.256.300.999", "bind to localhost in dev"):
+                  "upgrade to 10.256.300.999", "bind to localhost in dev",
+                  "docs at https://localhost.dev/docs"):
             with self.subTest(b=b):
                 code, out = run(body=CLEAN_BODY + b + "\n")
                 self.assertEqual(code, 0, out)

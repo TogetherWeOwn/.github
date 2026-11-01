@@ -61,7 +61,7 @@ jobs:
           UI_LINK_HOST = re.compile(r"(?:https?://[^\s/<>()]+|(?<![\w./-])[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?::\d+)?)/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
           INTERNAL_HOST = re.compile(r"\binfextion\.net\b", re.IGNORECASE)
           # Bare "localhost" in prose is fine; a URL or host:port is not.
-          LOCAL_URL = re.compile(r"(?:https?://(?:localhost|0\.0\.0\.0)\b|(?<![\w.-])(?:localhost|0\.0\.0\.0)(?::\d+|/))", re.IGNORECASE)
+          LOCAL_URL = re.compile(r"(?:https?://(?:localhost|0\.0\.0\.0)(?![\w.-])|(?<![\w.-])(?:localhost|0\.0\.0\.0)(?::\d+|/))", re.IGNORECASE)
           OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
           PRIVATE_IP = re.compile(rf"(?<![\w.])(?:(?:10|127)(?:\.{OCTET}){{3}}|192\.168(?:\.{OCTET}){{2}}"
                                   rf"|172\.(?:1[6-9]|2\d|3[01])(?:\.{OCTET}){{2}}"
