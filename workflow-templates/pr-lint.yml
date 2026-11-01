@@ -84,7 +84,7 @@ jobs:
           UI_LINK_BARE = re.compile(r"(?<![\w.-])/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
           UI_LINK_HOST = re.compile(r"(?:https?://[^\s/<>()]+|(?<![\w./-])[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?::\d+)?)/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
           HOST_INTERNAL = re.compile(r"\binfextion\.net\b", re.IGNORECASE)
-          GITHUB_URL = re.compile(r"(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9_.~%/#?=&+\-]*", re.IGNORECASE)
+          GITHUB_URL = re.compile(r"(?:https?://|(?<![\w.-]))(?:www\.)?github\.com/[A-Za-z0-9_.~%/#?=&+\-]*", re.IGNORECASE)
           STRICT_FIXED = [(UI_LINK_BARE, "an instance UI link"), (UI_LINK_HOST, "an instance UI link"), (HOST_INTERNAL, "the internal host")]
           HELP = ("Expected a Conventional Commits header, e.g. 'fix(auth): refuse expired sudo "
                   "sessions'. Allowed types: " + TYPES.replace("|", ", ") + ".")
@@ -200,6 +200,7 @@ jobs:
                   failed = True
                   print("::error title=Card reference::Add 'Refs: <card-id>' to the PR body.")
               for where, text in (("the title", title), ("the body", body)):
+                  text = re.sub(r"<!--.*?-->", "", text or "", flags=re.S)  # template comments
                   hits = strict_internal_hits(text)
                   if hits:
                       if report_strict(hits, where):

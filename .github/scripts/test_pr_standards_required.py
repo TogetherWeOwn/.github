@@ -41,13 +41,14 @@ CLEAN_BODY = "## Verification\n\n- python3 -m unittest: 12 tests OK\n"
 
 def run(title="fix(auth): refuse expired sudo sessions", body=CLEAN_BODY,
         branch="fix/sudo-window", commits=(), created=NEW, event="pull_request",
-        author="someone", fork="false"):
+        author="someone", fork="false", count=None):
     env = {
         "PATH": os.environ.get("PATH", ""),
         "ENFORCE_SINCE": enforce_since(),
         "EVENT": event, "TITLE": title, "BODY": body, "BRANCH": branch,
         "AUTHOR": author, "CREATED_AT": created, "PR_NUMBER": "7",
         "REPO_FORK": fork, "COMMITS_URL": "", "GH_TOKEN": "",
+        "COMMIT_COUNT": str(len(commits) if count is None else count),
         "COMMITS_JSON": json.dumps([[f"{i:040x}", s] for i, s in enumerate(commits)]),
     }
     p = subprocess.run([sys.executable, "-I", "-c", SCRIPT], env=env,
@@ -95,17 +96,39 @@ class InternalReferences(unittest.TestCase):
         code, out = run(body=body)
         self.assertEqual(code, 0, out)
 
+    def test_local_and_private_addresses_fail(self):
+        for b in ("see http://localhost:8080/x", "runs on 127.0.0.1:3100", "host 192.168.1.10 is up",
+                  "db at 10.0.4.7", "proxy 172.20.0.3", "tailnet 100.101.2.3"):
+            with self.subTest(b=b):
+                self.assertFails(run(body=CLEAN_BODY + b + "\n"), "address")
+
+    def test_versions_and_public_ips_pass(self):
+        for b in ("bump to 10.2.3", "lib 1.10.0.4", "DNS 8.8.8.8", "172.32.0.1 is public"):
+            with self.subTest(b=b):
+                code, out = run(body=CLEAN_BODY + b + "\n")
+                self.assertEqual(code, 0, out)
+
+    def test_github_lookalike_host_is_not_exempt(self):
+        self.assertFails(run(body=CLEAN_BODY + "https://notgithub.com/TWO-123\n"), "tracker id")
+        self.assertEqual(run(body=CLEAN_BODY + "https://github.com/o/TWO-123-repo\n")[0], 0)
+
     def test_new_pr_branch_with_id_fails(self):
         self.assertFails(run(branch="two-801-quota-0.2.4"), "branch name")
 
     def test_new_pr_commit_subject_with_id_fails(self):
-        self.assertFails(run(commits=["fix: clean", "TWO-777: quota 0.2.3"]), "commit subject")
+        self.assertFails(run(commits=["fix: clean", "TWO-777: quota 0.2.3"]), "commit message")
+
+    def test_new_pr_commit_body_with_id_fails(self):
+        self.assertFails(run(commits=["fix: clean subject\n\nRefs: TWO-801"]), "commit message")
+
+    def test_truncated_commit_list_fails(self):
+        self.assertFails(run(commits=["fix: clean"] * 3, count=300), "Commit list")
 
     def test_legacy_pr_branch_and_commits_only_warn(self):
         code, out = run(branch="two-801-quota", commits=["TWO-801: quota"], created=OLD)
         self.assertEqual(code, 0, out)
         self.assertIn("::warning title=Internal reference in the branch name", out)
-        self.assertIn("::warning title=Internal reference in a commit subject", out)
+        self.assertIn("::warning title=Internal reference in a commit message", out)
 
     def test_legacy_pr_title_still_fails(self):
         self.assertFails(run(title="TWO-801: quota", created=OLD), "PR title")

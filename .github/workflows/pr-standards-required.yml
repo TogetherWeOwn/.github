@@ -4,10 +4,11 @@
 #
 # Always an error (title and body, every PR, public or private):
 #   * an internal tracker id (TWO-123, TOG-123, PAP-123, PAPA-123; any case,
-#     `-` or `_`), a Paperclip instance UI link or the internal host;
+#     `-` or `_`), a Paperclip instance UI link, the internal host, a
+#     localhost URL or a private-network (RFC 1918 / CGNAT) address;
 #   * a PR title that is not a Conventional Commits header (warning only on
 #     forks of upstream projects and on dependabot/renovate PRs).
-# Branch name and commit subjects: the same internal-reference check is an
+# Branch name and commit messages: the same internal-reference check is an
 # error for PRs opened after ENFORCE_SINCE, a warning on older PRs (their
 # branches and commits predate the rule; titles and bodies were cleaned).
 # Same rule as paperclipai/paperclip CONTRIBUTING "No Internal Issue
@@ -34,7 +35,7 @@ jobs:
     runs-on: ${{ fromJSON(github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     steps:
-      - name: Check title, body, branch and commit subjects
+      - name: Check title, body, branch and commit messages
         env:
           ENFORCE_SINCE: "2026-11-02T00:00:00Z"
           EVENT: ${{ github.event_name }}
@@ -44,6 +45,7 @@ jobs:
           AUTHOR: ${{ github.event.pull_request.user.login }}
           CREATED_AT: ${{ github.event.pull_request.created_at }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          COMMIT_COUNT: ${{ github.event.pull_request.commits }}
           REPO_FORK: ${{ github.event.repository.fork }}
           COMMITS_URL: ${{ github.event.pull_request.commits_url }}
           GH_TOKEN: ${{ github.token }}
@@ -58,9 +60,15 @@ jobs:
           UI_LINK_BARE = re.compile(r"(?<![\w.-])/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
           UI_LINK_HOST = re.compile(r"(?:https?://[^\s/<>()]+|(?<![\w./-])[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?::\d+)?)/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
           INTERNAL_HOST = re.compile(r"\binfextion\.net\b", re.IGNORECASE)
-          GITHUB_URL = re.compile(r"(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9_.~%/#?=&+\-]*", re.IGNORECASE)
+          LOCAL_URL = re.compile(r"(?<![\w.-])(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+|/)", re.IGNORECASE)
+          PRIVATE_IP = re.compile(r"(?<![\w.])(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}"
+                                  r"|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}"
+                                  r"|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])(?:\.\d{1,3}){2})(?![\w.])")
+          # Only a real github.com host is exempt (not notgithub.com/...).
+          GITHUB_URL = re.compile(r"(?:https?://|(?<![\w.-]))(?:www\.)?github\.com/[A-Za-z0-9_.~%/#?=&+\-]*", re.IGNORECASE)
           CHECKS = [(TRACKER_ID, "an internal tracker id"), (UI_LINK_BARE, "a Paperclip instance link"),
-                    (UI_LINK_HOST, "a Paperclip instance link"), (INTERNAL_HOST, "the internal host")]
+                    (UI_LINK_HOST, "a Paperclip instance link"), (INTERNAL_HOST, "the internal host"),
+                    (LOCAL_URL, "a localhost address"), (PRIVATE_IP, "a private-network address")]
           HELP = ("Say it in plain words, link only public GitHub issues (Fixes #123), name the "
                   "branch after the change (fix/quota-template-pin), and link the card from "
                   "Paperclip, never from GitHub. See TogetherWeOwn/.github CONTRIBUTING.md §2.")
@@ -84,19 +92,18 @@ jobs:
                   errs.append("ends with a period")
               return errs
 
-          def commit_subjects():
+          def commit_messages():
               if "COMMITS_JSON" in os.environ:  # self-tests
                   return json.loads(os.environ["COMMITS_JSON"])
               out = []
-              for page in range(1, 4):  # the API returns at most 250 commits
+              for page in range(1, 4):  # the API returns at most 250 commits; see COMMIT_COUNT
                   req = urllib.request.Request(
                       f"{os.environ['COMMITS_URL']}?per_page=100&page={page}",
                       headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
                                "Accept": "application/vnd.github+json"})
                   with urllib.request.urlopen(req, timeout=30) as resp:
                       batch = json.load(resp)
-                  out += [(c["sha"], (c["commit"]["message"] or "").splitlines()[0]
-                           if c["commit"]["message"] else "") for c in batch]
+                  out += [(c["sha"], c["commit"]["message"] or "") for c in batch]
                   if len(batch) < 100:
                       break
               return out
@@ -137,14 +144,19 @@ jobs:
                      "`gh api -X POST repos/<owner>/<repo>/branches/<old>/rename -f new_name=<new>` "
                      f"(the PR follows). {HELP}")
           try:
-              subjects = commit_subjects()
+              messages = commit_messages()
+              count = int(os.environ.get("COMMIT_COUNT") or 0)
+              if count > len(messages):  # fail closed past the API's 250-commit cap
+                  report(branch_level, "Commit list", f"The PR has {count} commits but only "
+                         f"{len(messages)} could be checked (the API stops at 250). Squash or split it.")
           except Exception as exc:  # fail closed; a re-run fixes a transient API error
               report("error", "Commit list", f"Could not list the PR commits: {exc}. Re-run the check.")
-              subjects = []
-          for sha, subject in subjects:
-              found = hits(subject)
+              messages = []
+          for sha, message in messages:
+              subject = message.splitlines()[0] if message else ""
+              found = hits(message)
               if found:
-                  report(branch_level, "Internal reference in a commit subject",
+                  report(branch_level, "Internal reference in a commit message",
                          f"{sha[:10]} '{subject}' holds {', '.join(found)}. Reword it at the next push. {HELP}")
           if failed:
               sys.exit(1)
