@@ -191,6 +191,8 @@ jobs:
         run: python3 -I .github/scripts/test_checkout_credentials.py
       - name: Required reusable pincheck regressions
         run: python3 -I .github/scripts/test_changes_pins.py
+      - name: Label-sync script contract (fake gh, never deletes)
+        run: python3 -I .github/scripts/test_sync_labels.py
       # Fetch/check the pinned source object before acceptance inspects it;
       # preserve the existing shallow checkout/credential contract.
       - name: CalVer caller pins carry the current tooling

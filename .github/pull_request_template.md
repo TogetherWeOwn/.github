@@ -1,75 +1,36 @@
 <!--
 Title: Conventional Commits header, e.g. `fix(auth): refuse expired sudo sessions`.
-Types: feat fix perf refactor test docs build ci chore revert style security. Max 100 chars, no trailing period.
-Keep internal ticket ids, instance links, localhost and private-network addresses out of titles,
-bodies, commits and branches. Link only public GitHub issues (`Fixes #123`).
-Use short, plain sentences. Full contribution rules: CONTRIBUTING.md.
+Types: feat fix perf refactor test docs build ci chore revert style security. ≤100 chars, no trailing period.
+Public repo: no internal ticket ids, instance links, hostnames or private addresses in title, body, commits or branch.
+Link only public GitHub issues. Rules: https://github.com/TogetherWeOwn/.github/blob/main/CONTRIBUTING.md
+Open as draft; mark ready when complete. Batch fixes per review round.
 -->
 
 ## Thinking Path
 
-<!-- Briefly explain the approach and alternatives considered. -->
+<!-- 3–6 bullets: context → subsystem → problem → why this change. -->
 
 ## Linked Issues or Issue Description
 
-<!-- Required for feat/fix/perf/refactor/security: link a public issue (Fixes/Closes/Refs #123)
-or describe the problem and motivation here. No internal tracker identifiers. -->
+<!-- Required for feat/fix/perf/refactor/security: `Fixes #123` / `Refs #123`, or describe the problem here. -->
 
 -
 
 ## What Changed
 
-<!-- One bullet per logical unit; avoid repeating the diff. -->
+<!-- One bullet per logical unit; don't repeat the diff. -->
 
 -
 
 ## Verification
 
-<!-- Exact commands and results; distinguish executed tests from planned checks. -->
+<!-- Only what you actually ran and observed: exact commands + results. Say what you did not run and why. -->
 
 -
 
 ## Attestation
 
-<!-- SHADOW / WARN only. Fill every field; retain the exact heading/field/bullet syntax.
-T0 = critical paths, T1 = standard changes, T2 = docs-only. Declaring a higher risk is OK.
-T0 directories at any depth: migrations, sql, db, database, drizzle.
-T0 directory/module words: auth, authn, authz, authentication, authorization, oauth,
-session, sessions, billing, payment, payments, permission, permissions,
-gateway, voice, crypto, vault, secret, secrets,
-backup, backups, dump, dumps, grant, grants, role, roles, erasure, ingest.
-Words are case-insensitive and split at punctuation, snake_case, kebab-case, and CamelCase
-boundaries (auth.rs, gateway_backoff.rs, member-erasure.ts, SessionController.php).
-The words also match directory names/descendants. Prose filenames ending .md/.rst/.txt
-are not modules, but still inherit any critical directory floor. Substrings such as
-names in authors.py, voices/, and roleplay.ts do not match those critical words.
-Also T0: .github/workflows/deploy*, crates/cutover/**, and wrangler .toml/.json/.jsonc
-configs at any depth (including wrangler.production.toml); prose like docs/wrangler.md
-is not a config. Deploy scripts outside these paths still require a declared T0 when critical.
-Renames inspect both old and new paths; deleting a T0 file is still T0.
-T2 requires only root or docs/ .md/.rst files or explicitly allowlisted text basenames:
-README.txt, LICENSE.txt, NOTICE.txt, CHANGELOG.txt, CONTRIBUTING.txt, CODE_OF_CONDUCT.txt,
-SECURITY.txt, SUPPORT.txt, AUTHORS.txt (case-insensitive). Critical directory floors win.
-Never T2: .github/ files, code, arbitrary .txt, CMakeLists.txt, or requirements/constraints
-manifests (including requirements.txt, requirements-dev.txt, and docs/requirements.txt).
-Path names are only a risk floor, not proof that other code is non-critical; declare T0
-for critical behavior even when its path does not match. Ingest is conservatively T0
-because filenames cannot prove whether a body route requires authentication.
-
-Claims: one behavior claim per C-number. For docs, state the documentation-only claim.
-Tests: one line per claim/test mapping; repository-relative path, optional ::test_name.
-Every claimed test file must be added/modified/renamed in this PR, not removed or merely present
-elsewhere in the repository. Inline tests in source files are allowed. Existing unchanged tests
-belong in Verification, not this field. Duplicate mapping lines for multiple tests/claims.
-failed_before=yes|no|not-run describes what you actually observed. No invented red-before proof.
-proof= names the command/result/mutant or other evidence; never executes from this text.
-Only T2 may replace all test lines with: - none | reason=Documentation-only; no behavior changed.
-The validator checks shape and changed-file references, NOT test execution or truth of claims.
-
-High-risk checklist: keep D1-D8. Replace each placeholder with evidence or
-not-applicable plus a concrete reason. For T0 all boxes must be checked; never blindly check them.
-Use plain one-line text (no | delimiter inside test fields). Keep attestation unfenced and visible.
--->
+<!-- Mandatory, machine-checked. Syntax must stay exact; tier rules: CONTRIBUTING.md §5. -->
 
 risk_tier: <T0|T1|T2>
 
@@ -94,14 +55,15 @@ risk_tier: <T0|T1|T2>
 
 ## Risks
 
-<!-- Blast radius, rollback and follow-ups. -->
+<!-- Blast radius, rollback, follow-ups. "Low" is fine if true. -->
 
 ## Model Used
 
-<!-- Identify assistance used, if any. -->
+<!-- Provider + exact model/version that produced or assisted, or "None — human-authored". -->
 
 ## Checklist
 
-- [ ] Verification commands and results are recorded.
-- [ ] Attestation describes actual evidence, including any tests not run before the change.
-- [ ] No secrets or private/internal identifiers are included.
+- [ ] I searched existing issues/PRs; duplicates and related PRs are linked above.
+- [ ] Verification records only tests actually run, with results.
+- [ ] Attestation describes actual evidence, including tests not run before the change.
+- [ ] No secrets or private/internal identifiers in title, body, commits or branch name.
