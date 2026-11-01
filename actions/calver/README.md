@@ -130,6 +130,19 @@ when no numerically later stable exists. This comparison is protected by the sam
 caller writer lock; GitHub does not offer compare-and-swap for Latest. The engine
 cannot compensate for independent writers ignoring the transaction contract.
 
+## Production promotion without canaries
+
+An application that tags only production promotes, with canaries off, uses
+`policy: "production-promotion"` (stable, root namespace, no `sourceCanary`).
+The evidence selects the production deploy run attempt, its named deploy jobs
+and the promotion receipt artifact whose name carries the deployed SHA. The
+publisher runs as a successor job in that run, after those jobs succeed. A
+re-promote of an already tagged commit skips with `already-released`, and a
+rollback below the newest stable skips with `rollback`; both stay green and
+never move Latest. Optional `sections` carries the caller's release-please
+`changelog-sections` groups into the frozen plan. See the
+[contract](contract.md#production-promotion-evidence).
+
 ## Repository exceptions (not a general bypass flag)
 
 - **TWO bot:** `live-digest` is stable-only for `TogetherWeOwn/two-bot-next`.
