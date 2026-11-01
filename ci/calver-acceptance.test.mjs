@@ -1245,6 +1245,29 @@ test("sections are part of the plan identity, not a publish-time override", asyn
   await assert.rejects(releaser.publish(tampered), /integrity/);
 });
 
+test("a plan frozen before sections existed still publishes and recovers", async () => {
+  // Rebuild a pre-sections plan: same payload minus the field, identity
+  // recomputed the documented way (sha256 over canonical JSON).
+  const { createHash } = await import("node:crypto");
+  const canonical = (value) => Array.isArray(value) ? `[${value.map(canonical).join(",")}]`
+    : value && typeof value === "object" ? `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`
+    : JSON.stringify(value);
+  const { api, releaser } = await setup("TogetherWeOwn/two-bot-next");
+  const { sections, id, ...rest } = await releaser.plan(digestInput({ sections: undefined }));
+  const legacy = { ...rest, id: createHash("sha256").update(canonical(rest)).digest("hex") };
+  assert.ok(!("sections" in legacy));
+  await releaser.publish(legacy);
+  assert.ok(releaseBody(api).body.includes("### Features"), "legacy plan must render built-in sections");
+  assert.deepEqual(await releaser.plan(digestInput({ sections: undefined })), legacy);
+});
+
+test("a prototype-smuggled hidden flag cannot change a frozen plan's notes", async () => {
+  const { releaser } = await setup("TogetherWeOwn/two-bot-next");
+  const plan = await releaser.plan(digestInput());
+  Object.setPrototypeOf(plan.sections[0], { hidden: true });
+  await assert.rejects(releaser.publish(plan), /section/i);
+});
+
 test("an operation retry recovers its sections and refuses different ones", async () => {
   const { releaser } = await setup("TogetherWeOwn/two-bot-next");
   const plan = await releaser.plan(digestInput());

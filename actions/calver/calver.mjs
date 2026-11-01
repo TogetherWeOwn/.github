@@ -29,15 +29,18 @@ export function normalizeSections(sections) {
   const types = new Set();
   let visible = false;
   const normalized = sections.map(section => {
-    requireValue(section && typeof section === 'object' && !Array.isArray(section), 'each section must be an object');
-    requireValue(Object.keys(section).every(key => ['type', 'section', 'hidden'].includes(key)), 'section entries may only set type, section and hidden');
+    // Plain data only, with own properties: plan identity hashes own
+    // enumerable keys, so an inherited value must never change rendering.
+    requireValue(section && typeof section === 'object' && !Array.isArray(section) && [Object.prototype, null].includes(Object.getPrototypeOf(section)), 'each section must be a plain object');
+    requireValue(Object.hasOwn(section, 'type') && Object.hasOwn(section, 'section') && Object.keys(section).every(key => ['type', 'section', 'hidden'].includes(key)), 'section entries may only set type, section and hidden');
     requireValue(typeof section.type === 'string' && /^[a-z]{1,32}$/.test(section.type), 'section type must be 1 to 32 lowercase letters');
     requireValue(!types.has(section.type), `duplicate section type: ${section.type}`);
     types.add(section.type);
-    requireValue(typeof section.section === 'string' && section.section.length >= 1 && section.section.length <= 80 && section.section.trim() === section.section && !/[\u0000-\u001f\u007f]/.test(section.section) && !section.section.startsWith('#'), 'section heading must be 1 to 80 trimmed characters without controls or a leading #');
-    requireValue(section.hidden === undefined || typeof section.hidden === 'boolean', 'section hidden must be a boolean');
-    if (!section.hidden) visible = true;
-    return section.hidden ? { type: section.type, section: section.section, hidden: true } : { type: section.type, section: section.section };
+    requireValue(typeof section.section === 'string' && section.section.length >= 1 && section.section.length <= 80 && section.section.trim() === section.section && !/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(section.section) && !section.section.startsWith('#'), 'section heading must be 1 to 80 trimmed characters without controls or a leading #');
+    const hidden = Object.hasOwn(section, 'hidden') ? section.hidden : undefined;
+    requireValue(hidden === undefined || typeof hidden === 'boolean', 'section hidden must be a boolean');
+    if (!hidden) visible = true;
+    return hidden ? { type: section.type, section: section.section, hidden: true } : { type: section.type, section: section.section };
   });
   requireValue(visible, 'sections must leave at least one visible section');
   return normalized;

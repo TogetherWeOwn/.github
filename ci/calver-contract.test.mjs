@@ -210,6 +210,9 @@ for (const [label, sections] of [
   ["oversized type", [{ type: "a".repeat(33), section: "Fixed" }]],
   ["empty section", [{ type: "fix", section: "" }]],
   ["section with newline", [{ type: "fix", section: "Fixed\n## injected" }]],
+  ["section with C1 control", [{ type: "fix", section: "Fix\u0085ed" }]],
+  ["section with line separator", [{ type: "fix", section: "Fix\u2028ed" }]],
+  ["section with bidi override", [{ type: "fix", section: "Fixed\u202eabc" }]],
   ["section that is a heading", [{ type: "fix", section: "# Fixed" }]],
   ["oversized section", [{ type: "fix", section: "x".repeat(81) }]],
   ["non-boolean hidden", [{ type: "fix", section: "Fixed", hidden: "yes" }]],
@@ -221,6 +224,18 @@ for (const [label, sections] of [
     assert.throws(() => renderNotes([], { sections }), /section/i);
   });
 }
+
+test("notes refuse section entries that are not plain own-property data", async () => {
+  const { renderNotes } = await engine();
+  const commits = [{ sha: "a".repeat(40), message: "fix: visible change" }];
+  const inheritedHidden = Object.assign(Object.create({ hidden: true }), { type: "fix", section: "Fixed" });
+  assert.throws(() => renderNotes(commits, { sections: [inheritedHidden] }), /section/i);
+  const reprototyped = { type: "fix", section: "Fixed" };
+  Object.setPrototypeOf(reprototyped, { hidden: true });
+  assert.throws(() => renderNotes(commits, { sections: [reprototyped] }), /section/i);
+  class Entry { constructor() { this.type = "fix"; this.section = "Fixed"; } }
+  assert.throws(() => renderNotes(commits, { sections: [new Entry()] }), /section/i);
+});
 
 test("notes accept empty history without inventing changes", async () => {
   const { renderNotes } = await engine();

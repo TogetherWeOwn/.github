@@ -24,8 +24,9 @@ only); its public test seam is below. No caller code is executed by the releaser
 - `normalizeSections(sections)` returns null for an omitted/null value, else a
   validated copy of release-please-shaped `changelog-sections` entries
   (`{type, section, hidden?}`) in caller order, with `hidden: false` dropped.
-  Bounds: 1–32 entries, each type 1–32 lowercase letters and unique, each
-  heading 1–80 trimmed characters without control characters or a leading
+  Bounds: 1–32 plain-object entries with own keys only, each type 1–32
+  lowercase letters and unique, each heading 1–80 trimmed characters without
+  Unicode control/format/surrogate/line-separator characters or a leading
   `#`, `hidden` boolean when present, no other keys, and at least one visible
   entry. Throws on anything else.
 
