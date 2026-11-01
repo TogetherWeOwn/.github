@@ -36,7 +36,7 @@ async function main() {
 }
 
 main().catch(error => {
-  if (['quiet-day', 'rollback', 'digest-already-published'].includes(error.code)) {
+  if (['quiet-day', 'rollback', 'digest-already-published', 'already-released'].includes(error.code)) {
     const output = `created=false\nskipped=true\nreason=${error.code}\n`;
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, output);
     process.stdout.write(output);

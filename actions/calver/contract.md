@@ -54,9 +54,12 @@ The exported `GitHub` transport in `github.mjs` implements Link pagination;
 
 Plan inputs: `channel` (`stable|canary`), lowercase exact 40-hex `sha`,
 `operation` (nonempty bounded identifier), `policy`
-(`staged-promotion|live-digest|direct-release`), optional `namespace` (only `build`
-is supported), optional `latest` (`auto|never`), optional `repairDate` (ISO UTC
-calendar date), optional `sourceCanary`, and `evidence` described below. Date
+(`staged-promotion|production-promotion|live-digest|direct-release`), optional
+`namespace` (only `build` is supported), optional `latest` (`auto|never`), optional
+`repairDate` (ISO UTC calendar date), optional `sourceCanary`, optional `sections`
+(1-50 `{type, section, hidden?}` notes groups in release-please
+`changelog-sections` shape; frozen into the plan and its identity, defaults to the
+built-in groups when absent), and `evidence` described below. Date
 freezes at plan time, including across midnight; repairDate is only publishable
 with explicit repair. Version cannot be silently reallocated after deployment.
 Every plan binds repository, policy, operation, SHA, date, namespace, source and
@@ -109,6 +112,32 @@ Stable promotion requires the source run fully completed successfully; it cannot
 use the active-canary exception. Publish re-fetches evidence and the source
 canary. This corrects the initial contract's impossible pre-build artifact
 requirement and its self-deadlocking whole-run check for an in-run publisher.
+
+## Production promotion evidence
+
+`production-promotion` is root stable only, with no namespace and no
+`sourceCanary`. It is for an application whose production deploy promotes an
+already-soaked `main` commit and runs no canary channel. Its `evidence` has the
+staged shape, but selects the production deploy run itself:
+
+- the run attempt is same-repository, `head_branch` `main`, event `push`,
+  `workflow_run`, `schedule` or `workflow_dispatch`, and path `workflow`. It is
+  completed successfully, or still in progress because the publisher is its
+  successor job;
+- every named job completed successfully in that attempt (skipped, running,
+  missing or duplicate jobs refuse), whether the run is still active or not;
+- the deployed `sha` is reachable from `main` and from the run's head SHA. The
+  run's head is main's tip when it started, not the deployed commit;
+- the artifact is bound to that run, unexpired, nonempty, created after the
+  attempt started, has the exact digest, and its name carries the deployed `sha`
+  as a whole token. The trusted main workflow writes that name after its deploy
+  gates pass. The caller still verifies the receipt content.
+
+Before allocation, a production plan classifies two green skips (CLI
+`skipped=true`, no plan): `already-released` when a stable tag (legacy or CalVer,
+from another operation) already points at `sha`, and `rollback` when the newest
+stable is not reachable from `sha`. An exact operation retry still recovers its
+own frozen plan, so a missing Release stays repairable with `repair: true`.
 
 ## Notes and Latest
 

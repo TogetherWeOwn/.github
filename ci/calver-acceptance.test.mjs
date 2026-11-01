@@ -1267,3 +1267,185 @@ test("large release notes go through JSON body or an explicit bound, never a tru
   assert.ok(body.body.includes(marker), "Release notes silently truncated a >32 MiB input");
   assert.ok(body.body.includes("x".repeat(1024)));
 });
+
+// production-promotion: the production deploy run is the evidence. Its head is
+// main's tip (OTHER); it promoted an older soaked commit (SHA) named by its
+// receipt artifact. No canary exists.
+const PRODUCTION = {
+  runId: EVIDENCE.runId, attempt: EVIDENCE.attempt, workflow: ".github/workflows/deploy-production.yml",
+  jobs: ["deploy-production"], artifactId: EVIDENCE.artifactId,
+  artifactName: `production-promotion-${SHA}-901-2`, artifactDigest: EVIDENCE.artifactDigest,
+};
+const SECTIONS = [
+  { type: "feat", section: "Added" }, { type: "fix", section: "Fixed" },
+  { type: "security", section: "Fixed" }, { type: "chore", section: "Miscellaneous", hidden: true },
+];
+
+async function productionSetup({ active = true } = {}) {
+  const fixture = await setup();
+  const { api } = fixture;
+  Object.assign(api.run, { event: "workflow_run", head_sha: OTHER, path: PRODUCTION.workflow,
+    ...(active ? { status: "in_progress", conclusion: null } : {}) });
+  api.jobs = [
+    ...PRODUCTION.jobs.map((name, i) => ({ ...api.jobs[0], id: 600 + i, name, head_sha: OTHER })),
+    { ...api.jobs[0], id: 699, name: "release", head_sha: OTHER, status: "in_progress", conclusion: null, completed_at: null },
+  ];
+  Object.assign(api.artifact, { name: PRODUCTION.artifactName });
+  api.artifact.workflow_run.head_sha = OTHER;
+  api.addRef("v1.21.2", OLD);
+  api.compareMessages.set(OLD, [
+    { sha: SHA, message: "feat(events): name the missing roster (#1499)" },
+    { sha: "e".repeat(40), message: "fix(admin): explain the hidden roster (#1862)" },
+    { sha: "f".repeat(40), message: "chore: tidy (#1)" },
+  ]);
+  return fixture;
+}
+
+const productionInput = (extra = {}) => ({
+  channel: "stable", sha: SHA, operation: "production-901-2", policy: "production-promotion",
+  evidence: copy(PRODUCTION), sections: copy(SECTIONS), ...extra,
+});
+
+test("production promotion tags the deployed SHA without a canary and becomes Latest", async () => {
+  const { api, releaser } = await productionSetup();
+  const plan = await releaser.plan(productionInput());
+  assertNoMutations(api);
+  assert.equal(plan.tag, "v2026.1028.0");
+  assert.equal(plan.sha, SHA);
+  assert.equal(plan.previousStableTag, "v1.21.2", "first CalVer release ranges notes from the legacy tag");
+  const result = await releaser.publish(JSON.parse(JSON.stringify(plan)));
+  assert.equal(result.created, true);
+  assert.equal(api.refs.get("v2026.1028.0") !== undefined, true);
+  const body = releaseBody(api);
+  assert.equal(body.make_latest, "true");
+  assert.equal(body.target_commitish, SHA);
+  assert.match(body.body, /### Added\n\n\* \*\*events:\*\* name the missing roster/);
+  assert.match(body.body, /### Fixed\n\n\* \*\*admin:\*\* explain the hidden roster/);
+  assert.doesNotMatch(body.body, /tidy|Miscellaneous|Features|Bug Fixes/, "caller sections replace the defaults; hidden types stay out");
+  const start = api.calls.length;
+  const replay = await releaser.publish(plan);
+  assert.equal(replay.created, false);
+  assertNoMutations(api, start);
+});
+
+test("production promotion also accepts a completed run and the next promote the same day gets P+1", async () => {
+  const { api, releaser } = await productionSetup({ active: false });
+  await releaser.publish(await releaser.plan(productionInput()));
+  // A later promote of a newer commit, from another run.
+  const NEXT = "9".repeat(40);
+  Object.assign(api.run, { id: 902, run_attempt: 1, head_sha: NEXT, html_url: "x" });
+  api.jobs.forEach((job) => Object.assign(job, { run_id: 902, run_attempt: 1, head_sha: NEXT }));
+  Object.assign(api.artifact, { id: 78, name: `production-promotion-${NEXT}-902-1` });
+  Object.assign(api.artifact.workflow_run, { id: 902, head_sha: NEXT });
+  const evidence = { ...PRODUCTION, runId: 902, attempt: 1, artifactId: 78, artifactName: api.artifact.name };
+  const plan = await releaser.plan(productionInput({ sha: NEXT, operation: "production-902-1", evidence }));
+  assert.equal(plan.tag, "v2026.1028.1");
+  assert.equal(plan.previousStableTag, "v2026.1028.0");
+});
+
+test("production dry run validates everything and writes nothing", async () => {
+  const { api, releaser } = await productionSetup();
+  const plan = await releaser.plan(productionInput());
+  const start = api.calls.length;
+  const result = await releaser.publish(plan, { dryRun: true });
+  assert.equal(result.dryRun, true);
+  assert.equal(result.created, false);
+  assertNoMutations(api, start);
+});
+
+for (const [name, mutate] of [
+  ["a named deploy job still running", (api) => Object.assign(api.jobs[0], { status: "in_progress", conclusion: null, completed_at: null })],
+  ["a named deploy job skipped", (api) => Object.assign(api.jobs[0], { conclusion: "skipped" })],
+  ["a missing named deploy job", (api) => { api.jobs = api.jobs.slice(1); }],
+  ["a failed run", (api) => Object.assign(api.run, { status: "completed", conclusion: "failure" })],
+  ["a non-main run", (api) => Object.assign(api.run, { head_branch: "feature" })],
+  ["a pull_request run", (api) => Object.assign(api.run, { event: "pull_request" })],
+  ["another workflow", (api) => Object.assign(api.run, { path: ".github/workflows/deploy.yml" })],
+  ["a fork head repository", (api) => { api.run.head_repository = { ...api.run.head_repository, id: 999, full_name: "fork/two-web-next" }; }],
+  ["a receipt for another SHA", (api) => { api.artifact.name = `production-promotion-${OTHER}-901-2`; }],
+  ["a receipt from another run", (api) => { api.artifact.workflow_run.id = 900; }],
+  ["an expired receipt", (api) => { api.artifact.expired = true; }],
+  ["a receipt digest mismatch", (api) => { api.artifact.digest = `sha256:${"e".repeat(64)}`; }],
+  ["a deployed SHA outside the run's history", (api) => { api.unreachable.add(OTHER); }],
+]) {
+  test(`production promotion refuses ${name}`, async () => {
+    const { api, releaser } = await productionSetup();
+    mutate(api);
+    await assert.rejects(releaser.plan(productionInput()));
+    assertNoMutations(api);
+  });
+}
+
+test("production publish re-fetches evidence and refuses a receipt that changed after planning", async () => {
+  const { api, releaser } = await productionSetup();
+  const plan = await releaser.plan(productionInput());
+  api.artifact.expired = true;
+  const start = api.calls.length;
+  await assert.rejects(releaser.publish(plan));
+  assertNoMutations(api, start);
+});
+
+test("production evidence must name the SHA it releases", async () => {
+  const { api, releaser } = await productionSetup();
+  const evidence = { ...PRODUCTION, artifactName: "production-promotion-901-2" };
+  api.artifact.name = evidence.artifactName;
+  await assert.rejects(releaser.plan(productionInput({ evidence })), /deployed SHA/);
+});
+
+for (const [name, extra] of [
+  ["a canary channel", { channel: "canary" }],
+  ["a source canary", { sourceCanary: "canary/v2026.1028.0-canary.0" }],
+  ["a build namespace", { namespace: "build", latest: "never" }],
+  ["malformed sections", { sections: [{ type: "feat", section: "Added", extra: true }] }],
+  ["empty sections", { sections: [] }],
+  ["missing evidence", { evidence: undefined }],
+]) {
+  test(`production promotion refuses ${name}`, async () => {
+    const { api, releaser } = await productionSetup();
+    await assert.rejects(releaser.plan(productionInput(extra)));
+    assertNoMutations(api);
+  });
+}
+
+test("re-promoting a commit with a legacy or CalVer stable tag skips with already-released", async () => {
+  const legacy = await productionSetup();
+  legacy.api.addRef("v1.21.3", SHA);
+  await assert.rejects(legacy.releaser.plan(productionInput()), { code: "already-released" });
+  assertNoMutations(legacy.api);
+
+  const calver = await productionSetup();
+  await calver.releaser.publish(await calver.releaser.plan(productionInput()));
+  const start = calver.api.calls.length;
+  await assert.rejects(calver.releaser.plan(productionInput({ operation: "production-950-1" })), { code: "already-released" });
+  assertNoMutations(calver.api, start);
+});
+
+test("a rollback promote below the newest stable skips without moving Latest", async () => {
+  const { api, releaser } = await productionSetup();
+  api.addRef("v2026.1027.0", "8".repeat(40));
+  api.unreachable.add("8".repeat(40));
+  await assert.rejects(releaser.plan(productionInput()), { code: "rollback" });
+  assertNoMutations(api);
+});
+
+test("an exact production retry recovers its frozen plan for an explicit Release repair", async () => {
+  const { api, releaser, setClock } = await productionSetup();
+  const plan = await releaser.plan(productionInput());
+  await releaser.publish(plan);
+  api.releases.delete(plan.tag);
+  setClock("2026-10-29T00:00:05Z");
+  const again = await releaser.plan(productionInput());
+  assert.deepEqual(again, plan, "the own tag is not a re-promote skip and the date stays frozen");
+  await assert.rejects(releaser.publish(again));
+  const repaired = await releaser.publish(again, { repair: true });
+  assert.equal(repaired.created, true);
+  assert.equal(api.refs.size, 2, "repair never retags");
+});
+
+test("production-promotion sections change the plan identity", async () => {
+  const { releaser } = await productionSetup();
+  const withSections = await releaser.plan(productionInput());
+  const defaults = await releaser.plan(productionInput({ sections: undefined }));
+  assert.notEqual(withSections.id, defaults.id);
+  assert.equal("sections" in defaults, false, "plans without sections keep the original shape");
+});

@@ -6,6 +6,9 @@ const VERSION = new RegExp(`^([1-9][0-9]{3})\\.([1-9][0-9]{2,3})\\.${COUNTER}(?:
 const MAX_HISTORY_BYTES = 256 * 1024 * 1024;
 const MAX_NOTES_BYTES = 120000;
 const HEADER = /^(?<type>[a-z]+)(?:\((?<scope>[^()\r\n]+)\))?(?<bang>!)?: (?<desc>\S.*)$/;
+// Policies whose plan binds a verified workflow run as its source.
+const STAGED = ['staged-promotion', 'production-promotion'];
+const PRODUCTION_EVENTS = ['push', 'workflow_run', 'schedule', 'workflow_dispatch'];
 const DEFAULT_SECTIONS = [
   { type: 'feat', section: 'Features' },
   { type: 'fix', section: 'Bug Fixes' },
@@ -16,6 +19,12 @@ const DEFAULT_SECTIONS = [
 
 function requireValue(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+// Caller notes grouping (release-please `changelog-sections` shape), frozen
+// into the plan so a replay renders the same notes.
+function validateSections(sections) {
+  requireValue(Array.isArray(sections) && sections.length > 0 && sections.length <= 50 && sections.every(item => item && typeof item === 'object' && !Array.isArray(item) && Object.keys(item).every(key => ['type', 'section', 'hidden'].includes(key)) && typeof item.type === 'string' && /^[a-z]{1,30}$/.test(item.type) && typeof item.section === 'string' && /^[^\r\n]{1,100}$/.test(item.section) && (item.hidden === undefined || typeof item.hidden === 'boolean')), 'sections must be 1-50 {type, section, hidden?} entries');
 }
 
 function calendarDate(value) {
@@ -236,13 +245,15 @@ export class Releaser {
 
   policy(input) {
     requireValue(['stable', 'canary'].includes(input.channel), 'invalid channel');
-    requireValue(['staged-promotion', 'live-digest', 'direct-release'].includes(input.policy), 'explicit release policy required');
+    requireValue(['staged-promotion', 'production-promotion', 'live-digest', 'direct-release'].includes(input.policy), 'explicit release policy required');
     namespacePrefix(input.namespace || '');
     requireValue(['auto', 'never'].includes(input.latest || 'auto'), 'invalid Latest policy');
     requireValue(typeof input.operation === 'string' && /^[A-Za-z0-9_.:/-]{1,200}$/.test(input.operation), 'bounded operation identifier required');
     if (input.policy === 'live-digest') requireValue(this.repository === 'TogetherWeOwn/two-bot-next' && input.channel === 'stable' && !input.namespace, 'live-digest is only the bot stable exception');
     if (input.policy === 'direct-release') requireValue(input.channel === 'stable' && ((this.repository === 'TogetherWeOwn/kagi-shinobi' && !input.namespace) || (this.repository === 'TogetherWeOwn/routeware-shadow-api' && input.namespace === 'build' && input.latest === 'never')), 'direct-release requires an explicit repository exception');
+    if (input.policy === 'production-promotion') requireValue(input.channel === 'stable' && !input.namespace && !input.sourceCanary, 'production-promotion is root stable only, without a source canary');
     if (input.namespace) requireValue(input.latest === 'never', 'build namespace cannot advance API Latest');
+    if (input.sections !== undefined && input.sections !== null) validateSections(input.sections);
   }
 
   sourceSelection(e) {
@@ -265,6 +276,7 @@ export class Releaser {
   }
 
   async verifyEvidence(input, { allowActive = false } = {}) {
+    if (input.policy === 'production-promotion') return this.verifyProduction(input);
     if (input.policy !== 'staged-promotion') return;
     const e = input.evidence;
     requireValue(e && Number.isSafeInteger(e.artifactId) && e.artifactId > 0, 'source artifact required');
@@ -287,13 +299,40 @@ export class Releaser {
     }
   }
 
+  // The production deploy run itself is the evidence: it promoted an older,
+  // already-soaked main commit, so its head SHA is main's tip, not the release
+  // SHA. The deployed SHA is bound by the receipt artifact's name, which the
+  // run's trusted main workflow wrote after its named deploy jobs succeeded.
+  // The publisher is a successor job of that run, so the run may still be in
+  // progress; every named job must already have completed successfully.
+  async verifyProduction(input) {
+    const e = input.evidence;
+    requireValue(e && Number.isSafeInteger(e.artifactId) && e.artifactId > 0, 'production receipt artifact required');
+    requireValue(typeof e.artifactName === 'string' && e.artifactName.length > 0 && e.artifactName.length <= 200 && /^sha256:[0-9a-f]{64}$/.test(e.artifactDigest), 'immutable artifact identity required');
+    requireValue(e.artifactName.split(/[^0-9a-f]+/).includes(input.sha), 'production receipt name must carry the deployed SHA');
+    const s = this.sourceSelection(e);
+    const run = await this.api.request('GET', `${this.base}/actions/runs/${s.runId}/attempts/${s.attempt}`);
+    const finished = run.status === 'completed' && run.conclusion === 'success';
+    const active = run.status === 'in_progress' && run.conclusion === null;
+    requireValue(run.id === s.runId && run.run_attempt === s.attempt && run.repository?.full_name === this.repository && run.head_repository?.full_name === this.repository && Number.isSafeInteger(run.repository?.id) && run.repository.id > 0 && run.head_repository.id === run.repository.id && typeof run.head_sha === 'string' && SHA.test(run.head_sha) && run.head_branch === 'main' && PRODUCTION_EVENTS.includes(run.event) && run.path === s.workflow && (finished || active), 'unsafe production run: require a same-repository main production workflow attempt');
+    requireValue(await this.reachable(input.sha, run.head_sha), 'deployed SHA is not part of the production run\'s main history');
+    const jobs = await this.api.paginate(`${this.base}/actions/runs/${s.runId}/attempts/${s.attempt}/jobs?per_page=100`, 'jobs');
+    for (const name of s.jobs) {
+      const found = jobs.filter(job => job.name === name);
+      requireValue(found.length === 1 && found[0].run_id === s.runId && found[0].run_attempt === s.attempt && found[0].head_sha === run.head_sha && found[0].status === 'completed' && found[0].conclusion === 'success' && Number.isFinite(Date.parse(found[0].started_at)) && Date.parse(found[0].started_at) >= Date.parse(run.run_started_at) && Number.isFinite(Date.parse(found[0].completed_at)) && Date.parse(found[0].completed_at) >= Date.parse(found[0].started_at), `required production job not executed successfully: ${name}`);
+    }
+    const artifact = await this.api.request('GET', `${this.base}/actions/artifacts/${e.artifactId}`);
+    requireValue(artifact.id === e.artifactId && artifact.name === e.artifactName && artifact.digest === e.artifactDigest && artifact.expired === false && artifact.size_in_bytes > 0 && artifact.workflow_run?.id === s.runId && artifact.workflow_run?.repository_id === run.repository.id && artifact.workflow_run?.head_repository_id === run.head_repository.id && artifact.workflow_run?.head_sha === run.head_sha && artifact.workflow_run?.head_branch === 'main', 'artifact identity or source mismatch');
+    requireValue(Number.isFinite(Date.parse(artifact.created_at)) && Number.isFinite(Date.parse(run.run_started_at)) && Date.parse(artifact.created_at) >= Date.parse(run.run_started_at) && Number.isFinite(Date.parse(artifact.expires_at)) && Date.parse(artifact.expires_at) > this.now().getTime(), 'artifact is expired or from a prior attempt');
+  }
+
   provenance(ref) {
     requireValue(typeof ref?.annotation === 'string' && ref.annotation.startsWith('calver-plan-v1\n'), 'tag lacks operation-bound CalVer provenance');
     const record = JSON.parse(ref.annotation.slice('calver-plan-v1\n'.length));
     const { publicationEvidence, ...plan } = record;
     this.validatePlan(plan);
     requireValue(plan.tag === ref.name && plan.sha === ref.sha, 'annotation target mismatch');
-    if (plan.policy === 'staged-promotion') requireValue(canonical(this.sourceSelection(publicationEvidence || plan.evidence)) === canonical(plan.source), 'publication source mismatch');
+    if (STAGED.includes(plan.policy)) requireValue(canonical(this.sourceSelection(publicationEvidence || plan.evidence)) === canonical(plan.source), 'publication source mismatch');
     return { ...plan, publicationEvidence: publicationEvidence || plan.evidence };
   }
 
@@ -338,18 +377,19 @@ export class Releaser {
     if (input.policy === 'staged-promotion' && input.channel === 'canary' && !input.evidence) {
       await this.verifyRun(input, input.source, { allowActive: true, planning: true });
     } else await this.verifyEvidence(input);
-    const source = input.policy === 'staged-promotion' ? this.sourceSelection(input.evidence || input.source) : null;
+    const source = STAGED.includes(input.policy) ? this.sourceSelection(input.evidence || input.source) : null;
     if (input.policy === 'staged-promotion' && input.source && input.evidence) requireValue(canonical(this.sourceSelection(input.source)) === canonical(source), 'source selector differs from verified evidence');
     const date = input.repairDate ? calendarDate(input.repairDate) : this.now().toISOString().slice(0, 10);
     requireValue(date <= this.now().toISOString().slice(0, 10), 'repair date cannot be in the future');
     const tags = await this.tags();
+    if (input.policy === 'production-promotion' && !input.repairDate) await this.productionSkip(tags, input);
     // An operation retry recovers its frozen original plan, even across dates.
     for (const tag of tags) {
       if (!tag.annotation?.startsWith('calver-plan-v1\n')) continue;
       const { publicationEvidence, ...prior } = this.provenance(tag);
       this.assertOperation(prior, input);
       if (prior.operation !== input.operation || prior.channel !== input.channel || prior.namespace !== (input.namespace || '')) continue;
-      requireValue(prior.sha === input.sha && prior.policy === input.policy && canonical(prior.source) === canonical(source) && canonical(prior.evidence) === canonical(input.evidence || null) && prior.sourceCanary === (input.sourceCanary || null) && prior.latest === (input.latest || 'auto') && prior.repairDate === (input.repairDate || null), 'operation identity already used for a different release');
+      requireValue(prior.sha === input.sha && prior.policy === input.policy && canonical(prior.source) === canonical(source) && canonical(prior.evidence) === canonical(input.evidence || null) && prior.sourceCanary === (input.sourceCanary || null) && prior.latest === (input.latest || 'auto') && prior.repairDate === (input.repairDate || null) && canonical(prior.sections || null) === canonical(input.sections || null), 'operation identity already used for a different release');
       return prior;
     }
     if (input.policy === 'live-digest' && !input.repairDate) {
@@ -362,8 +402,22 @@ export class Releaser {
     }
     const allocated = allocateVersion({ tags: tags.map(tag => tag.name), date, channel: input.channel, namespace: input.namespace || '' });
     const payload = { schema: 'calver-plan-v1', repository: this.repository, ...allocated, sha: input.sha, operation: input.operation, policy: input.policy, latest: input.latest || 'auto', repairDate: input.repairDate || null, sourceCanary: input.sourceCanary || null, source, evidence: input.evidence || null };
+    if (input.sections) payload.sections = input.sections.map(({ type, section, hidden }) => (hidden ? { type, section, hidden: true } : { type, section }));
     payload.previousStableTag = await this.previousStable(tags, payload);
     return { ...payload, id: identity(payload) };
+  }
+
+  // A production redeploy is not a new release. Re-promoting a commit that
+  // already carries a stable tag (legacy or CalVer, from another operation)
+  // and rolling back below the newest stable both skip, like live-digest,
+  // so a successful rollback never fails red or moves Latest backwards. An
+  // exact operation retry still recovers its own frozen plan for repair.
+  async productionSkip(tags, input) {
+    const skip = (code, message) => { throw Object.assign(new Error(message), { code }); };
+    const own = tag => tag.annotation?.startsWith('calver-plan-v1\n') && this.provenance(tag).operation === input.operation;
+    const stables = tags.filter(tag => numericStable(tag.name) && !own(tag)).sort((a, b) => compareNumeric(numericStable(b.name), numericStable(a.name)));
+    if (stables.some(tag => tag.sha === input.sha)) skip('already-released', 'this commit already has a stable release tag');
+    if (stables[0] && !await this.reachable(stables[0].sha, input.sha)) skip('rollback', 'production promote is older than the newest stable release');
   }
 
   async notes(plan) {
@@ -371,7 +425,7 @@ export class Releaser {
       ? `${this.base}/compare/${tagPath(plan.previousStableTag)}...${plan.sha}?per_page=100`
       : `${this.base}/commits?sha=${plan.sha}&per_page=100`;
     const commits = await this.api.paginate(query, plan.previousStableTag ? 'commits' : undefined);
-    const body = renderNotes(commits.map(commit => ({ sha: commit.sha, message: commit.commit.message })), { repository: this.repository });
+    const body = renderNotes(commits.map(commit => ({ sha: commit.sha, message: commit.commit.message })), { repository: this.repository, ...(plan.sections ? { sections: plan.sections } : {}) });
     return `${body}\n<!-- calver-plan:${plan.id} -->\n\nSource: ${plan.sha}${plan.sourceCanary ? `; canary: ${plan.sourceCanary}` : ''}${plan.evidence ? `; run: https://github.com/${this.repository}/actions/runs/${plan.evidence.runId}/attempts/${plan.evidence.attempt}; artifact: ${plan.evidence.artifactId} (${plan.evidence.artifactDigest})` : ''}\n`;
   }
 
@@ -380,7 +434,7 @@ export class Releaser {
     requireValue(typeof dryRun === 'boolean' && typeof repair === 'boolean', 'publish flags must be booleans');
     requireValue(!plan.repairDate || repair, 'backdated plans require explicit repair');
     const proof = evidence || plan.evidence;
-    if (plan.policy === 'staged-promotion') {
+    if (STAGED.includes(plan.policy)) {
       requireValue(canonical(this.sourceSelection(proof)) === canonical(plan.source), 'publication must match the frozen source selection');
       if (plan.evidence) requireValue(canonical(proof) === canonical(plan.evidence), 'cannot replace a prestamped artifact identity');
     } else requireValue(!evidence, 'repository exception does not accept staged proof');

@@ -50,7 +50,7 @@ outputs:
     description: Alias for provenance
     value: ${{ steps.release.outputs.provenance-id }}
   skipped:
-    description: True for a classified live-digest quiet-day, rollback or daily-cadence skip
+    description: True for a classified skip (live-digest quiet-day, rollback or daily cadence; production-promotion already-released or rollback)
     value: ${{ steps.release.outputs.skipped }}
   reason:
     description: Classified live-digest skip code
