@@ -417,6 +417,8 @@ export class Releaser {
   async productionSkip(tags, input) {
     const skip = (code, message) => { throw Object.assign(new Error(message), { code }); };
     const own = tag => tag.annotation?.startsWith('calver-plan-v1\n') && this.provenance(tag).operation === input.operation;
+    // The operation already published: recover its plan below (historical repair).
+    if (tags.some(own)) return;
     const stables = tags.filter(tag => numericStable(tag.name) && !own(tag)).sort((a, b) => compareNumeric(numericStable(b.name), numericStable(a.name)));
     if (stables.some(tag => tag.sha === input.sha)) skip('already-released', 'this commit already has a stable release tag');
     if (stables[0] && !await this.reachable(stables[0].sha, input.sha)) skip('rollback', 'production promote is older than the newest stable release');

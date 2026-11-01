@@ -1457,3 +1457,20 @@ test("production-promotion sections change the plan identity", async () => {
   assert.notEqual(withSections.id, defaults.id);
   assert.equal("sections" in defaults, false, "plans without sections keep the original shape");
 });
+
+test("an exact production retry can repair a historical Release after a newer stable exists", async () => {
+  const { api, releaser } = await productionSetup();
+  const plan = await releaser.plan(productionInput());
+  await releaser.publish(plan);
+  api.releases.delete(plan.tag);
+  // A later promote released a newer commit that SHA cannot reach.
+  const NEWER = "7".repeat(40);
+  api.addRef("v2026.1028.1", NEWER);
+  api.unreachable.add(NEWER);
+  const again = await releaser.plan(productionInput());
+  assert.deepEqual(again, plan);
+  const start = api.calls.length;
+  await releaser.publish(again, { repair: true });
+  assert.equal(releaseBody(api).make_latest, "false", "historical repair never moves Latest backwards");
+  assert.equal(api.mutations().slice(start).filter(({ path }) => /\/git\//.test(path)).length, 0, "repair never retags");
+});
