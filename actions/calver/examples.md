@@ -38,12 +38,10 @@ jobs:
   # its job grants contents:write and actions:read to this same reusable.
 ```
 
-For a private caller, replace `runs-on-json` with
-`${{ vars.CI_OVERFLOW_RUNNER }}` (the existing explicitly configured self-hosted
-JSON labels, beginning with `self-hosted`), without a hosted default or new pool.
+Private callers pass the same `runs-on-json: '"ubuntu-latest"'`.
 The wrapper checks out `TogetherWeOwn/.github` separately at `tooling-sha`; it
 does not accidentally look for shared scripts in a default caller checkout.
-Public callers always schedule the standard free `ubuntu-latest`.
+Every caller schedules the standard GitHub-hosted `ubuntu-latest`.
 
 ## Step adapter in the caller's existing serialized transaction
 

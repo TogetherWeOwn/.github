@@ -18,7 +18,7 @@ jobs:
     name: review-rules
     needs: rules
     if: always()
-    runs-on: ${{ fromJSON(github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
       - name: Re-export the bare shadow check

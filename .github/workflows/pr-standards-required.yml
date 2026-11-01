@@ -32,7 +32,7 @@ concurrency:
 jobs:
   pr-standards:
     name: pr-standards
-    runs-on: ${{ fromJSON(github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Check title, body, branch and commit messages

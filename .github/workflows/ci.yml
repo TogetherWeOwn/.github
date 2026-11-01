@@ -226,6 +226,9 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 -m unittest discover -s .github/scripts -p 'test_pr_standards_required.py'
+      # Every workflow here must run on GitHub-hosted runners: a required
+      # check whose runner never starts blocks every merge.
+      - run: python3 -m unittest discover -s .github/scripts -p 'test_hosted_runners.py'
 
   gradual-promote-selftest:
     name: gradual-promote selftest
