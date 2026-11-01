@@ -9,8 +9,10 @@ Every repo links this file from its CONTRIBUTING.md or README. New repos start f
 
 ## 1. Review
 
-- **Required checks come from the ruleset.** Every protect-main ruleset requires the repo's CI, `Devin Review`
-  and, on public repos, `CodeRabbit`. No approving review is required. Read the live set with
+- **Required checks come from the ruleset.** Every protect-main ruleset requires the repo's CI and
+  `Devin Review`. No approving review is required. **CodeRabbit is advisory**: answer each of its
+  findings (fixed, rejected with evidence, or duplicate), but never wait for it and never post
+  `@coderabbitai` commands to trigger it. Read the live set with
   `gh api repos/<repo>/rules/branches/main`.
 - **The Paperclip Review check is retired (2026-10-31).** No ruleset requires it. Do not wait for it, and do not
   ask anyone to run or waive it.

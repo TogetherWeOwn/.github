@@ -13,8 +13,8 @@
 #     paths:` to this file: it would suppress the required `ci-ok` check.
 #   * One required aggregator `ci-ok` (`if: always()` over every gated job).
 #     Of the CI jobs, branch protection requires only `ci-ok` (plus pr-lint,
-#     secret scan); it also requires `Devin Review` and, on public repos,
-#     `CodeRabbit`.
+#     secret scan); it also requires `Devin Review`. CodeRabbit is advisory,
+#     never a required check.
 #   * Full suite on `push` to `main` and on the nightly schedule.
 #   * Cheap/security jobs (lint, secrets, ci-ok) always run.
 #   * Concurrency cancels superseded PR runs only; timeouts on every job;

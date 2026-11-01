@@ -60,7 +60,18 @@ for repo in "${repos[@]}"; do
   for entry in "${labels[@]}"; do
     IFS='|' read -r name color description <<< "$entry"
     encoded=$(printf '%s' "$name" | jq -sRr @uri 2>/dev/null || printf '%s' "$name" | sed 's/ /%20/g')
-    if "$GH" api "repos/$repo/labels/$encoded" >/dev/null 2>&1; then
+    # Only HTTP 404 means "missing". Any other probe failure (auth, rate
+    # limit, network, bad repo) is a failure for that label, never a create.
+    if probe=$("$GH" api "repos/$repo/labels/$encoded" 2>&1); then
+      action=update
+    elif printf '%s' "$probe" | grep -q "HTTP 404"; then
+      action=create
+    else
+      echo "  FAIL (lookup): $name: $probe" >&2
+      failures=$((failures+1))
+      continue
+    fi
+    if [ "$action" = update ]; then
       run "$GH" api -X PATCH "repos/$repo/labels/$encoded" \
         -f color="$color" -f description="$description" \
         && echo "  ok (update): $name" || { echo "  FAIL: $name" >&2; failures=$((failures+1)); }

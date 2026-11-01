@@ -19,8 +19,9 @@ FAKE_GH = """#!/usr/bin/env bash
 echo "$*" >> "$FAKE_GH_LOG"
 case "$*" in
   *" -X DELETE"*) exit 9 ;;
+  "api repos/acme/broken/labels/"*) echo "gh: Bad credentials (HTTP 401)" >&2; exit 1 ;;
   "api repos/acme/widgets/labels/bug") exit 0 ;;
-  "api repos/acme/widgets/labels/"*) exit 1 ;;
+  "api repos/acme/widgets/labels/"*) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
   *) exit 0 ;;
 esac
 """
@@ -62,6 +63,12 @@ class SyncLabelsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(any("-X POST" in c or "-X PATCH" in c for c in calls), calls)
         self.assertIn("dry-run:", result.stdout)
+
+    def test_lookup_errors_are_failures_not_creates(self):
+        result, calls = self.run_script("acme/broken")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertFalse(any("-X POST" in c or "-X PATCH" in c for c in calls), calls)
+        self.assertIn("FAIL (lookup)", result.stderr)
 
     def test_requires_a_repo_argument(self):
         result, _ = self.run_script()
