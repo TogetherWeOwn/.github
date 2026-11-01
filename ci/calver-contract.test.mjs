@@ -161,6 +161,67 @@ test("notes group conventional changes and preserve BREAKING CHANGE information"
   assert.match(notes, /fix/i);
 });
 
+// Caller sections use the release-please `changelog-sections` shape; the bot's
+// Common Changelog mapping is the motivating caller (security lands in Fixed).
+const BOT_SECTIONS = [
+  { type: "perf", section: "Changed" },
+  { type: "refactor", section: "Changed", hidden: true },
+  { type: "revert", section: "Changed" },
+  { type: "feat", section: "Added" },
+  { type: "fix", section: "Fixed" },
+  { type: "security", section: "Fixed" },
+  { type: "docs", section: "Documentation", hidden: true },
+];
+
+test("notes honour caller sections, heading order and hidden types", async () => {
+  const { renderNotes } = await engine();
+  const notes = renderNotes([
+    { sha: "a".repeat(40), message: "security(deps): patch the token parser" },
+    { sha: "b".repeat(40), message: "feat: add search" },
+    { sha: "c".repeat(40), message: "perf: cache lookups" },
+    { sha: "d".repeat(40), message: "docs: document migration" },
+    { sha: "e".repeat(40), message: "fix: avoid duplicate uploads" },
+  ], { sections: BOT_SECTIONS });
+  const headings = [...notes.matchAll(/^### (.+)$/gm)].map((match) => match[1]);
+  assert.deepEqual(headings, ["Changed", "Added", "Fixed"]);
+  const fixed = notes.split("### Fixed")[1] ?? "";
+  assert.ok(fixed.includes("patch the token parser"), "security commit missing from Fixed");
+  assert.ok(fixed.includes("avoid duplicate uploads"), "fix commit missing from Fixed");
+  assert.ok(!notes.includes("document migration"), "hidden docs type leaked into notes");
+  assert.ok(!notes.includes("Bug Fixes"), "built-in sections must not appear with caller sections");
+});
+
+test("notes without caller sections keep the built-in sections", async () => {
+  const { renderNotes } = await engine();
+  const notes = renderNotes([
+    { sha: "a".repeat(40), message: "security(deps): patch the token parser" },
+    { sha: "b".repeat(40), message: "feat: add search" },
+  ]);
+  assert.ok(notes.includes("### Features"));
+  assert.ok(!notes.includes("patch the token parser"), "defaults have no security section");
+});
+
+for (const [label, sections] of [
+  ["not an array", "Fixed"],
+  ["empty array", []],
+  ["too many entries", Array.from({ length: 33 }, (_, i) => ({ type: `t${"x".repeat(i)}`, section: "S" }))],
+  ["duplicate type", [{ type: "fix", section: "Fixed" }, { type: "fix", section: "Other" }]],
+  ["non-lowercase type", [{ type: "Fix", section: "Fixed" }]],
+  ["oversized type", [{ type: "a".repeat(33), section: "Fixed" }]],
+  ["empty section", [{ type: "fix", section: "" }]],
+  ["section with newline", [{ type: "fix", section: "Fixed\n## injected" }]],
+  ["section that is a heading", [{ type: "fix", section: "# Fixed" }]],
+  ["oversized section", [{ type: "fix", section: "x".repeat(81) }]],
+  ["non-boolean hidden", [{ type: "fix", section: "Fixed", hidden: "yes" }]],
+  ["unknown key", [{ type: "fix", section: "Fixed", extra: 1 }]],
+  ["every entry hidden", [{ type: "fix", section: "Fixed", hidden: true }]],
+]) {
+  test(`notes refuse invalid caller sections: ${label}`, async () => {
+    const { renderNotes } = await engine();
+    assert.throws(() => renderNotes([], { sections }), /section/i);
+  });
+}
+
 test("notes accept empty history without inventing changes", async () => {
   const { renderNotes } = await engine();
   assert.equal(typeof await renderNotes([]), "string");

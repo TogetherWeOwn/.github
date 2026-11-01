@@ -84,6 +84,13 @@ To verify a publication without writes, set `dryRun: true` on the publish
 request. The same validations run, but the API transport refuses non-GET calls.
 There is no caller-local notes filename output and no cloud credential input.
 
+A plan `input` may also carry `sections`: release-please-shaped
+`changelog-sections` entries (`{type, section, hidden?}`) that replace the
+built-in note headings. They freeze into the plan, so set them at plan time —
+for example, the bot adapter passes its `release-please-config.json` sections
+so `security` commits stay under **Fixed**. Omit `sections` for the built-in
+Features/Bug Fixes/Performance Improvements/Reverts/Documentation headings.
+
 A bot live-digest adapter retains its live-production resolver and classifies
 `skipped`/`reason` from planning before deciding whether to publish or dispatch
 SBOM attachment/repair. Use an explicit repository exception, not a general
