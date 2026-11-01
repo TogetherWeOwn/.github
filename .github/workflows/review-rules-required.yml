@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   rules:
-    uses: TogetherWeOwn/.github/.github/workflows/review-rules.yml@6f75694fdc95748e9af19bdedc72873c108f1922
+    uses: TogetherWeOwn/.github/.github/workflows/review-rules.yml@1e3c0c04b15a31baf498398417d98e44d0d8cbdb
     with:
       packs: rust,ts,python-shell-ci,php,security
       mode: warn

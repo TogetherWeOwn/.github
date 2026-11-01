@@ -52,7 +52,7 @@ jobs:
     # fix/checkout-credential-source across squash merge; normalize to the main
     # squash commit afterward. Retain source refs needed by queued/rerun/rollback
     # workflows even after current callers have been repinned.
-    uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@6f75694fdc95748e9af19bdedc72873c108f1922
+    uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@1e3c0c04b15a31baf498398417d98e44d0d8cbdb
     # Every repo, public or private, runs on GitHub-hosted ubuntu-latest:
     # the org has no other runners, and a required check on a runner that
     # never starts would block every merge.
