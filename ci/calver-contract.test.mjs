@@ -191,6 +191,23 @@ test("notes honour caller sections, heading order and hidden types", async () =>
   assert.ok(!notes.includes("Bug Fixes"), "built-in sections must not appear with caller sections");
 });
 
+test("breaking commits surface even when their type is hidden or unlisted", async () => {
+  // Parity with the bot's existing digest renderer: BREAKING CHANGES is a
+  // safety signal grouped before section filtering, so `hidden` (or an
+  // unlisted type) suppresses routine entries but never a breaking warning.
+  const { renderNotes } = await engine();
+  const notes = renderNotes([
+    { sha: "a".repeat(40), message: "refactor!: remove the old API" },
+    { sha: "b".repeat(40), message: "chore!: drop the legacy config\n\nBREAKING CHANGE: config v1 is gone" },
+    { sha: "c".repeat(40), message: "refactor: rename an internal helper" },
+  ], { sections: BOT_SECTIONS });
+  assert.ok(notes.includes("### ⚠ BREAKING CHANGES"));
+  const breaking = notes.split("### ⚠ BREAKING CHANGES")[1] ?? "";
+  assert.ok(breaking.includes("remove the old API"), "hidden breaking type must still warn");
+  assert.ok(breaking.includes("drop the legacy config"), "unlisted breaking type must still warn");
+  assert.ok(!notes.includes("rename an internal helper"), "non-breaking hidden entries stay out");
+});
+
 test("notes without caller sections keep the built-in sections", async () => {
   const { renderNotes } = await engine();
   const notes = renderNotes([
