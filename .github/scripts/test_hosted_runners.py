@@ -4,13 +4,17 @@ The org has no self-hosted runners. A required workflow routed to a
 self-hosted label never starts, so its check never reports and every merge
 in the repos it covers is blocked. These tests fail if any workflow or
 workflow template here names a self-hosted label, or picks its runner from
-a repository/org variable that could hold one.
+a repository/org variable that could hold one. A caller that pins one of
+this repo's reusables by sha runs that older revision, so the runner lines
+and input defaults of every pinned revision are checked as well. A pin may
+name a commit that is on no branch, so a missing one is fetched by sha.
 
 Run with: python3 -m unittest discover -s .github/scripts -p 'test_hosted_runners.py'
 Also wired into the `pr-standards selftest` job in .github/workflows/ci.yml.
 """
 
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -21,6 +25,9 @@ WORKFLOW_DIRS = [ROOT / ".github" / "workflows", ROOT / "workflow-templates"]
 # are the retired pool's own labels and the variable that routed to it.
 SELF_HOSTED = re.compile(r"self[-_ ]?hosted|two-(?:isolated|ephemeral)|CI_OVERFLOW_RUNNER", re.I)
 RUNS_ON = re.compile(r"^\s*runs-on:\s*(.*)$", re.M)
+# Runner routing in a pinned revision: runs-on lines and input defaults.
+ROUTING = re.compile(r"^\s*(?:runs-on|default):")
+PINNED = re.compile(r"TogetherWeOwn/\.github/(\.github/workflows/[\w.-]+\.ya?ml)@([0-9a-f]{40})")
 
 
 def workflow_files():
@@ -39,6 +46,27 @@ def violations(text):
     return found
 
 
+def routing_violations(text):
+    routing = "\n".join(l for l in text.splitlines() if ROUTING.match(l))
+    return violations(routing)
+
+
+def pinned_reusables():
+    pins = set()
+    for p in workflow_files():
+        pins.update(PINNED.findall(p.read_text()))
+    return sorted(pins)
+
+
+def show(sha, path):
+    def run(*args):
+        return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True)
+
+    if run("cat-file", "-e", f"{sha}^{{commit}}").returncode != 0:
+        run("fetch", "--quiet", "origin", sha)
+    return run("show", f"{sha}:{path}")
+
+
 class Scanner(unittest.TestCase):
     def test_flags_self_hosted_labels(self):
         for line in [
@@ -51,6 +79,18 @@ class Scanner(unittest.TestCase):
 
     def test_flags_runner_from_variable(self):
         self.assertTrue(violations("    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}"))
+
+    def test_pinned_revision_checks_routing_only(self):
+        old = (
+            "        description: private callers pass their self-hosted pool\n"
+            "        default: '[\"ubuntu-latest\"]'\n"
+            "    runs-on: ${{ fromJSON(inputs.runs-on-json) }}\n"
+        )
+        self.assertEqual(routing_violations(old), [])
+        self.assertTrue(routing_violations(
+            "    runs-on: ${{ fromJSON(github.event.repository.private && '[\"self-hosted\"]' || '[\"ubuntu-latest\"]') }}"
+        ))
+        self.assertTrue(routing_violations("        default: '[\"self-hosted\",\"linux\"]'"))
 
     def test_hosted_runners_pass(self):
         for line in [
@@ -73,6 +113,18 @@ class Repo(unittest.TestCase):
             for p in workflow_files()
             for n, why, line in violations(p.read_text())
         ]
+        self.assertEqual(problems, [], "\n" + "\n".join(problems))
+
+    def test_pinned_reusables_route_to_hosted_runners(self):
+        pins = pinned_reusables()
+        self.assertTrue(pins, "no pinned reusables found")
+        problems = []
+        for path, sha in pins:
+            shown = show(sha, path)
+            if shown.returncode != 0:
+                problems.append(f"{path}@{sha}: pinned commit not fetchable")
+                continue
+            problems += [f"{path}@{sha}:{n}: {why}: {line}" for n, why, line in routing_violations(shown.stdout)]
         self.assertEqual(problems, [], "\n" + "\n".join(problems))
 
 

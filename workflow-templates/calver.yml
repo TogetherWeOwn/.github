@@ -1,10 +1,11 @@
 name: CalVer read-only acceptance
 
-# Public-repository template: validate an already successful staging build.
+# Repository template (public or private, both on ubuntu-latest): validate an
+# already successful staging build.
 # Configure the exact workflow/job/artifact names below for the real caller.
 # This does not deploy, certify a build itself, or create tags/Releases.
 # Live integration belongs inside the existing serialized release transaction;
-# see actions/calver/examples.md, including the private-runner variant.
+# see actions/calver/examples.md.
 on:
   workflow_dispatch:
     inputs:
