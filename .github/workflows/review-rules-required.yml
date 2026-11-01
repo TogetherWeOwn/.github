@@ -14,6 +14,7 @@ jobs:
     with:
       packs: rust,ts,python-shell-ci,php,security
       mode: warn
+      runs-on-json: '["ubuntu-latest"]'
   review-rules:
     name: review-rules
     needs: rules

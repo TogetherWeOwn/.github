@@ -24,8 +24,9 @@ WORKFLOW_DIRS = [ROOT / ".github" / "workflows", ROOT / "workflow-templates"]
 # `self-hosted` is the label GitHub gives every self-hosted runner; the rest
 # are the retired pool's own labels and the variable that routed to it.
 SELF_HOSTED = re.compile(r"self[-_ ]?hosted|two-(?:isolated|ephemeral)|CI_OVERFLOW_RUNNER", re.I)
-RUNS_ON = re.compile(r"^\s*runs-on:\s*(.*)$", re.M)
-# Runner routing in a pinned revision: runs-on lines and input defaults.
+RUNS_ON = re.compile(r"^\s*runs-on:")
+MAPPING_KEY = re.compile(r"^\s*[\w-]+:(?:\s|$)")
+# Runner routing in a pinned revision: runs-on values and input defaults.
 ROUTING = re.compile(r"^\s*(?:runs-on|default):")
 PINNED = re.compile(r"TogetherWeOwn/\.github/(\.github/workflows/[\w.-]+\.ya?ml)@([0-9a-f]{40})")
 
@@ -34,21 +35,43 @@ def workflow_files():
     return sorted(p for d in WORKFLOW_DIRS for p in d.glob("*.y*ml"))
 
 
+def keyed_values(text, key):
+    """Yield (line number, lines) for each `key:` entry, with its folded,
+    literal, sequence or flow continuation lines (anything indented deeper).
+    An entry whose value is a nested mapping (a reusable input named
+    `runs-on`) is skipped; its `default:` is an entry of its own."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if not key.match(line):
+            continue
+        indent = len(line) - len(line.lstrip())
+        block = [line]
+        for nxt in lines[i + 1:]:
+            if nxt.strip() and len(nxt) - len(nxt.lstrip()) <= indent:
+                break
+            block.append(nxt)
+        rest = [l for l in block[1:] if l.strip()]
+        if not line.split(":", 1)[1].strip() and rest and MAPPING_KEY.match(rest[0]):
+            continue
+        yield i + 1, block
+
+
 def violations(text):
     found = []
     for n, line in enumerate(text.splitlines(), 1):
         if SELF_HOSTED.search(line):
             found.append((n, "names a self-hosted label", line.strip()))
-    for m in RUNS_ON.finditer(text):
-        if "vars." in m.group(1):
-            n = text.count("\n", 0, m.start()) + 1
-            found.append((n, "takes its runner from a variable", m.group(0).strip()))
+    for n, block in keyed_values(text, RUNS_ON):
+        if any("vars." in line for line in block):
+            found.append((n, "takes its runner from a variable", block[0].strip()))
     return found
 
 
 def routing_violations(text):
-    routing = "\n".join(l for l in text.splitlines() if ROUTING.match(l))
-    return violations(routing)
+    found = []
+    for n, block in keyed_values(text, ROUTING):
+        found += [(n + k - 1, why, line) for k, why, line in violations("\n".join(block))]
+    return found
 
 
 def pinned_reusables():
@@ -79,6 +102,8 @@ class Scanner(unittest.TestCase):
 
     def test_flags_runner_from_variable(self):
         self.assertTrue(violations("    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}"))
+        folded = "    runs-on: >-\n      ${{ fromJSON(vars.CI_RUNNER) }}\n    timeout-minutes: 5\n"
+        self.assertTrue(violations(folded))
 
     def test_pinned_revision_checks_routing_only(self):
         old = (
@@ -91,6 +116,16 @@ class Scanner(unittest.TestCase):
             "    runs-on: ${{ fromJSON(github.event.repository.private && '[\"self-hosted\"]' || '[\"ubuntu-latest\"]') }}"
         ))
         self.assertTrue(routing_violations("        default: '[\"self-hosted\",\"linux\"]'"))
+        folded = "        default: >-\n          [\"self-hosted\", \"linux\"]\n        type: string\n"
+        self.assertEqual([n for n, _, _ in routing_violations(folded)], [2])
+        sequence = "    runs-on:\n      - self-hosted\n      - linux\n"
+        self.assertEqual([n for n, _, _ in routing_violations(sequence)], [2])
+        named_input = (
+            "      runs-on:\n"
+            "        description: e.g. self-hosted for a private caller\n"
+            "        default: '[\"ubuntu-latest\"]'\n"
+        )
+        self.assertEqual(routing_violations(named_input), [])
 
     def test_hosted_runners_pass(self):
         for line in [
