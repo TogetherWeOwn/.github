@@ -312,9 +312,11 @@ export class Releaser {
     requireValue(e.artifactName.split(/[^0-9a-f]+/).includes(input.sha), 'production receipt name must carry the deployed SHA');
     const s = this.sourceSelection(e);
     const run = await this.api.request('GET', `${this.base}/actions/runs/${s.runId}/attempts/${s.attempt}`);
-    const finished = run.status === 'completed' && run.conclusion === 'success';
-    const active = run.status === 'in_progress' && run.conclusion === null;
-    requireValue(run.id === s.runId && run.run_attempt === s.attempt && run.repository?.full_name === this.repository && run.head_repository?.full_name === this.repository && Number.isSafeInteger(run.repository?.id) && run.repository.id > 0 && run.head_repository.id === run.repository.id && typeof run.head_sha === 'string' && SHA.test(run.head_sha) && run.head_branch === 'main' && PRODUCTION_EVENTS.includes(run.event) && run.path === s.workflow && (finished || active), 'unsafe production run: require a same-repository main production workflow attempt');
+    // A run that turned red only because its release job failed stays
+    // repairable: the named deploy jobs, not the run's overall conclusion, are
+    // the deployment evidence. Queued or waiting runs are never evidence.
+    const settled = run.status === 'completed' || (run.status === 'in_progress' && run.conclusion === null);
+    requireValue(run.id === s.runId && run.run_attempt === s.attempt && run.repository?.full_name === this.repository && run.head_repository?.full_name === this.repository && Number.isSafeInteger(run.repository?.id) && run.repository.id > 0 && run.head_repository.id === run.repository.id && typeof run.head_sha === 'string' && SHA.test(run.head_sha) && run.head_branch === 'main' && PRODUCTION_EVENTS.includes(run.event) && run.path === s.workflow && settled, 'unsafe production run: require a same-repository main production workflow attempt');
     requireValue(await this.reachable(input.sha, run.head_sha), 'deployed SHA is not part of the production run\'s main history');
     const jobs = await this.api.paginate(`${this.base}/actions/runs/${s.runId}/attempts/${s.attempt}/jobs?per_page=100`, 'jobs');
     for (const name of s.jobs) {

@@ -122,8 +122,9 @@ staged shape, but selects the production deploy run itself:
 
 - the run attempt is same-repository, `head_branch` `main`, event `push`,
   `workflow_run`, `schedule` or `workflow_dispatch`, and path `workflow`. It is
-  completed successfully, or still in progress because the publisher is its
-  successor job;
+  completed (with any conclusion, so a run that went red only in its release
+  job stays repairable) or still in progress because the publisher is its
+  successor job. Queued or waiting runs refuse;
 - every named job completed successfully in that attempt (skipped, running,
   missing or duplicate jobs refuse), whether the run is still active or not;
 - the deployed `sha` is reachable from `main` and from the run's head SHA. The

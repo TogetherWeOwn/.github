@@ -1343,6 +1343,13 @@ test("production promotion also accepts a completed run and the next promote the
   assert.equal(plan.previousStableTag, "v2026.1028.0");
 });
 
+test("a run that went red only in its release job stays repairable", async () => {
+  const { api, releaser } = await productionSetup();
+  Object.assign(api.run, { status: "completed", conclusion: "failure" });
+  const plan = await releaser.plan(productionInput());
+  assert.equal((await releaser.publish(plan)).created, true);
+});
+
 test("production dry run validates everything and writes nothing", async () => {
   const { api, releaser } = await productionSetup();
   const plan = await releaser.plan(productionInput());
@@ -1357,7 +1364,8 @@ for (const [name, mutate] of [
   ["a named deploy job still running", (api) => Object.assign(api.jobs[0], { status: "in_progress", conclusion: null, completed_at: null })],
   ["a named deploy job skipped", (api) => Object.assign(api.jobs[0], { conclusion: "skipped" })],
   ["a missing named deploy job", (api) => { api.jobs = api.jobs.slice(1); }],
-  ["a failed run", (api) => Object.assign(api.run, { status: "completed", conclusion: "failure" })],
+  ["a queued run", (api) => Object.assign(api.run, { status: "queued", conclusion: null })],
+  ["a waiting run", (api) => Object.assign(api.run, { status: "waiting", conclusion: null })],
   ["a non-main run", (api) => Object.assign(api.run, { head_branch: "feature" })],
   ["a pull_request run", (api) => Object.assign(api.run, { event: "pull_request" })],
   ["another workflow", (api) => Object.assign(api.run, { path: ".github/workflows/deploy.yml" })],
