@@ -188,6 +188,17 @@ time, money and resources.
     Reference implementation: togetherweown/two-web-next (docs/visual-regression.md,
     docs/zap-baseline.md, docs/explore-staging.md, docs/rum-web-vitals.md).
 
+25. **Never require a check before its workflow exists on the default branch
+    (2026-11-01).** Do not add a status check to a ruleset's required list
+    until the workflow that produces it is merged to the default branch and
+    has reported at least once on a default-branch commit. A required check
+    that has never reported on the default branch stays `Expected` forever
+    and blocks every PR. Seen 2026-11-01: OSV `main-gate` required
+    `docker-profile` while that job was defined only on an open PR, so every
+    OSV PR showed as blocked until the requirement was removed. Ship it in
+    two steps: first merge the workflow and confirm it reports green on the
+    default branch, then add the check to the required list in a follow-up.
+
 ## Advisory PR-size labels
 
 One definition, in this repo: `.github/scripts/pr_size.py` (stdlib only,
@@ -243,6 +254,8 @@ Reference adoption: TogetherWeOwn/two-web-next `.github/workflows/pr-size.yml`.
 
 - `on: paths:` on any workflow that produces a required check.
 - Requiring a skippable job without the `ci-ok` aggregator.
+- Adding a required status check before the workflow that produces it has
+  reported on the default branch (rule 25).
 - `cancel-in-progress` on `main`, release, deploy or merge queue.
 - Jobs without `timeout-minutes`.
 - Full mutation / full E2E / full CodeQL on every push.
