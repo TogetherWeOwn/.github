@@ -1,0 +1,169 @@
+# Org-ruleset entry point: select this file as a required workflow in the
+# org ruleset so every TogetherWeOwn repo, current and future, runs it with
+# no per-repo copy. The bare `pr-standards` check is an enforced gate.
+#
+# Always an error (title and body, every PR, public or private):
+#   * an internal tracker id (TWO-123, TOG-123, PAP-123, PAPA-123; any case,
+#     `-` or `_`), a Paperclip instance UI link, the internal host, a
+#     localhost URL or a private-network (RFC 1918 / CGNAT) address;
+#   * a PR title that is not a Conventional Commits header (warning only on
+#     forks of upstream projects and on dependabot/renovate PRs).
+# Branch name and commit messages: the same internal-reference check is an
+# error for PRs opened after ENFORCE_SINCE, a warning on older PRs (their
+# branches and commits predate the rule; titles and bodies were cleaned).
+# Same rule as paperclipai/paperclip CONTRIBUTING "No Internal Issue
+# References" and "Branch Naming"; see CONTRIBUTING.md §2 in this repo.
+# Self-tests: .github/scripts/test_pr_standards_required.py (ci.yml).
+name: PR standards (required entry point)
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  merge_group: {}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-standards-required-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pr-standards:
+    name: pr-standards
+    runs-on: ${{ fromJSON(github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    steps:
+      - name: Check title, body, branch and commit messages
+        env:
+          ENFORCE_SINCE: "2026-11-02T00:00:00Z"
+          EVENT: ${{ github.event_name }}
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          CREATED_AT: ${{ github.event.pull_request.created_at }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          COMMIT_COUNT: ${{ github.event.pull_request.commits }}
+          REPO_FORK: ${{ github.event.repository.fork }}
+          COMMITS_URL: ${{ github.event.pull_request.commits_url }}
+          GH_TOKEN: ${{ github.token }}
+        run: |-
+          python3 -I - <<'PYEOF'
+          import json, os, re, sys, urllib.request
+
+          TYPES = "feat|fix|perf|refactor|test|docs|build|ci|chore|revert|style|security"
+          HEADER = re.compile(rf"^({TYPES})(\([A-Za-z0-9._/,-]+\))?!?: \S.*$")
+          TRACKER_ID = re.compile(r"(?<![A-Za-z0-9])(?:TWO|TOG|PAPA|PAP)[-_]\d+(?![0-9])", re.IGNORECASE)
+          # Instance-link and github.com patterns match workflow-templates/pr-lint.yml.
+          UI_LINK_BARE = re.compile(r"(?<![\w.-])/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
+          UI_LINK_HOST = re.compile(r"(?:https?://[^\s/<>()]+|(?<![\w./-])[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?::\d+)?)/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
+          INTERNAL_HOST = re.compile(r"\binfextion\.net\b", re.IGNORECASE)
+          # Bare "localhost" in prose is fine; a URL or host:port is not.
+          LOCAL_URL = re.compile(r"(?:https?://(?:localhost|0\.0\.0\.0)(?![\w.-])|(?<![\w.-])(?:localhost|0\.0\.0\.0)(?::\d+|/))", re.IGNORECASE)
+          OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+          PRIVATE_IP = re.compile(rf"(?<![\w.])(?:(?:10|127)(?:\.{OCTET}){{3}}|192\.168(?:\.{OCTET}){{2}}"
+                                  rf"|172\.(?:1[6-9]|2\d|3[01])(?:\.{OCTET}){{2}}"
+                                  rf"|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])(?:\.{OCTET}){{2}})(?![\w.])")
+          # Only a real github.com host is exempt (not notgithub.com/...).
+          GITHUB_URL = re.compile(r"(?:https?://|(?<![\w.-]))(?:www\.)?github\.com/[A-Za-z0-9_.~%/#?=&+\-]*", re.IGNORECASE)
+          CHECKS = [(TRACKER_ID, "an internal tracker id"), (UI_LINK_BARE, "a Paperclip instance link"),
+                    (UI_LINK_HOST, "a Paperclip instance link"), (INTERNAL_HOST, "the internal host")]
+          # Upstream text (dependabot/renovate release notes, fork-sync commits) often names
+          # local addresses, so these only warn on bot and fork PRs.
+          ADDRESS_CHECKS = [(LOCAL_URL, "a localhost address"), (PRIVATE_IP, "a private-network address")]
+          HELP = ("Say it in plain words, link only public GitHub issues (Fixes #123), name the "
+                  "branch after the change (fix/quota-template-pin), and link the card from "
+                  "Paperclip, never from GitHub. See TogetherWeOwn/.github CONTRIBUTING.md §2.")
+
+          def hits(text, checks=CHECKS + ADDRESS_CHECKS):
+              scrubbed = GITHUB_URL.sub("", re.sub(r"<!--.*?-->", "", text or "", flags=re.S))
+              found = []
+              for pat, label in checks:
+                  m = pat.search(scrubbed)
+                  if m and not any(f.startswith(label) for f in found):
+                      found.append(f"{label} ('{m.group(0)}')")
+              return found
+
+          def header_errors(text):
+              errs = []
+              if not HEADER.match(text):
+                  errs.append("not a Conventional Commits header")
+              if len(text) > 100:
+                  errs.append(f"{len(text)} chars (max 100)")
+              if text.rstrip().endswith("."):
+                  errs.append("ends with a period")
+              return errs
+
+          def commit_messages():
+              if "COMMITS_JSON" in os.environ:  # self-tests
+                  return json.loads(os.environ["COMMITS_JSON"])
+              out = []
+              for page in range(1, 4):  # the API returns at most 250 commits; see COMMIT_COUNT
+                  req = urllib.request.Request(
+                      f"{os.environ['COMMITS_URL']}?per_page=100&page={page}",
+                      headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                               "Accept": "application/vnd.github+json"})
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      batch = json.load(resp)
+                  out += [(c["sha"], c["commit"]["message"] or "") for c in batch]
+                  if len(batch) < 100:
+                      break
+              return out
+
+          if os.environ.get("EVENT") != "pull_request":
+              print("Not a pull_request event: the PR head was already checked.")
+              sys.exit(0)
+
+          failed = False
+          def report(level, title, msg):
+              global failed
+              failed = failed or level == "error"
+              print(f"::{level} title={title}::{msg}")
+
+          title = (os.environ.get("TITLE") or "").strip()
+          body = os.environ.get("BODY") or ""
+          branch = os.environ.get("BRANCH") or ""
+          author = os.environ.get("AUTHOR") or ""
+          bot = author.endswith("[bot]") and author.startswith(("dependabot", "renovate"))
+          fork = os.environ.get("REPO_FORK") == "true"
+          legacy = (os.environ.get("CREATED_AT") or "") < os.environ["ENFORCE_SINCE"]
+
+          errs = header_errors(title)
+          if errs:
+              level = "warning" if bot or fork else "error"
+              report(level, "PR title", f"'{title}': {'; '.join(errs)}. Expected e.g. "
+                     f"'fix(auth): refuse expired sudo sessions'. Types: {TYPES.replace('|', ', ')}.")
+          def check(level, title, what, text, tail=HELP):
+              for checks, lvl in ((CHECKS, level), (ADDRESS_CHECKS, "warning" if bot or fork else level)):
+                  found = hits(text, checks)
+                  if found:
+                      report(lvl, title, f"{what} holds {', '.join(found)}. {tail}")
+
+          for where, text in (("title", title), ("body", body)):
+              check("error", f"Internal reference in the PR {where}", f"The PR {where}", text)
+          branch_level = "warning" if legacy else "error"
+          found = hits(branch)
+          if found:
+              report(branch_level, "Internal reference in the branch name",
+                     f"Branch '{branch}' holds {', '.join(found)}. Rename it with "
+                     "`gh api -X POST repos/<owner>/<repo>/branches/<old>/rename -f new_name=<new>` "
+                     f"(the PR follows). {HELP}")
+          try:
+              messages = commit_messages()
+              count = int(os.environ.get("COMMIT_COUNT") or 0)
+              if count > len(messages):  # fail closed past the API's 250-commit cap
+                  report(branch_level, "Commit list", f"The PR has {count} commits but only "
+                         f"{len(messages)} could be checked (the API stops at 250). Squash or split it.")
+          except Exception as exc:  # fail closed; a re-run fixes a transient API error
+              report("error", "Commit list", f"Could not list the PR commits: {exc}. Re-run the check.")
+              messages = []
+          for sha, message in messages:
+              subject = message.splitlines()[0] if message else ""
+              check(branch_level, "Internal reference in a commit message", f"{sha[:10]} '{subject}'",
+                    message, f"Reword it at the next push. {HELP}")
+          if failed:
+              sys.exit(1)
+          print("PR standards OK")
+          PYEOF

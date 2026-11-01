@@ -1,8 +1,9 @@
 <!--
 Title: Conventional Commits header, e.g. `fix(auth): refuse expired sudo sessions`.
 Types: feat fix perf refactor test docs build ci chore revert style security. Max 100 chars, no trailing period.
-Keep internal ticket ids, instance links, localhost and private-network addresses out of titles,
-bodies, commits and branches. Link only public GitHub issues (`Fixes #123`).
+In every repo, public or private: keep internal ticket ids, instance links, localhost and
+private-network addresses out of titles, bodies, commits and branches. Link only public GitHub
+issues (`Fixes #123`); link the card from the tracker side. The required pr-standards check enforces this.
 Use short, plain sentences. Full contribution rules: CONTRIBUTING.md.
 -->
 

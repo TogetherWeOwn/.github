@@ -5,9 +5,11 @@ name: PR lint
 # PR_STANDARDS_MODE ("warn" or "error") sets the level for the rest: an empty body and the
 # two required PR template sections (Verification, and Linked Issues or Issue Description for
 # feat/fix/perf/refactor/security). Land it in "warn", clear the open PRs, then flip to "error".
-# Private repos: set REQUIRE_CARD_REF to "true" so every PR links its tracking card.
-# Set INTERNAL_ID_PREFIXES to a comma- or pipe-separated list (e.g. "ABC,XYZ") to flag
-# org-specific ticket ids; empty means a generic ticket-like pattern.
+# Internal ids never belong in PR text, in public or private repos (CONTRIBUTING.md §2);
+# leave REQUIRE_CARD_REF "false". The org-required pr-standards check enforces the same rule
+# on every repo; this template repeats it so a repo's own pr-lint agrees.
+# INTERNAL_ID_PREFIXES lists the org's tracker prefixes (comma- or pipe-separated);
+# empty means a generic ticket-like pattern.
 # Forward control for public repos: the strict subset (tracker ids only when
 # INTERNAL_ID_PREFIXES is set above, instance UI links like /TOG/issues/ outside
 # github.com URLs, and the internal host) always fails the PR title/body check.
@@ -42,8 +44,8 @@ concurrency:
 
 env:
   REQUIRE_CARD_REF: "false"
-  INTERNAL_ID_LEVEL: "warning" # or "error" to fail a PR that carries an internal ticket id
-  INTERNAL_ID_PREFIXES: "" # e.g. "ABC,XYZ"; empty means a generic ticket-like pattern
+  INTERNAL_ID_LEVEL: "error" # "warning" downgrades; internal ids are banned in every repo
+  INTERNAL_ID_PREFIXES: "TWO,TOG,PAP,PAPA" # empty means a generic ticket-like pattern
   STRICT_INTERNAL_LEVEL: "error" # fail-closed strict public-text gate; "warning" downgrades it
   PR_STANDARDS_MODE: "warn"
 
@@ -82,7 +84,7 @@ jobs:
           UI_LINK_BARE = re.compile(r"(?<![\w.-])/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
           UI_LINK_HOST = re.compile(r"(?:https?://[^\s/<>()]+|(?<![\w./-])[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?::\d+)?)/[A-Z]{2,6}/(issues|agents|projects|approvals|runs)/")
           HOST_INTERNAL = re.compile(r"\binfextion\.net\b", re.IGNORECASE)
-          GITHUB_URL = re.compile(r"(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9_.~%/#?=&+\-]*", re.IGNORECASE)
+          GITHUB_URL = re.compile(r"(?:https?://|(?<![\w.-]))(?:www\.)?github\.com/[A-Za-z0-9_.~%/#?=&+\-]*", re.IGNORECASE)
           STRICT_FIXED = [(UI_LINK_BARE, "an instance UI link"), (UI_LINK_HOST, "an instance UI link"), (HOST_INTERNAL, "the internal host")]
           HELP = ("Expected a Conventional Commits header, e.g. 'fix(auth): refuse expired sudo "
                   "sessions'. Allowed types: " + TYPES.replace("|", ", ") + ".")
@@ -198,6 +200,7 @@ jobs:
                   failed = True
                   print("::error title=Card reference::Add 'Refs: <card-id>' to the PR body.")
               for where, text in (("the title", title), ("the body", body)):
+                  text = re.sub(r"<!--.*?-->", "", text or "", flags=re.S)  # template comments
                   hits = strict_internal_hits(text)
                   if hits:
                       if report_strict(hits, where):

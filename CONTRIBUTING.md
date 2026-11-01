@@ -16,13 +16,29 @@ where they differ, the repo file wins.
 - Done means merged. Never leave an orphan PR open: merge it, or close it with a
   comment naming what replaced it.
 
-## 2. Public-repo privacy
+## 2. No internal references, in any repo
 
-Most TogetherWeOwn repos are public. Keep internal ticket ids, instance links,
-localhost and private-network addresses out of every title, body, commit message,
-review comment, issue and branch name. Link public GitHub issues (`Fixes #123`)
-or describe the problem in your own words. Name branches after the change
-(`fix/sudo-window`), never after an internal card.
+This applies to every TogetherWeOwn repo, public or private. It is the same rule as
+paperclipai/paperclip's CONTRIBUTING ("No Internal Issue References", "Branch Naming").
+
+- **What to keep out:** internal tracker ids (`TWO-123`, `TOG-…`, `PAP-…`), Paperclip
+  instance links, internal hostnames, private-network addresses, emails, agent names
+  and secrets.
+- **Where:** titles, bodies, branch names, commit messages, review comments, issues,
+  release notes and tags.
+- **What to do instead:** link public GitHub issues (`Fixes #123`) or describe the
+  problem in your own words. Link the PR to the tracking card from the tracker side,
+  never from GitHub.
+- **Branch names:** name branches after the change (`fix/sudo-window`), never after a
+  card (`two-123-…`).
+
+The org ruleset requires the `pr-standards` check
+(`.github/workflows/pr-standards-required.yml`) on every repo. It fails a PR with an
+internal reference in its title, body, branch name or a commit subject, and a PR
+title that is not a Conventional Commits header. If you already pushed a branch with
+an id in its name, rename it with
+`gh api -X POST repos/<owner>/<repo>/branches/<old>/rename -f new_name=<new>`.
+The PR follows the rename. Never rewrite merged history.
 
 ## 3. Honest disclosure
 
