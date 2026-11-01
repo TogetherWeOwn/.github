@@ -27,6 +27,11 @@ function validateSections(sections) {
   requireValue(Array.isArray(sections) && sections.length > 0 && sections.length <= 50 && sections.every(item => item && typeof item === 'object' && !Array.isArray(item) && Object.keys(item).every(key => ['type', 'section', 'hidden'].includes(key)) && typeof item.type === 'string' && /^[a-z]{1,30}$/.test(item.type) && typeof item.section === 'string' && /^[^\r\n]{1,100}$/.test(item.section) && (item.hidden === undefined || typeof item.hidden === 'boolean')), 'sections must be 1-50 {type, section, hidden?} entries');
 }
 
+// The frozen plan form: `hidden` only when true, so a replay compares equal.
+function frozenSections(sections) {
+  return sections ? sections.map(({ type, section, hidden }) => (hidden ? { type, section, hidden: true } : { type, section })) : null;
+}
+
 function calendarDate(value) {
   requireValue(typeof value === 'string' && /^[1-9][0-9]{3}-[0-9]{2}-[0-9]{2}$/.test(value), 'date must be canonical YYYY-MM-DD');
   const date = new Date(`${value}T00:00:00.000Z`);
@@ -384,14 +389,15 @@ export class Releaser {
     const date = input.repairDate ? calendarDate(input.repairDate) : this.now().toISOString().slice(0, 10);
     requireValue(date <= this.now().toISOString().slice(0, 10), 'repair date cannot be in the future');
     const tags = await this.tags();
-    if (input.policy === 'production-promotion' && !input.repairDate) await this.productionSkip(tags, input);
+    // Also for repairDate plans: only the operation's own tag is exempt.
+    if (input.policy === 'production-promotion') await this.productionSkip(tags, input);
     // An operation retry recovers its frozen original plan, even across dates.
     for (const tag of tags) {
       if (!tag.annotation?.startsWith('calver-plan-v1\n')) continue;
       const { publicationEvidence, ...prior } = this.provenance(tag);
       this.assertOperation(prior, input);
       if (prior.operation !== input.operation || prior.channel !== input.channel || prior.namespace !== (input.namespace || '')) continue;
-      requireValue(prior.sha === input.sha && prior.policy === input.policy && canonical(prior.source) === canonical(source) && canonical(prior.evidence) === canonical(input.evidence || null) && prior.sourceCanary === (input.sourceCanary || null) && prior.latest === (input.latest || 'auto') && prior.repairDate === (input.repairDate || null) && canonical(prior.sections || null) === canonical(input.sections || null), 'operation identity already used for a different release');
+      requireValue(prior.sha === input.sha && prior.policy === input.policy && canonical(prior.source) === canonical(source) && canonical(prior.evidence) === canonical(input.evidence || null) && prior.sourceCanary === (input.sourceCanary || null) && prior.latest === (input.latest || 'auto') && prior.repairDate === (input.repairDate || null) && canonical(prior.sections || null) === canonical(frozenSections(input.sections)), 'operation identity already used for a different release');
       return prior;
     }
     if (input.policy === 'live-digest' && !input.repairDate) {
@@ -404,7 +410,7 @@ export class Releaser {
     }
     const allocated = allocateVersion({ tags: tags.map(tag => tag.name), date, channel: input.channel, namespace: input.namespace || '' });
     const payload = { schema: 'calver-plan-v1', repository: this.repository, ...allocated, sha: input.sha, operation: input.operation, policy: input.policy, latest: input.latest || 'auto', repairDate: input.repairDate || null, sourceCanary: input.sourceCanary || null, source, evidence: input.evidence || null };
-    if (input.sections) payload.sections = input.sections.map(({ type, section, hidden }) => (hidden ? { type, section, hidden: true } : { type, section }));
+    if (input.sections) payload.sections = frozenSections(input.sections);
     payload.previousStableTag = await this.previousStable(tags, payload);
     return { ...payload, id: identity(payload) };
   }

@@ -1474,3 +1474,24 @@ test("an exact production retry can repair a historical Release after a newer st
   assert.equal(releaseBody(api).make_latest, "false", "historical repair never moves Latest backwards");
   assert.equal(api.mutations().slice(start).filter(({ path }) => /\/git\//.test(path)).length, 0, "repair never retags");
 });
+
+test("an exact production retry with explicit hidden:false sections recovers its frozen plan", async () => {
+  const { api, releaser } = await productionSetup();
+  const sections = [{ type: "feat", section: "Added", hidden: false }, { type: "chore", section: "Misc", hidden: true }];
+  const plan = await releaser.plan(productionInput({ sections }));
+  assert.deepEqual(plan.sections, [{ type: "feat", section: "Added" }, { type: "chore", section: "Misc", hidden: true }]);
+  await releaser.publish(plan);
+  api.releases.delete(plan.tag);
+  assert.deepEqual(await releaser.plan(productionInput({ sections })), plan);
+});
+
+test("a repairDate plan cannot turn a production rollback into a new Latest tag", async () => {
+  const { api, releaser } = await productionSetup();
+  api.addRef("v2026.1027.0", "8".repeat(40));
+  api.unreachable.add("8".repeat(40));
+  await assert.rejects(releaser.plan(productionInput({ repairDate: DATE })), { code: "rollback" });
+  const legacy = await productionSetup();
+  legacy.api.addRef("v1.21.3", SHA);
+  await assert.rejects(legacy.releaser.plan(productionInput({ repairDate: DATE })), { code: "already-released" });
+  assertNoMutations(api);
+});

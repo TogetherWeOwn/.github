@@ -132,7 +132,15 @@ staged shape, but selects the production deploy run itself:
 - the artifact is bound to that run, unexpired, nonempty, created after the
   attempt started, has the exact digest, and its name carries the deployed `sha`
   as a whole token. The trusted main workflow writes that name after its deploy
-  gates pass. The caller still verifies the receipt content.
+  gates pass.
+
+The engine reads metadata only, so the name is a selector bound to the run,
+not proof of what the run deployed. A `production-promotion` caller **must**
+also read the receipt content in the same job before planning, and refuse
+unless the receipt names the same SHA, repository, run and attempt (for
+example `two-web-next`'s `ci/release-promotion-proof.cjs`). Only a workflow
+that names the receipt from its deployed SHA and uploads it after its deploy
+gates may supply this evidence.
 
 Before allocation, a production plan classifies two green skips (CLI
 `skipped=true`, no plan): `already-released` when a stable tag (legacy or CalVer,
