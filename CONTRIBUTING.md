@@ -35,7 +35,9 @@ paperclipai/paperclip's CONTRIBUTING ("No Internal Issue References", "Branch Na
 The org ruleset requires the `pr-standards` check
 (`.github/workflows/pr-standards-required.yml`) on every repo. It fails a PR with an
 internal reference in its title, body, branch name or a commit subject, and a PR
-title that is not a Conventional Commits header. If you already pushed a branch with
+title that is not a Conventional Commits header. Editing the title or body does not
+re-run the check under the ruleset: push a commit or close and reopen the PR after
+the fix. If you already pushed a branch with
 an id in its name, rename it with
 `gh api -X POST repos/<owner>/<repo>/branches/<old>/rename -f new_name=<new>`.
 The PR follows the rename. Never rewrite merged history.

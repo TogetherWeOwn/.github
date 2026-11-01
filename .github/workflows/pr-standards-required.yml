@@ -164,6 +164,9 @@ jobs:
               check(branch_level, "Internal reference in a commit message", f"{sha[:10]} '{subject}'",
                     message, f"Reword it at the next push. {HELP}")
           if failed:
+              # The org ruleset does not re-run this check on a title or body edit.
+              print("::notice title=Re-running this check::After fixing the title or body, "
+                    "push a commit or close and reopen the PR; an edit alone does not re-run it.")
               sys.exit(1)
           print("PR standards OK")
           PYEOF
