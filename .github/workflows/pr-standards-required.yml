@@ -11,6 +11,15 @@
 # Branch name and commit messages: the same internal-reference check is an
 # error for PRs opened after ENFORCE_SINCE, a warning on older PRs (their
 # branches and commits predate the rule; titles and bodies were cleaned).
+# Automated-review threads: every Devin Review thread needs a reply in that
+# thread whose first line is `Fixed in <sha>`, `Rejected: <proof>` or
+# `Duplicate of <link>` (an error for PRs opened after REVIEW_ENFORCE_SINCE;
+# a warning on drafts, dependabot/renovate PRs, fork-head PRs and older
+# PRs). Resolving a conversation is not an answer, and Devin's own
+# follow-up comments do not count. CodeRabbit stays advisory and is not
+# gated here. The step reads the threads when it runs, so a reply posted
+# after the last push is seen at the next run (push a commit, or close and
+# reopen the PR). See CONTRIBUTING.md §4.
 # Same rule as paperclipai/paperclip CONTRIBUTING "No Internal Issue
 # References" and "Branch Naming"; see CONTRIBUTING.md §2 in this repo.
 # Self-tests: .github/scripts/test_pr_standards_required.py (ci.yml).
@@ -170,3 +179,122 @@ jobs:
               sys.exit(1)
           print("PR standards OK")
           PYEOF
+      - name: Check automated review findings are answered in format
+        env:
+          REVIEW_ENFORCE_SINCE: "2026-11-03T00:00:00Z"
+          EVENT: ${{ github.event_name }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          CREATED_AT: ${{ github.event.pull_request.created_at }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |-
+          python3 -I - <<'PYEOF2'
+          import json, os, re, sys, urllib.request
+
+          DEVIN = "devin-ai-integration"
+          FORMATS = "`Fixed in <commit sha>`, `Rejected: <proof>` or `Duplicate of <link>`"
+          ANSWERED = (re.compile(r"^Fixed in [0-9a-fA-F]{7,40}(?![0-9a-fA-F])"),
+                      re.compile(r"^Rejected:\s+\S"),
+                      re.compile(r"^Duplicate of (?:https?://\S+|#\d+\b|\[[^\]]*\]\(https?://[^)\s]+\))"))
+          QUERY = """query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+            repository(owner: $owner, name: $repo) { pullRequest(number: $number) {
+              reviewThreads(first: 100, after: $cursor) {
+                pageInfo { hasNextPage endCursor }
+                nodes { comments(first: 100) { nodes { author { login } body url } } } } } } }"""
+
+          def esc(text):
+              return str(text).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+          def first_line(body):
+              lines = (body or "").splitlines()
+              return lines[0].strip() if lines else ""
+
+          def fetch_threads():
+              if "THREADS_JSON" in os.environ:  # self-tests
+                  raw = os.environ["THREADS_JSON"]
+                  if raw == "__error__":
+                      raise RuntimeError("simulated thread-list failure")
+                  return json.loads(raw)
+              owner, repo = os.environ["REPO"].split("/", 1)
+              threads, cursor = [], None
+              for _ in range(5):  # at most 500 threads; fail closed past that
+                  payload = {"query": QUERY, "variables": {"owner": owner, "repo": repo,
+                             "number": int(os.environ["PR_NUMBER"]), "cursor": cursor}}
+                  req = urllib.request.Request(
+                      "https://api.github.com/graphql", data=json.dumps(payload).encode(),
+                      headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                               "Accept": "application/vnd.github+json",
+                               "Content-Type": "application/json",
+                               "User-Agent": "pr-standards-review-replies"})
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      data = json.load(resp)
+                  if data.get("errors"):
+                      raise RuntimeError(data["errors"][0].get("message", "GraphQL error"))
+                  conn = data["data"]["repository"]["pullRequest"]["reviewThreads"]
+                  for node in conn["nodes"]:
+                      threads.append([{"login": (c.get("author") or {}).get("login") or "",
+                                       "body": c.get("body") or "", "url": c.get("url") or ""}
+                                      for c in node["comments"]["nodes"]])
+                  if not conn["pageInfo"]["hasNextPage"]:
+                      return threads
+                  cursor = conn["pageInfo"]["endCursor"]
+              raise RuntimeError("more than 500 review threads; cannot check them all")
+
+          if os.environ.get("EVENT") != "pull_request":
+              print("Not a pull_request event: the PR head was already checked.")
+              sys.exit(0)
+
+          author = os.environ.get("AUTHOR") or ""
+          bot = author.endswith("[bot]") and author.startswith(("dependabot", "renovate"))
+          legacy = (os.environ.get("CREATED_AT") or "") < os.environ["REVIEW_ENFORCE_SINCE"]
+          draft = os.environ.get("DRAFT") == "true"
+          fork_head = (os.environ.get("HEAD_REPO") or "") != (os.environ.get("REPO") or "")
+          level = "warning" if (bot or legacy or draft or fork_head) else "error"
+
+          try:
+              threads = fetch_threads()
+          except Exception as exc:  # fail closed at error level; a re-run fixes a transient API error
+              print(f"::{level} title=Review replies::{esc(f'Could not list the review threads: {exc}.')} "
+                    "Push a commit or close and reopen the PR to re-run this check.")
+              sys.exit(1 if level == "error" else 0)
+
+          devin_threads = [t for t in threads if t and (t[0].get("login") or "").lower() == DEVIN]
+          unanswered = []
+          for thread in devin_threads:
+              replies = [c for c in thread[1:] if (c.get("login") or "").lower() != DEVIN]
+              if any(pat.match(first_line(c.get("body"))) for c in replies for pat in ANSWERED):
+                  continue
+              if replies:
+                  seen = first_line(replies[0].get("body"))[:120]
+                  detail = f"the reply starts with '{seen}', which is not one of the counted first lines"
+              else:
+                  detail = "no reply yet (resolving the conversation does not count)"
+              unanswered.append((thread[0].get("url") or "", detail))
+
+          print(f"Devin review threads: {len(devin_threads)}; "
+                f"answered in format: {len(devin_threads) - len(unanswered)}")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary and unanswered:
+              try:
+                  with open(summary, "a", encoding="utf-8") as fh:
+                      fh.write("## Review findings still to answer\n\n"
+                               f"Reply in each thread with a first line of exactly {FORMATS}:\n\n")
+                      for url, detail in unanswered:
+                          fh.write(f"- {url} - {detail}\n")
+              except OSError:
+                  pass
+          for url, detail in unanswered:
+              print(f"::{level} title=Unanswered review finding::{esc(url)}: {esc(detail)}. "
+                    f"Reply in that thread with a first line of exactly {FORMATS} "
+                    "(see TogetherWeOwn/.github CONTRIBUTING.md §4).")
+          if unanswered:
+              print("::notice title=Re-running this check::Replies are read when this check runs. "
+                    "Post the replies, then push a commit or close and reopen the PR to re-run it. "
+                    "Fastest path next round: commit the fixes, post the replies citing that "
+                    "commit, then push once.")
+              sys.exit(1 if level == "error" else 0)
+          print("Review replies OK")
+          PYEOF2

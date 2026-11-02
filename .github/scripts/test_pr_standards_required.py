@@ -28,12 +28,20 @@ def load_script():
     return textwrap.dedent(m.group(1))
 
 
-def enforce_since():
-    m = re.search(r'ENFORCE_SINCE: "([^"]+)"', WORKFLOW.read_text())
+def load_replies_script():
+    text = WORKFLOW.read_text()
+    m = re.search(r"<<'PYEOF2'\n(.*?)\n\s*PYEOF2\n", text, re.S)
+    assert m, "review-replies heredoc not found in the workflow"
+    return textwrap.dedent(m.group(1))
+
+
+def enforce_since(name="ENFORCE_SINCE"):
+    m = re.search(rf'{name}: "([^"]+)"', WORKFLOW.read_text())
     return m.group(1)
 
 
 SCRIPT = load_script()
+REPLIES_SCRIPT = load_replies_script()
 NEW = "2026-11-05T10:00:00Z"
 OLD = "2026-10-20T10:00:00Z"
 CLEAN_BODY = "## Verification\n\n- python3 -m unittest: 12 tests OK\n"
@@ -54,6 +62,112 @@ def run(title="fix(auth): refuse expired sudo sessions", body=CLEAN_BODY,
     p = subprocess.run([sys.executable, "-I", "-c", SCRIPT], env=env,
                        capture_output=True, text=True, timeout=30)
     return p.returncode, p.stdout + p.stderr
+
+
+REPO = "TogetherWeOwn/example"
+THREAD_URL = "https://github.com/TogetherWeOwn/example/pull/7#discussion_r1"
+
+
+def thread(*replies, first_login="devin-ai-integration"):
+    comments = [{"login": first_login, "body": "a finding", "url": THREAD_URL}]
+    comments += [{"login": login, "body": body, "url": THREAD_URL}
+                 for login, body in replies]
+    return comments
+
+
+def run_replies(threads=(), created=NEW, event="pull_request", author="someone",
+                draft="false", head_repo=REPO, raw=None):
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "REVIEW_ENFORCE_SINCE": enforce_since("REVIEW_ENFORCE_SINCE"),
+        "EVENT": event, "AUTHOR": author, "CREATED_AT": created,
+        "DRAFT": draft, "PR_NUMBER": "7", "REPO": REPO, "HEAD_REPO": head_repo,
+        "GH_TOKEN": "",
+        "THREADS_JSON": raw if raw is not None else json.dumps(list(threads)),
+    }
+    p = subprocess.run([sys.executable, "-I", "-c", REPLIES_SCRIPT], env=env,
+                       capture_output=True, text=True, timeout=30)
+    return p.returncode, p.stdout + p.stderr
+
+
+class ReviewReplies(unittest.TestCase):
+    def assertPasses(self, result):
+        code, out = result
+        self.assertEqual(code, 0, out)
+        self.assertIn("Review replies OK", out)
+
+    def assertUnanswered(self, result, needle="Unanswered review finding"):
+        code, out = result
+        self.assertEqual(code, 1, out)
+        self.assertIn("::error", out)
+        self.assertIn(needle, out)
+        self.assertIn(THREAD_URL, out)
+
+    def test_no_devin_threads_passes(self):
+        self.assertPasses(run_replies())
+        self.assertPasses(run_replies([thread(("someone", "hi"), first_login="coderabbitai")]))
+
+    def test_each_counted_first_line_passes(self):
+        for body in ("Fixed in 3f24b0ce. `find_open` now pages.",
+                     "Fixed in 0123456789abcdef0123456789abcdef01234567\nDetails.",
+                     "Rejected: src/auth.py:42 already validates this at the head.",
+                     "Duplicate of https://github.com/TogetherWeOwn/example/pull/7#discussion_r9",
+                     "Duplicate of #12"):
+            with self.subTest(body=body):
+                self.assertPasses(run_replies([thread(("someone", body))]))
+
+    def test_format_drift_first_lines_fail(self):
+        # The shapes a weekly sample of merged PRs actually carried: a real
+        # reply whose first line the eval cannot count.
+        for body in ("Fixed. The clause now judges sections per template.",
+                     "Fixed in the latest push.",
+                     "Confirmed - the counters miscount. Fixed in 2c098c70.",
+                     "Valid. Fixed in e2aa1d83 by a different design.",
+                     "✅ **Resolved**: the evidence now checks the build id.",
+                     "Rejected, with evidence. The template says otherwise.",
+                     "Duplicate of the POST finding above - same fix.",
+                     "\nFixed in abc1234"):
+            with self.subTest(body=body):
+                self.assertUnanswered(run_replies([thread(("someone", body))]),
+                                      "not one of the counted first lines")
+
+    def test_no_reply_and_devin_followups_do_not_count(self):
+        self.assertUnanswered(run_replies([thread()]), "no reply yet")
+        self.assertUnanswered(
+            run_replies([thread(("devin-ai-integration", "✅ **Resolved**: no longer applies."))]),
+            "no reply yet")
+
+    def test_one_good_reply_among_many_counts(self):
+        self.assertPasses(run_replies([thread(
+            ("someone", "Looking at this now."),
+            ("devin-ai-integration", "✅ **Resolved**: no longer applies."),
+            ("someone", "Fixed in abc1234"))]))
+
+    def test_every_devin_thread_must_be_answered(self):
+        code, out = run_replies([thread(("someone", "Fixed in abc1234")), thread()])
+        self.assertEqual(code, 1, out)
+        self.assertIn("Devin review threads: 2; answered in format: 1", out)
+
+    def test_warning_only_contexts_pass(self):
+        for kw in ({"draft": "true"}, {"created": OLD},
+                   {"author": "dependabot[bot]"}, {"author": "renovate[bot]"},
+                   {"head_repo": "someone/example"}, {"head_repo": ""}):
+            with self.subTest(kw=kw):
+                code, out = run_replies([thread()], **kw)
+                self.assertEqual(code, 0, out)
+                self.assertIn("::warning title=Unanswered review finding", out)
+
+    def test_thread_list_failure_fails_closed(self):
+        code, out = run_replies(raw="__error__")
+        self.assertEqual(code, 1, out)
+        self.assertIn("Could not list the review threads", out)
+        code, out = run_replies(raw="__error__", draft="true")
+        self.assertEqual(code, 0, out)
+        self.assertIn("::warning title=Review replies", out)
+
+    def test_merge_group_passes(self):
+        code, out = run_replies([thread()], event="merge_group")
+        self.assertEqual(code, 0, out)
 
 
 class InternalReferences(unittest.TestCase):
@@ -178,6 +292,16 @@ class WorkflowShape(unittest.TestCase):
         self.assertIn("types: [opened, edited, synchronize, reopened, ready_for_review]", text)
         self.assertIn("merge_group:", text)
         self.assertNotRegex(text, r"\n  pull_request:\n    paths")
+
+    def test_review_replies_step_shares_the_required_job(self):
+        # Same job and bare check name: the check already reports on the
+        # default branch everywhere, so no ruleset change is needed and no
+        # never-reported check is made required.
+        text = WORKFLOW.read_text()
+        self.assertIn("Check automated review findings are answered in format", text)
+        self.assertIn("REVIEW_ENFORCE_SINCE:", text)
+        self.assertEqual(text.count("\n    name: pr-standards\n"), 1)
+        self.assertNotRegex(text, r"\n  review-replies:")
 
 
 if __name__ == "__main__":
