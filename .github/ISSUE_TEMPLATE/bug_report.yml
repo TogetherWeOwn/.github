@@ -46,6 +46,18 @@ body:
         3.
     validations:
       required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Release version, tag, or commit SHA where you saw this.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Deployment, OS, runtime, or browser — free text, whatever applies to this repo.
   - type: textarea
     id: logs
     attributes:

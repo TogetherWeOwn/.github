@@ -39,7 +39,10 @@ time, money and resources.
    (`if: always()`, `needs:` every gated job), which passes when every needed
    job succeeded or was skipped. Of the CI jobs, branch protection requires
    only `ci-ok` (plus pr-lint, secret scan), so gating can never block merges.
-   The ruleset also requires `Devin Review` and, on public repos, `CodeRabbit`.
+   The ruleset also requires `Devin Review`. **CodeRabbit is advisory**, never
+   a required check: answer each of its findings (fixed, rejected with
+   evidence, or duplicate), but never wait for it and never post
+   `@coderabbitai` commands to trigger it.
 4. **Full-run triggers.** Changes to dependency manifests or lockfiles,
    `.github/**`, shared/common code, build/tooling config, or the
    change-detection filter itself make EVERYTHING run. Include root AND
@@ -121,8 +124,9 @@ time, money and resources.
     review findings were catchable this way, and workflow logic was the
     largest single class.
 22. **No pushes during review.** The author batches all findings of a review
-    round into one push after the reviews (CodeRabbit on public repos, Devin
-    Review) complete. Measured
+    round into one push after `Devin Review` completes and any CodeRabbit
+    findings already posted are answered (CodeRabbit is advisory; never wait
+    for it). Measured
     2026-10-10: 45% of review rows were superseded or incomplete, mostly
     from pushes while a review was queued or running.
 
