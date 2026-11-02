@@ -69,3 +69,4 @@ risk_tier: <T0|T1|T2>
 - [ ] Verification records only tests actually run, with results.
 - [ ] Attestation describes actual evidence, including tests not run before the change.
 - [ ] No secrets or private/internal identifiers in title, body, commits or branch name.
+- [ ] Every automated-review finding is answered in its own thread, first line `Fixed in <sha>` / `Rejected: <proof>` / `Duplicate of <link>`.

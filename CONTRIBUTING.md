@@ -52,6 +52,19 @@ The PR follows the rename. Never rewrite merged history.
 ## 4. Reviews
 
 - Address every review finding, or reply with why it does not apply.
+- Reply in the finding's own thread with a first line of exactly one of:
+  `Fixed in <commit sha>` (then one line on what changed),
+  `Rejected: <proof>` (a `file:line` at the reviewed head, a test name with
+  a run link, or a doc link showing the finding is wrong), or
+  `Duplicate of <link>`. Any other opener (`Fixed.`, `Confirmed — …`,
+  `✅ Resolved`) does not count, and neither does resolving the
+  conversation. The required `pr-standards` check lists every Devin Review
+  thread without such a reply and fails the PR; it warns instead on drafts,
+  dependabot/renovate and fork-head PRs, and PRs opened before 2026-11-03.
+- Batch each review round: commit the fixes, post the replies citing that
+  commit's sha, then push once. The check reads the threads when it runs,
+  so replies posted after the last push are only seen at the next run —
+  push a commit or close and reopen the PR to re-run it.
 - The merge gate is the ruleset's required checks: the repo CI and `Devin Review`. No approving review is required (see PIPELINE-STANDARD.md §1). **CodeRabbit is advisory**: read its findings and answer each one (fixed, rejected with evidence, or duplicate), but never wait for it and never post `@coderabbitai` commands to trigger it.
 - Fix findings on the same PR and reply on the finding's thread; do not open a
   new PR to get a fresh review.
