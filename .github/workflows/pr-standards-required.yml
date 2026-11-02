@@ -196,14 +196,21 @@ jobs:
 
           DEVIN = "devin-ai-integration"
           FORMATS = "`Fixed in <commit sha>`, `Rejected: <proof>` or `Duplicate of <link>`"
+          # A rejection counts only with evidence on the first line (a link, an
+          # issue ref, a file:line or a quoted name) or a full-sentence proof;
+          # `Rejected: no` is not an answer.
           ANSWERED = (re.compile(r"^Fixed in [0-9a-fA-F]{7,40}(?![0-9a-fA-F])"),
-                      re.compile(r"^Rejected:\s+\S"),
-                      re.compile(r"^Duplicate of (?:https?://\S+|#\d+\b|\[[^\]]*\]\(https?://[^)\s]+\))"))
+                      re.compile(r"^Rejected:\s+.*(?:https?://\S+|#\d+\b|[\w./-]+\.\w+:\d+\b|`[^`]+`)"),
+                      re.compile(r"^Rejected:\s+\S.{24,}"),
+                      re.compile(r"^Duplicate of (?:https?://\S+\.\S+|#\d+\b|\[[^\]]*\]\(https?://[^)\s]+\))"))
+          # first:100 carries the opening comment; last:20 keeps a fresh reply
+          # visible on a thread long enough to overflow the first window.
           QUERY = """query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
             repository(owner: $owner, name: $repo) { pullRequest(number: $number) {
               reviewThreads(first: 100, after: $cursor) {
                 pageInfo { hasNextPage endCursor }
-                nodes { comments(first: 100) { nodes { author { login } body url } } } } } } }"""
+                nodes { comments(first: 100) { nodes { author { login } body url } }
+                        recentComments: comments(last: 20) { nodes { author { login } body url } } } } } } }"""
 
           def esc(text):
               return str(text).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
@@ -234,10 +241,16 @@ jobs:
                   if data.get("errors"):
                       raise RuntimeError(data["errors"][0].get("message", "GraphQL error"))
                   conn = data["data"]["repository"]["pullRequest"]["reviewThreads"]
+                  def tidy(nodes):
+                      return [{"login": (c.get("author") or {}).get("login") or "",
+                               "body": c.get("body") or "", "url": c.get("url") or ""}
+                              for c in nodes]
                   for node in conn["nodes"]:
-                      threads.append([{"login": (c.get("author") or {}).get("login") or "",
-                                       "body": c.get("body") or "", "url": c.get("url") or ""}
-                                      for c in node["comments"]["nodes"]])
+                      comments = tidy(node["comments"]["nodes"])
+                      known = {c["url"] for c in comments}
+                      comments += [c for c in tidy(node["recentComments"]["nodes"])
+                                   if c["url"] not in known]
+                      threads.append(comments)
                   if not conn["pageInfo"]["hasNextPage"]:
                       return threads
                   cursor = conn["pageInfo"]["endCursor"]
@@ -267,9 +280,11 @@ jobs:
               replies = [c for c in thread[1:] if (c.get("login") or "").lower() != DEVIN]
               if any(pat.match(first_line(c.get("body"))) for c in replies for pat in ANSWERED):
                   continue
+              # Never echo reply text into logs, annotations or the summary:
+              # a reply can carry an internal identifier or other content
+              # that does not belong in run output. The link is the pointer.
               if replies:
-                  seen = first_line(replies[0].get("body"))[:120]
-                  detail = f"the reply starts with '{seen}', which is not one of the counted first lines"
+                  detail = "a reply exists, but no reply starts with a counted first line"
               else:
                   detail = "no reply yet (resolving the conversation does not count)"
               unanswered.append((thread[0].get("url") or "", detail))

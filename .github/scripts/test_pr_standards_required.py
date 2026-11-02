@@ -111,10 +111,24 @@ class ReviewReplies(unittest.TestCase):
         for body in ("Fixed in 3f24b0ce. `find_open` now pages.",
                      "Fixed in 0123456789abcdef0123456789abcdef01234567\nDetails.",
                      "Rejected: src/auth.py:42 already validates this at the head.",
+                     "Rejected: see #12",
+                     "Rejected: the caller validates this before dispatch above.",
                      "Duplicate of https://github.com/TogetherWeOwn/example/pull/7#discussion_r9",
                      "Duplicate of #12"):
             with self.subTest(body=body):
                 self.assertPasses(run_replies([thread(("someone", body))]))
+
+    def test_evidence_free_rejection_fails(self):
+        for body in ("Rejected: no", "Rejected: not an issue", "Rejected: works for me"):
+            with self.subTest(body=body):
+                self.assertUnanswered(run_replies([thread(("someone", body))]))
+
+    def test_reply_text_is_never_echoed(self):
+        code, out = run_replies([thread(
+            ("someone", "internal-host.example secret-token-123 rest of the line"))])
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("secret-token-123", out)
+        self.assertNotIn("internal-host.example", out)
 
     def test_format_drift_first_lines_fail(self):
         # The shapes a weekly sample of merged PRs actually carried: a real
@@ -129,7 +143,7 @@ class ReviewReplies(unittest.TestCase):
                      "\nFixed in abc1234"):
             with self.subTest(body=body):
                 self.assertUnanswered(run_replies([thread(("someone", body))]),
-                                      "not one of the counted first lines")
+                                      "no reply starts with a counted first line")
 
     def test_no_reply_and_devin_followups_do_not_count(self):
         self.assertUnanswered(run_replies([thread()]), "no reply yet")
@@ -300,6 +314,7 @@ class WorkflowShape(unittest.TestCase):
         text = WORKFLOW.read_text()
         self.assertIn("Check automated review findings are answered in format", text)
         self.assertIn("REVIEW_ENFORCE_SINCE:", text)
+        self.assertIn("recentComments: comments(last: 20)", text)
         self.assertEqual(text.count("\n    name: pr-standards\n"), 1)
         self.assertNotRegex(text, r"\n  review-replies:")
 
