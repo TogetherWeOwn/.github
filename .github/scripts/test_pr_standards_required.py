@@ -224,12 +224,26 @@ class InternalReferences(unittest.TestCase):
         code, out = run(body=body)
         self.assertEqual(code, 0, out)
 
-    def test_local_and_private_addresses_fail(self):
-        for b in ("see http://localhost:8080/x", "runs on 127.0.0.1:3100", "host 192.168.1.10 is up",
-                  "db at 10.0.4.7", "proxy 172.20.0.3", "tailnet 100.101.2.3",
-                  "open http://localhost", "ping 127.0.0.1"):
+    def test_private_addresses_fail(self):
+        for b in ("host 192.168.1.10 is up", "db at 10.0.4.7", "proxy 172.20.0.3", "tailnet 100.101.2.3"):
             with self.subTest(b=b):
                 self.assertFails(run(body=CLEAN_BODY + b + "\n"), "address")
+        self.assertFails(run(commits=["fix: reach the db at 10.0.4.7"]), "address")
+
+    def test_loopback_addresses_only_warn(self):
+        for b in ("see http://localhost:8080/x", "runs on 127.0.0.1:3100", "open http://localhost",
+                  "ping 127.0.0.1", "loopback test (localhost, 127.0.0.0/8, ::1)"):
+            with self.subTest(b=b):
+                code, out = run(body=CLEAN_BODY + b + "\n", commits=["fix: refuse non-loopback " + b])
+                self.assertEqual(code, 0, out)
+                self.assertIn("::warning title=Internal reference in the PR body", out)
+                self.assertIn("::warning title=Internal reference in a commit message", out)
+
+    def test_loopback_branch_only_warns(self):
+        code, out = run(branch="fix/127.0.0.1-origins")
+        self.assertEqual(code, 0, out)
+        self.assertIn("::warning title=Internal reference in the branch name", out)
+        self.assertFails(run(branch="fix/10.0.4.7-db"), "branch name")
 
     def test_versions_and_public_ips_pass(self):
         for b in ("bump to 10.2.3", "lib 1.10.0.4", "DNS 8.8.8.8", "172.32.0.1 is public",
@@ -240,10 +254,10 @@ class InternalReferences(unittest.TestCase):
                 self.assertEqual(code, 0, out)
 
     def test_addresses_only_warn_on_bot_and_fork_prs(self):
-        notes = CLEAN_BODY + "Fix HMR on http://localhost:5173/\n"
+        notes = CLEAN_BODY + "Fix HMR when the dev server is on 192.168.1.20\n"
         for kw in ({"author": "dependabot[bot]", "title": "build(deps): bump vite"}, {"fork": "true"}):
             with self.subTest(kw=kw):
-                code, out = run(body=notes, commits=["fix: bind dev server to 0.0.0.0:8080"], **kw)
+                code, out = run(body=notes, commits=["fix: bind dev server to 10.0.0.2:8080"], **kw)
                 self.assertEqual(code, 0, out)
                 self.assertIn("::warning title=Internal reference in the PR body", out)
         self.assertFails(run(body=CLEAN_BODY + "TWO-5\n", author="dependabot[bot]",
