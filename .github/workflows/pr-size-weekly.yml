@@ -36,8 +36,7 @@ on:
     inputs:
       runs-on:
         description: >-
-          JSON runner label(s), e.g. '["ubuntu-latest"]' or
-          '["self-hosted","linux"]' for a private caller repository.
+          JSON runner label(s), e.g. '["ubuntu-latest"]'.
         required: false
         default: '["ubuntu-latest"]'
         type: string

@@ -52,19 +52,18 @@ jobs:
     # fix/checkout-credential-source across squash merge; normalize to the main
     # squash commit afterward. Retain source refs needed by queued/rerun/rollback
     # workflows even after current callers have been repinned.
-    uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@773ee91a904b9e1b65eddaaad4400d36e05fa717
-    # Private repos run the gate on the self-hosted pool (no Actions
-    # spend); public repos stay on GitHub-hosted. Per-repo warn callers
-    # pass their own pool instead (see TEST-GUARD.md).
+    uses: TogetherWeOwn/.github/.github/workflows/test-guard.yml@1e3c0c04b15a31baf498398417d98e44d0d8cbdb
+    # Every repo, public or private, runs on GitHub-hosted ubuntu-latest:
+    # the org has no other runners, and a required check on a runner that
+    # never starts would block every merge.
     with:
-      runs-on-json: ${{ github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]' }}
+      runs-on-json: '["ubuntu-latest"]'
 
   # Keep id and name byte-identical: the required check name is `test-guard`.
   test-guard:
     name: test-guard
-    # Same pool selection as the guard call above: the required check must
-    # report from a runner the repo can actually start.
-    runs-on: ${{ fromJSON(github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]') }}
+    # The required check must report from a runner the repo can start.
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [guard]
     if: always()

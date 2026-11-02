@@ -21,12 +21,12 @@ concurrency:
 
 jobs:
   plan-version:
-    uses: TogetherWeOwn/.github/.github/workflows/calver.yml@1508f2c10cb83bc0677e8e559ff796a55c66e737
+    uses: TogetherWeOwn/.github/.github/workflows/calver.yml@1e3c0c04b15a31baf498398417d98e44d0d8cbdb
     permissions:
       contents: read
       actions: read
     with:
-      tooling-sha: 1508f2c10cb83bc0677e8e559ff796a55c66e737
+      tooling-sha: 1e3c0c04b15a31baf498398417d98e44d0d8cbdb
       runs-on-json: '"ubuntu-latest"'
       # Trusted caller context constructs JSON; never evaluate user JSON as shell.
       request: ${{ needs.context.outputs.plan-request }}
@@ -38,12 +38,10 @@ jobs:
   # its job grants contents:write and actions:read to this same reusable.
 ```
 
-For a private caller, replace `runs-on-json` with
-`${{ vars.CI_OVERFLOW_RUNNER }}` (the existing explicitly configured self-hosted
-JSON labels, beginning with `self-hosted`), without a hosted default or new pool.
+Private callers pass the same `runs-on-json: '"ubuntu-latest"'`.
 The wrapper checks out `TogetherWeOwn/.github` separately at `tooling-sha`; it
 does not accidentally look for shared scripts in a default caller checkout.
-Public callers always schedule the standard free `ubuntu-latest`.
+Every caller schedules the standard GitHub-hosted `ubuntu-latest`.
 
 ## Step adapter in the caller's existing serialized transaction
 
@@ -56,7 +54,7 @@ running required-certification job or to replace real gates with an echo step.
 ```yaml
 # Planning job: contents:read, actions:read. Source run/attempt are known now;
 # artifact ID/digest are intentionally unavailable until after upload.
-- uses: TogetherWeOwn/.github/actions/calver@1508f2c10cb83bc0677e8e559ff796a55c66e737
+- uses: TogetherWeOwn/.github/actions/calver@1e3c0c04b15a31baf498398417d98e44d0d8cbdb
   id: version
   with:
     runs-on-json: '"ubuntu-latest"'
@@ -64,7 +62,7 @@ running required-certification job or to replace real gates with an echo step.
 
 # Separate successor publication job: contents:write, actions:read.
 # It consumes the saved plan plus the actual immutable artifact proof.
-- uses: TogetherWeOwn/.github/actions/calver@1508f2c10cb83bc0677e8e559ff796a55c66e737
+- uses: TogetherWeOwn/.github/actions/calver@1e3c0c04b15a31baf498398417d98e44d0d8cbdb
   if: success()
   id: publication
   with:
@@ -83,6 +81,13 @@ successful, with artifact/member/image checks still owned by the caller.
 To verify a publication without writes, set `dryRun: true` on the publish
 request. The same validations run, but the API transport refuses non-GET calls.
 There is no caller-local notes filename output and no cloud credential input.
+
+A plan `input` may also carry `sections`: release-please-shaped
+`changelog-sections` entries (`{type, section, hidden?}`) that replace the
+built-in note headings. They freeze into the plan, so set them at plan time —
+for example, the bot adapter passes its `release-please-config.json` sections
+so `security` commits stay under **Fixed**. Omit `sections` for the built-in
+Features/Bug Fixes/Performance Improvements/Reverts/Documentation headings.
 
 A bot live-digest adapter retains its live-production resolver and classifies
 `skipped`/`reason` from planning before deciding whether to publish or dispatch

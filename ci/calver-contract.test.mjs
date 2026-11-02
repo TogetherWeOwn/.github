@@ -118,29 +118,17 @@ test("allocation cannot round an exhausted safe numeric counter into a collision
   }
 });
 
-test("runner policy accepts only ubuntu-latest on public repos", async () => {
+test("runner policy accepts only ubuntu-latest on public and private repos", async () => {
   const { validateRunner } = await engine();
-  assert.equal(validateRunner('"ubuntu-latest"', "public", undefined), "ubuntu-latest");
-  for (const runner of [undefined, "", "ubuntu-latest", '"ubuntu-24.04"', '"ubuntu-latest-4-cores"',
-    '["ubuntu-latest"]', '["self-hosted","linux"]', '"windows-latest"', '{}', 'null']) {
-    assert.throws(() => validateRunner(runner, "public", '["self-hosted","linux"]'));
+  for (const visibility of ["public", "private"]) {
+    assert.equal(validateRunner('"ubuntu-latest"', visibility), "ubuntu-latest");
+    for (const runner of [undefined, "", "ubuntu-latest", '"ubuntu-24.04"', '"ubuntu-latest-4-cores"',
+      '["ubuntu-latest"]', '["self-hosted","linux"]', '"windows-latest"', '{}', 'null']) {
+      assert.throws(() => validateRunner(runner, visibility));
+    }
   }
-});
-
-test("private runner labels must match explicit configuration without paid fallback", async () => {
-  const { validateRunner } = await engine();
-  const labels = ["self-hosted", "linux", "release-fixture"];
-  const configured = JSON.stringify(labels);
-  assert.deepEqual(validateRunner(configured, "private", configured), labels);
-  for (const [runner, visibility, config] of [
-    [configured, "private", undefined], ['"ubuntu-latest"', "private", configured],
-    ['["self-hosted","linux","other"]', "private", configured],
-    ['["self-hosted","linux"]', "private", configured],
-    ['["self-hosted","linux","release-fixture","extra"]', "private", configured],
-    ['"ubuntu-latest"', "private", '"ubuntu-latest"'],
-    [configured, "unknown", configured], [configured, undefined, configured],
-  ]) {
-    assert.throws(() => validateRunner(runner, visibility, config));
+  for (const visibility of ["unknown", undefined]) {
+    assert.throws(() => validateRunner('"ubuntu-latest"', visibility));
   }
 });
 
@@ -159,6 +147,99 @@ test("notes group conventional changes and preserve BREAKING CHANGE information"
   assert.match(notes, /break(?:ing)?/i);
   assert.match(notes, /feature|feat/i);
   assert.match(notes, /fix/i);
+});
+
+// Caller sections use the release-please `changelog-sections` shape; the bot's
+// Common Changelog mapping is the motivating caller (security lands in Fixed).
+const BOT_SECTIONS = [
+  { type: "perf", section: "Changed" },
+  { type: "refactor", section: "Changed", hidden: true },
+  { type: "revert", section: "Changed" },
+  { type: "feat", section: "Added" },
+  { type: "fix", section: "Fixed" },
+  { type: "security", section: "Fixed" },
+  { type: "docs", section: "Documentation", hidden: true },
+];
+
+test("notes honour caller sections, heading order and hidden types", async () => {
+  const { renderNotes } = await engine();
+  const notes = renderNotes([
+    { sha: "a".repeat(40), message: "security(deps): patch the token parser" },
+    { sha: "b".repeat(40), message: "feat: add search" },
+    { sha: "c".repeat(40), message: "perf: cache lookups" },
+    { sha: "d".repeat(40), message: "docs: document migration" },
+    { sha: "e".repeat(40), message: "fix: avoid duplicate uploads" },
+  ], { sections: BOT_SECTIONS });
+  const headings = [...notes.matchAll(/^### (.+)$/gm)].map((match) => match[1]);
+  assert.deepEqual(headings, ["Changed", "Added", "Fixed"]);
+  const fixed = notes.split("### Fixed")[1] ?? "";
+  assert.ok(fixed.includes("patch the token parser"), "security commit missing from Fixed");
+  assert.ok(fixed.includes("avoid duplicate uploads"), "fix commit missing from Fixed");
+  assert.ok(!notes.includes("document migration"), "hidden docs type leaked into notes");
+  assert.ok(!notes.includes("Bug Fixes"), "built-in sections must not appear with caller sections");
+});
+
+test("breaking commits surface even when their type is hidden or unlisted", async () => {
+  // Parity with the bot's existing digest renderer: BREAKING CHANGES is a
+  // safety signal grouped before section filtering, so `hidden` (or an
+  // unlisted type) suppresses routine entries but never a breaking warning.
+  const { renderNotes } = await engine();
+  const notes = renderNotes([
+    { sha: "a".repeat(40), message: "refactor!: remove the old API" },
+    { sha: "b".repeat(40), message: "chore!: drop the legacy config\n\nBREAKING CHANGE: config v1 is gone" },
+    { sha: "c".repeat(40), message: "refactor: rename an internal helper" },
+  ], { sections: BOT_SECTIONS });
+  assert.ok(notes.includes("### ⚠ BREAKING CHANGES"));
+  const breaking = notes.split("### ⚠ BREAKING CHANGES")[1] ?? "";
+  assert.ok(breaking.includes("remove the old API"), "hidden breaking type must still warn");
+  assert.ok(breaking.includes("drop the legacy config"), "unlisted breaking type must still warn");
+  assert.ok(!notes.includes("rename an internal helper"), "non-breaking hidden entries stay out");
+});
+
+test("notes without caller sections keep the built-in sections", async () => {
+  const { renderNotes } = await engine();
+  const notes = renderNotes([
+    { sha: "a".repeat(40), message: "security(deps): patch the token parser" },
+    { sha: "b".repeat(40), message: "feat: add search" },
+  ]);
+  assert.ok(notes.includes("### Features"));
+  assert.ok(!notes.includes("patch the token parser"), "defaults have no security section");
+});
+
+for (const [label, sections] of [
+  ["not an array", "Fixed"],
+  ["empty array", []],
+  ["too many entries", Array.from({ length: 33 }, (_, i) => ({ type: `t${"x".repeat(i)}`, section: "S" }))],
+  ["duplicate type", [{ type: "fix", section: "Fixed" }, { type: "fix", section: "Other" }]],
+  ["non-lowercase type", [{ type: "Fix", section: "Fixed" }]],
+  ["oversized type", [{ type: "a".repeat(33), section: "Fixed" }]],
+  ["empty section", [{ type: "fix", section: "" }]],
+  ["section with newline", [{ type: "fix", section: "Fixed\n## injected" }]],
+  ["section with C1 control", [{ type: "fix", section: "Fix\u0085ed" }]],
+  ["section with line separator", [{ type: "fix", section: "Fix\u2028ed" }]],
+  ["section with bidi override", [{ type: "fix", section: "Fixed\u202eabc" }]],
+  ["section that is a heading", [{ type: "fix", section: "# Fixed" }]],
+  ["oversized section", [{ type: "fix", section: "x".repeat(81) }]],
+  ["non-boolean hidden", [{ type: "fix", section: "Fixed", hidden: "yes" }]],
+  ["unknown key", [{ type: "fix", section: "Fixed", extra: 1 }]],
+  ["every entry hidden", [{ type: "fix", section: "Fixed", hidden: true }]],
+]) {
+  test(`notes refuse invalid caller sections: ${label}`, async () => {
+    const { renderNotes } = await engine();
+    assert.throws(() => renderNotes([], { sections }), /section/i);
+  });
+}
+
+test("notes refuse section entries that are not plain own-property data", async () => {
+  const { renderNotes } = await engine();
+  const commits = [{ sha: "a".repeat(40), message: "fix: visible change" }];
+  const inheritedHidden = Object.assign(Object.create({ hidden: true }), { type: "fix", section: "Fixed" });
+  assert.throws(() => renderNotes(commits, { sections: [inheritedHidden] }), /section/i);
+  const reprototyped = { type: "fix", section: "Fixed" };
+  Object.setPrototypeOf(reprototyped, { hidden: true });
+  assert.throws(() => renderNotes(commits, { sections: [reprototyped] }), /section/i);
+  class Entry { constructor() { this.type = "fix"; this.section = "Fixed"; } }
+  assert.throws(() => renderNotes(commits, { sections: [new Entry()] }), /section/i);
 });
 
 test("notes accept empty history without inventing changes", async () => {

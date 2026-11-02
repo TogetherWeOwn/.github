@@ -130,6 +130,19 @@ when no numerically later stable exists. This comparison is protected by the sam
 caller writer lock; GitHub does not offer compare-and-swap for Latest. The engine
 cannot compensate for independent writers ignoring the transaction contract.
 
+## Production promotion without canaries
+
+An application that tags only production promotes, with canaries off, uses
+`policy: "production-promotion"` (stable, root namespace, no `sourceCanary`).
+The evidence selects the production deploy run attempt, its named deploy jobs
+and the promotion receipt artifact whose name carries the deployed SHA. The
+publisher runs as a successor job in that run, after those jobs succeed. A
+re-promote of an already tagged commit skips with `already-released`, and a
+rollback below the newest stable skips with `rollback`; both stay green and
+never move Latest. Optional `sections` carries the caller's release-please
+`changelog-sections` groups into the frozen plan. See the
+[contract](contract.md#production-promotion-evidence).
+
 ## Repository exceptions (not a general bypass flag)
 
 - **TWO bot:** `live-digest` is stable-only for `TogetherWeOwn/two-bot-next`.
@@ -163,17 +176,21 @@ accepted by the shared tool. Adapter-only workflow-dispatch/SBOM permissions sta
 in the adapter. GITHUB_TOKEN-created tags/Releases do not trigger ordinary
 downstream workflows: call/dispatch the intended next workflow explicitly.
 
-Public callers schedule only the free standard `ubuntu-latest`. Private callers
-must supply their existing self-hosted `CI_OVERFLOW_RUNNER` labels explicitly.
-The wrapper chooses routing from repository context/configuration, not arbitrary
-input, and refuses a missing/non-self-hosted private configuration instead of
-falling back to hosted compute. The action rechecks visibility from GitHub and
-compares inputs to configured labels before any mutation. When used as a step,
-the caller still owns scheduling its job on the existing approved runner. No new
-runner spend, security settings or host automation is introduced.
+Every caller, public or private, schedules the standard GitHub-hosted
+`ubuntu-latest`; there is no self-hosted pool. The wrapper fixes routing itself,
+not from arbitrary input, and the action rechecks visibility from GitHub and
+refuses any `runs-on-json` other than `"ubuntu-latest"` before any mutation.
+When used as a step, the caller still owns scheduling its job. No larger
+runners, security settings or host automation are introduced.
 
 Notes reuse the existing web/bot Conventional Commit parser, grouping, scope/PR
-links and BREAKING CHANGE handling. History intake is bounded at **256 MiB**, not
+links and BREAKING CHANGE handling. A plan may carry caller `sections` in the
+release-please `changelog-sections` shape (`{type, section, hidden?}`); they
+are validated and bounded at plan time, frozen into the plan identity, and
+used instead of the built-in sections (Features, Bug Fixes, Performance
+Improvements, Reverts, Documentation). That is how the bot keeps its Common
+Changelog headings (Changed/Added/Fixed, with `security` under Fixed) after
+migrating to the shared releaser. History intake is bounded at **256 MiB**, not
 mistakenly lowered to the bot's 32 MiB subprocess limit. Publication uses a JSON
 HTTP body, not a large argv value. Output notes exceeding a conservative 120,000
 byte GitHub body budget fail before the first write rather than silently truncate.

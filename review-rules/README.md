@@ -13,7 +13,7 @@ Inputs:
 |---|---|---|
 | `packs` | `rust,ts,python-shell-ci,php,security` | Comma-separated central packs; unknown/empty selections report incomplete coverage. |
 | `mode` | `warn` | `warn` always returns success for handled errors/findings. `enforce` fails incomplete coverage and explicitly promoted, non-INFO findings only. |
-| `runs-on-json` | empty | Optional runner-label JSON. Empty selects `two-selfhosted` for private repos, `ubuntu-latest` otherwise. Private callers with a different pool must supply its existing labels. |
+| `runs-on-json` | empty | Optional runner-label JSON. Empty selects `ubuntu-latest` for every repo. |
 
 The `review-rules-required.yml` wrapper demonstrates `pull_request` and
 `merge_group`, with a separate bare `review-rules` check. Its name is a future

@@ -12,7 +12,7 @@ on:
         type: string
         default: warn
       runs-on-json:
-        description: Optional existing runner labels as JSON; private defaults to two-selfhosted
+        description: Optional runner labels as JSON; empty selects ubuntu-latest
         type: string
         default: ''
 permissions:
@@ -20,7 +20,7 @@ permissions:
 jobs:
   scan:
     name: scan changed files
-    runs-on: ${{ fromJSON(inputs.runs-on-json != '' && inputs.runs-on-json || (github.event.repository.private && '["self-hosted","two-selfhosted"]' || '["ubuntu-latest"]')) }}
+    runs-on: ${{ fromJSON(inputs.runs-on-json != '' && inputs.runs-on-json || '["ubuntu-latest"]') }}
     timeout-minutes: 20
     env:
       RR_PACKS: ${{ inputs.packs }}

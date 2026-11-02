@@ -17,10 +17,18 @@ only); its public test seam is below. No caller code is executed by the releaser
   `{version, tag, date, channel, namespace}`. `tags` is an array of tag-name
   strings. Stable P is one above the greatest stable P for that date, starting
   at zero. Canary uses the next stable base and one above its highest N.
-- `validateRunner(runnerJson, visibility, privateRunnerJson)` returns the parsed
-  labels: public repositories require exactly `"ubuntu-latest"`; private
-  repositories must match the explicit configured self-hosted labels. No
-  default, paid-hosted fallback or caller-only visibility assertion.
+- `validateRunner(runnerJson, visibility)` returns the parsed runner: public
+  and private repositories both require exactly `"ubuntu-latest"`, and the
+  visibility must be `public` or `private`. No default, larger hosted runner or
+  caller-only visibility assertion.
+- `normalizeSections(sections)` returns null for an omitted/null value, else a
+  validated copy of release-please-shaped `changelog-sections` entries
+  (`{type, section, hidden?}`) in caller order, with `hidden: false` dropped.
+  Bounds: 1–32 plain-object entries with own keys only, each type 1–32
+  lowercase letters and unique, each heading 1–80 trimmed characters without
+  Unicode control/format/surrogate/line-separator characters or a leading
+  `#`, `hidden` boolean when present, no other keys, and at least one visible
+  entry. Throws on anything else.
 
 ## Read/write API
 
@@ -54,14 +62,16 @@ The exported `GitHub` transport in `github.mjs` implements Link pagination;
 
 Plan inputs: `channel` (`stable|canary`), lowercase exact 40-hex `sha`,
 `operation` (nonempty bounded identifier), `policy`
-(`staged-promotion|live-digest|direct-release`), optional `namespace` (only `build`
-is supported), optional `latest` (`auto|never`), optional `repairDate` (ISO UTC
-calendar date), optional `sourceCanary`, and `evidence` described below. Date
+(`staged-promotion|production-promotion|live-digest|direct-release`), optional
+`namespace` (only `build` is supported), optional `latest` (`auto|never`), optional `repairDate` (ISO UTC
+calendar date), optional `sourceCanary`, optional `sections` (caller note
+sections, see `normalizeSections`), and `evidence` described below. Date
 freezes at plan time, including across midnight; repairDate is only publishable
 with explicit repair. Version cannot be silently reallocated after deployment.
-Every plan binds repository, policy, operation, SHA, date, namespace, source and
-version with a deterministic identity. A JSON plan is portable across jobs;
-runner-local notes filenames are not outputs.
+Every plan binds repository, policy, operation, SHA, date, namespace, source,
+sections and version with a deterministic identity (`sections: null` when the
+caller omitted them; plans frozen before this field existed validate as null).
+A JSON plan is portable across jobs; runner-local notes filenames are not outputs.
 
 `sha` must independently resolve to a commit reachable from this repository's
 `main` (GitHub compare status ahead/identical). Planning reads every tag page.
@@ -110,10 +120,50 @@ use the active-canary exception. Publish re-fetches evidence and the source
 canary. This corrects the initial contract's impossible pre-build artifact
 requirement and its self-deadlocking whole-run check for an in-run publisher.
 
+## Production promotion evidence
+
+`production-promotion` is root stable only, with no namespace and no
+`sourceCanary`. It is for an application whose production deploy promotes an
+already-soaked `main` commit and runs no canary channel. Its `evidence` has the
+staged shape, but selects the production deploy run itself:
+
+- the run attempt is same-repository, `head_branch` `main`, event `push`,
+  `workflow_run`, `schedule` or `workflow_dispatch`, and path `workflow`. It is
+  completed (with any conclusion, so a run that went red only in its release
+  job stays repairable) or still in progress because the publisher is its
+  successor job. Queued or waiting runs refuse;
+- every named job completed successfully in that attempt (skipped, running,
+  missing or duplicate jobs refuse), whether the run is still active or not;
+- the deployed `sha` is reachable from `main` and from the run's head SHA. The
+  run's head is main's tip when it started, not the deployed commit;
+- the artifact is bound to that run, unexpired, nonempty, created after the
+  attempt started, has the exact digest, and its name carries the deployed `sha`
+  as a whole token. The trusted main workflow writes that name after its deploy
+  gates pass.
+
+The engine reads metadata only, so the name is a selector bound to the run,
+not proof of what the run deployed. A `production-promotion` caller **must**
+also read the receipt content in the same job before planning, and refuse
+unless the receipt names the same SHA, repository, run and attempt (for
+example `two-web-next`'s `ci/release-promotion-proof.cjs`). Only a workflow
+that names the receipt from its deployed SHA and uploads it after its deploy
+gates may supply this evidence.
+
+Before allocation, a production plan classifies two green skips (CLI
+`skipped=true`, no plan): `already-released` when a stable tag (legacy or CalVer,
+from another operation) already points at `sha`, and `rollback` when the newest
+stable is not reachable from `sha`. An exact operation retry still recovers its
+own frozen plan, so a missing Release stays repairable with `repair: true`.
+
 ## Notes and Latest
 
-`renderNotes(commits)` groups Conventional Commits and BREAKING CHANGE footers;
-`commits` is an array of `{sha, message}`. Large histories are bounded and fail
+`renderNotes(commits, {repository, sections})` groups Conventional Commits and
+BREAKING CHANGE footers; `commits` is an array of `{sha, message}`. Without
+caller `sections` the built-in sections apply (Features, Bug Fixes,
+Performance Improvements, Reverts, Documentation); with them, headings follow
+caller order, several types may share one heading, and hidden types stay out.
+Publication renders with the sections frozen in the plan, never a
+publish-time override. Large histories are bounded and fail
 explicitly rather than silently truncating. Reachable previous stable selection
 ignores future/unreachable versions and supports legacy release boundaries.
 Notes render and publish in the same job; GitHub API JSON body is used, never a

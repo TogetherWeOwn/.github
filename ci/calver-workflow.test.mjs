@@ -78,7 +78,7 @@ test("action outputs are portable plan plus scalar identities, never a notes fil
     "runner-local notes paths are not action outputs");
 });
 
-test("reusable workflow requires explicit runner JSON and cannot default to a paid hosted runner", () => {
+test("reusable workflow requires explicit runner JSON and schedules only ubuntu-latest", () => {
   const { source } = workflow();
   assert.match(source, /request:\s*\n/);
   const runnerInput = [...source.matchAll(/^ {6}([\w-]*(?:runner|runs-on)[\w-]*):\s*\n((?: {8}.*\n?)*)/gm)];
@@ -87,7 +87,10 @@ test("reusable workflow requires explicit runner JSON and cannot default to a pa
     assert.match(match[2], /required:\s*true/);
     assert.doesNotMatch(match[2], /default:\s*.+/);
   }
-  assert.match(source, /runs-on:\s*\$\{\{\s*fromJSON\(/);
+  const runsOn = [...source.matchAll(/^\s*runs-on:\s*(.+)$/gm)].map((match) => match[1].trim());
+  assert.ok(runsOn.length > 0, "jobs schedule a runner");
+  for (const value of runsOn) assert.equal(value, "ubuntu-latest");
+  assert.doesNotMatch(source, /self-hosted|CI_OVERFLOW_RUNNER/);
   assert.doesNotMatch(source, /inputs\.(?:visibility|is[-_]private|repository[-_]visibility)/,
     "caller-supplied visibility is not authoritative");
   assert.doesNotMatch(source, /runs-on:[^\n]*(?:windows-|macos-|ubuntu-(?:large|\d+-core))/i);

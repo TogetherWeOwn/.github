@@ -12,7 +12,7 @@ on:
         type: string
         required: true
       runs-on-json:
-        description: Explicit existing routing; public callers use '"ubuntu-latest"'
+        description: Explicit routing; every caller passes '"ubuntu-latest"'
         type: string
         required: true
     outputs:
@@ -48,12 +48,12 @@ permissions:
 
 # Deliberately no invocation-local concurrency lock. It cannot serialize the
 # caller deployment between plan and publish. The caller owns that transaction.
-# Public scheduling ignores arbitrary runner input. A missing/non-self-hosted
-# private configuration evaluates to null and fails closed, not paid fallback.
+# Scheduling ignores arbitrary runner input: every caller, public or private,
+# runs on the standard GitHub-hosted ubuntu-latest.
 jobs:
   plan:
     if: fromJSON(inputs.request).phase != 'publish'
-    runs-on: ${{ fromJSON(github.event.repository.private && startsWith(vars.CI_OVERFLOW_RUNNER, '["self-hosted",') && vars.CI_OVERFLOW_RUNNER || (!github.event.repository.private && '"ubuntu-latest"') || 'null') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
@@ -87,11 +87,10 @@ jobs:
         with:
           request: ${{ inputs.request }}
           runs-on-json: ${{ inputs.runs-on-json }}
-          private-runner-json: ${{ vars.CI_OVERFLOW_RUNNER }}
 
   publish:
     if: fromJSON(inputs.request).phase == 'publish'
-    runs-on: ${{ fromJSON(github.event.repository.private && startsWith(vars.CI_OVERFLOW_RUNNER, '["self-hosted",') && vars.CI_OVERFLOW_RUNNER || (!github.event.repository.private && '"ubuntu-latest"') || 'null') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
@@ -127,4 +126,3 @@ jobs:
         with:
           request: ${{ inputs.request }}
           runs-on-json: ${{ inputs.runs-on-json }}
-          private-runner-json: ${{ vars.CI_OVERFLOW_RUNNER }}
