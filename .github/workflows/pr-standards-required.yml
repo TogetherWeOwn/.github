@@ -4,8 +4,9 @@
 #
 # Always an error (title and body, every PR, public or private):
 #   * an internal tracker id (TWO-123, TOG-123, PAP-123, PAPA-123; any case,
-#     `-` or `_`), a Paperclip instance UI link, the internal host, a
-#     localhost URL or a private-network (RFC 1918 / CGNAT) address;
+#     `-` or `_`), a Paperclip instance UI link, the internal host or a
+#     private-network (RFC 1918 / CGNAT) address (a loopback address such as
+#     localhost:3000 or 127.0.0.0/8 only warns: it names no machine of ours);
 #   * a PR title that is not a Conventional Commits header (warning only on
 #     forks of upstream projects and on dependabot/renovate PRs).
 # Branch name and commit messages: the same internal-reference check is an
@@ -72,7 +73,8 @@ jobs:
           # Bare "localhost" in prose is fine; a URL or host:port is not.
           LOCAL_URL = re.compile(r"(?:https?://(?:localhost|0\.0\.0\.0)(?![\w.-])|(?<![\w.-])(?:localhost|0\.0\.0\.0)(?::\d+|/))", re.IGNORECASE)
           OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
-          PRIVATE_IP = re.compile(rf"(?<![\w.])(?:(?:10|127)(?:\.{OCTET}){{3}}|192\.168(?:\.{OCTET}){{2}}"
+          LOOPBACK_IP = re.compile(rf"(?<![\w.])127(?:\.{OCTET}){{3}}(?![\w.])")
+          PRIVATE_IP = re.compile(rf"(?<![\w.])(?:10(?:\.{OCTET}){{3}}|192\.168(?:\.{OCTET}){{2}}"
                                   rf"|172\.(?:1[6-9]|2\d|3[01])(?:\.{OCTET}){{2}}"
                                   rf"|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])(?:\.{OCTET}){{2}})(?![\w.])")
           # Only a real github.com host is exempt (not notgithub.com/...).
@@ -80,13 +82,16 @@ jobs:
           CHECKS = [(TRACKER_ID, "an internal tracker id"), (UI_LINK_BARE, "a Paperclip instance link"),
                     (UI_LINK_HOST, "a Paperclip instance link"), (INTERNAL_HOST, "the internal host")]
           # Upstream text (dependabot/renovate release notes, fork-sync commits) often names
-          # local addresses, so these only warn on bot and fork PRs.
-          ADDRESS_CHECKS = [(LOCAL_URL, "a localhost address"), (PRIVATE_IP, "a private-network address")]
+          # private addresses, so these only warn on bot and fork PRs.
+          ADDRESS_CHECKS = [(PRIVATE_IP, "a private-network address")]
+          # Loopback names no machine of ours, and fixes that handle it must say so
+          # (`refuse non-loopback origins`, `127.0.0.0/8`), so it only ever warns.
+          LOOPBACK_CHECKS = [(LOCAL_URL, "a localhost address"), (LOOPBACK_IP, "a loopback address")]
           HELP = ("Say it in plain words, link only public GitHub issues (Fixes #123), name the "
                   "branch after the change (fix/quota-template-pin), and link the card from "
                   "Paperclip, never from GitHub. See TogetherWeOwn/.github CONTRIBUTING.md §2.")
 
-          def hits(text, checks=CHECKS + ADDRESS_CHECKS):
+          def hits(text, checks=CHECKS + ADDRESS_CHECKS + LOOPBACK_CHECKS):
               scrubbed = GITHUB_URL.sub("", re.sub(r"<!--.*?-->", "", text or "", flags=re.S))
               found = []
               for pat, label in checks:
@@ -145,7 +150,8 @@ jobs:
               report(level, "PR title", f"'{title}': {'; '.join(errs)}. Expected e.g. "
                      f"'fix(auth): refuse expired sudo sessions'. Types: {TYPES.replace('|', ', ')}.")
           def check(level, title, what, text, tail=HELP):
-              for checks, lvl in ((CHECKS, level), (ADDRESS_CHECKS, "warning" if bot or fork else level)):
+              for checks, lvl in ((CHECKS, level), (ADDRESS_CHECKS, "warning" if bot or fork else level),
+                                  (LOOPBACK_CHECKS, "warning")):
                   found = hits(text, checks)
                   if found:
                       report(lvl, title, f"{what} holds {', '.join(found)}. {tail}")
@@ -153,12 +159,9 @@ jobs:
           for where, text in (("title", title), ("body", body)):
               check("error", f"Internal reference in the PR {where}", f"The PR {where}", text)
           branch_level = "warning" if legacy else "error"
-          found = hits(branch)
-          if found:
-              report(branch_level, "Internal reference in the branch name",
-                     f"Branch '{branch}' holds {', '.join(found)}. Rename it with "
-                     "`gh api -X POST repos/<owner>/<repo>/branches/<old>/rename -f new_name=<new>` "
-                     f"(the PR follows). {HELP}")
+          check(branch_level, "Internal reference in the branch name", f"Branch '{branch}'", branch,
+                "Rename it with `gh api -X POST repos/<owner>/<repo>/branches/<old>/rename "
+                f"-f new_name=<new>` (the PR follows). {HELP}")
           try:
               messages = commit_messages()
               count = int(os.environ.get("COMMIT_COUNT") or 0)
