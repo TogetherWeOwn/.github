@@ -17,11 +17,14 @@ def load(path):
     return yaml.load(path.read_text(), Loader=yaml.BaseLoader)
 
 
-def settled(go="false", cargo="false", workflows="false"):
-    return {"inspect": {"result": "success", "outputs": {"go": go, "cargo": cargo, "workflows": workflows}},
-            "osv": {"result": "success"}, "osv-evidence": {"result": "success"},
-            "workflow-policy": {"result": "success" if workflows == "true" else "skipped"},
-            "dependencies": {"result": "success" if "true" in (go, cargo) else "skipped"}}
+def settled(go="false", cargo="false", workflows="false", full_run=True):
+    return {"changes": {"result": "success", "outputs": {"full_run": str(full_run).lower(),
+                                                            "docs_only": str(not full_run).lower()}},
+            "inspect": {"result": "success", "outputs": {"go": go, "cargo": cargo, "workflows": workflows}},
+            "osv": {"result": "success" if full_run else "skipped"},
+            "osv-evidence": {"result": "success" if full_run else "skipped"},
+            "workflow-policy": {"result": "success" if full_run and workflows == "true" else "skipped"},
+            "dependencies": {"result": "success" if full_run and "true" in (go, cargo) else "skipped"}}
 
 
 class WorkflowTests(unittest.TestCase):
@@ -73,7 +76,8 @@ class WorkflowTests(unittest.TestCase):
         job = self.jobs["osv"]
         self.assertEqual(job["uses"], "google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@b1d267aea5211fa648d9d442fa64b90dbdcbdd36")
         self.assertEqual(job["with"], {"fail-on-vuln": "true", "upload-sarif": "true",
-                                       "checkout-submodules": "false", "runs-on": "ubuntu-24.04"})
+                                       "checkout-submodules": "false", "runs-on": "ubuntu-24.04",
+                                       "scan-args": "--config=/dev/null\n-r\n./\n"})
         expected = {"actions": "read", "contents": "read", "security-events": "write"}
         self.assertEqual(job["permissions"], expected)
         caller = load(ROOT / "workflow-templates/public-pr-security.yml.example")
@@ -116,7 +120,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(scan["env"]["GO_TARGETS"], "${{ inputs.go-targets-json }}")
 
     def test_evidence_uploads_always_fail_on_missing(self):
-        for name in ("inspect", "workflow-policy", "dependencies", "osv-evidence"):
+        for name in ("changes", "inspect", "workflow-policy", "dependencies", "osv-evidence"):
             step = self.jobs[name]["steps"][-1]
             self.assertEqual(step["if"], "always()")
             self.assertIn("actions/upload-artifact@", step["uses"])
@@ -148,12 +152,26 @@ class WorkflowTests(unittest.TestCase):
                               env=dict(os.environ, NEEDS_JSON=json.dumps(needs)),
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
 
+    def test_change_detection_gates_every_heavy_job(self):
+        changes = self.jobs["changes"]
+        checkout = changes["steps"][0]
+        self.assertEqual(checkout["with"]["fetch-depth"], "0")
+        step = next(s for s in changes["steps"] if s.get("id") == "changes")
+        self.assertEqual(step["env"]["BASE_SHA"], "${{ github.event.pull_request.base.sha }}")
+        self.assertEqual(step["env"]["HEAD_SHA"], "${{ github.sha }}")
+        for job in ("osv", "osv-evidence", "workflow-policy", "dependencies"):
+            self.assertIn("changes", self.jobs[job]["needs"])
+            self.assertIn("needs.changes.outputs.full_run == 'true'", self.jobs[job]["if"])
+        self.assertNotIn("needs.changes", self.jobs["inspect"]["if"])
+        self.assertIn("inspect", self.jobs["osv"]["needs"])
+
     def test_aggregation_accepts_only_complete_applicable_successes(self):
         for go in ("false", "true"):
             for cargo in ("false", "true"):
                 for workflows in ("false", "true"):
-                    result = self.aggregate(settled(go, cargo, workflows))
-                    self.assertEqual(result.returncode, 0, result.stderr)
+                    for full_run in (False, True):
+                        result = self.aggregate(settled(go, cargo, workflows, full_run))
+                        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(set(self.jobs["security-ok"]["needs"]), set(settled()))
         self.assertTrue(self.jobs["security-ok"]["if"].startswith("always() && "))
 
@@ -170,6 +188,31 @@ class WorkflowTests(unittest.TestCase):
         needs = settled()
         needs["dependencies"]["result"] = "success"
         self.assertNotEqual(self.aggregate(needs).returncode, 0)
+
+    def test_docs_only_still_requires_inspection_and_valid_change_evidence(self):
+        for job in settled():
+            needs = settled("true", "true", "true", full_run=False)
+            needs[job]["result"] = "failure"
+            self.assertNotEqual(self.aggregate(needs).returncode, 0)
+        for output in ({}, {"full_run": "false"}, {"full_run": "true", "docs_only": "true"},
+                       {"full_run": "false", "docs_only": "false"}):
+            needs = settled(full_run=False)
+            needs["changes"]["outputs"] = output
+            self.assertNotEqual(self.aggregate(needs).returncode, 0)
+
+    def test_embedded_change_failure_emits_no_skip_outputs(self):
+        step = next(s for s in self.jobs["changes"]["steps"] if s.get("id") == "changes")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "outputs"
+            env = dict(os.environ, GITHUB_WORKSPACE=tmp, RUNNER_TEMP=str(root / "temp"),
+                       GATE_MODE="changes", GITHUB_OUTPUT=str(output), BASE_SHA="a" * 40, HEAD_SHA="b" * 40)
+            result = subprocess.run(["bash", "-e", "-c", step["run"]], env=env,
+                                    capture_output=True, timeout=30)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(output.exists())
+            data = json.loads((root / "temp/gate-evidence/changes.json").read_text())
+            self.assertEqual(data[0]["status"], "failed")
 
     def test_embedded_inspection_does_not_import_pr_python(self):
         driver = next(s for s in self.jobs["inspect"]["steps"] if s.get("id") == "inspect")["run"]

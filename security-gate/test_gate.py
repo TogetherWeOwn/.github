@@ -264,16 +264,86 @@ class RepoCase(unittest.TestCase):
             self.assertTrue((self.evidence / (name + ".stderr")).exists())
 
     def test_timeout_kills_process_group_and_preserves_evidence(self):
-        original_wait = subprocess.Popen.wait
-        calls = 0
-        def short_wait(process, timeout=None):
-            nonlocal calls
-            calls += 1
-            return original_wait(process, timeout=0.02 if calls == 1 else timeout)
-        with patch.object(subprocess.Popen, "wait", short_wait), self.assertRaisesRegex(gate.GateError, "timeout"):
+        with patch.object(gate, "SCAN_SECONDS", 0.05), \
+                patch.object(gate.os, "killpg", wraps=os.killpg) as kill, \
+                self.assertRaisesRegex(gate.GateError, "timeout"):
             gate.run_scan([sys.executable, "-I", "-c", "import time; time.sleep(60)"],
                           self.work, self.evidence, "timeout")
+        kill.assert_called_once()
         self.assertFalse(json.loads((self.evidence / "timeout.status.json").read_text())["complete"])
+
+    def test_large_cache_file_is_not_limited_as_evidence(self):
+        program = "from pathlib import Path; Path('cache').write_bytes(b'x' * (17 * 1024 * 1024)); print('{}')"
+        rc, data = gate.run_scan([sys.executable, "-I", "-c", program], self.work, self.evidence, "cache")
+        self.assertEqual((rc, data), (0, {}))
+        self.assertEqual((self.work / "cache").stat().st_size, 17 * 1024 * 1024)
+
+    def test_stdout_and_stderr_are_bounded_even_on_fast_exit(self):
+        for stream in (1, 2):
+            with self.subTest(stream=stream), patch.object(gate, "MAX_FILE_BYTES", 1024):
+                program = f"import os; os.write(1, b'{{}}'); os.write({stream}, b'x' * 65536)"
+                name = f"large-{stream}"
+                with self.assertRaisesRegex(gate.GateError, "output"):
+                    gate.run_scan([sys.executable, "-I", "-c", program], self.work, self.evidence, name)
+                status = json.loads((self.evidence / (name + ".status.json")).read_text())
+                self.assertFalse(status["complete"])
+                for suffix in (".json", ".stderr"):
+                    self.assertLessEqual((self.evidence / (name + suffix)).stat().st_size, 1024)
+
+    def test_change_detection_docs_only_and_empty_diff(self):
+        self.put("README.md")
+        self.commit()
+        base = self.git("rev-parse", "HEAD").decode().strip()
+        self.put("docs/guide.md")
+        self.commit()
+        self.assertEqual(gate.changes(self.repo, base, "HEAD")["full_run"], False)
+        self.assertTrue(gate.changes(self.repo, base, "HEAD")["docs_only"])
+        self.assertTrue(gate.changes(self.repo, "HEAD", "HEAD")["full_run"])
+
+    def test_change_detection_full_run_for_sources_dependencies_workflows_and_unknown(self):
+        self.put("README.md")
+        self.commit()
+        for path in ("src/main.go", "go.mod", "nested/Cargo.lock", ".github/workflows/ci.yml",
+                     "docs/package.json", "docs/tool.py", "unknown", "src/deleted.ts", " README.md"):
+            base = self.git("rev-parse", "HEAD").decode().strip()
+            self.put(path)
+            self.commit()
+            with self.subTest(path=path):
+                change = gate.changes(self.repo, base, "HEAD")
+                self.assertTrue(change["full_run"])
+                self.assertFalse(change["docs_only"])
+
+    def test_change_detection_deleted_or_renamed_source_is_not_docs_only(self):
+        self.put("src/main.go")
+        self.commit()
+        base = self.git("rev-parse", "HEAD").decode().strip()
+        self.git("mv", "src/main.go", "README.md")
+        self.commit()
+        change = gate.changes(self.repo, base, "HEAD")
+        self.assertEqual(set(change["paths"]), {"src/main.go", "README.md"})
+        self.assertTrue(change["full_run"])
+        base = self.git("rev-parse", "HEAD").decode().strip()
+        self.git("rm", "README.md")
+        self.git("commit", "-qm", "delete docs")
+        self.assertTrue(gate.changes(self.repo, base, "HEAD")["docs_only"])
+
+    def test_change_detection_uses_merge_base_and_fails_on_git_errors(self):
+        self.put("README.md")
+        self.commit()
+        base = self.git("rev-parse", "HEAD").decode().strip()
+        self.git("checkout", "-qb", "base-tip")
+        self.put("src/base-only.go")
+        self.commit()
+        base_tip = self.git("rev-parse", "HEAD").decode().strip()
+        self.git("checkout", "-q", base)
+        self.put("docs/guide.md")
+        self.commit()
+        self.assertTrue(gate.changes(self.repo, base_tip, "HEAD")["docs_only"])
+        with self.assertRaises(gate.GateError):
+            gate.changes(self.repo, "0" * 40, "HEAD")
+        with patch.object(gate, "git", side_effect=[base.encode(), gate.GateError("diff failed")]), \
+                self.assertRaisesRegex(gate.GateError, "diff failed"):
+            gate.changes(self.repo, base, "HEAD")
 
     def test_osv_output_paths_cannot_be_prepopulated_by_pr(self):
         self.put("new-results.json", '{"results": []}')

@@ -48,8 +48,18 @@ those tests do not scan the repository or contact vulnerability services.
 | pinact 5.0.2 | Same full workflow/action inventory | `run --check --verify-comment --format=sarif` with an explicit empty central v3 config; no PR config, excludes or diff filter |
 | Vendored metadata | Every tracked path component named exactly `vendor` or `third_party`, including nested trees | Each tree needs its **own** regular tracked `VENDORED.json`; malformed/missing metadata fails |
 
-All tracked workflows/actions are audited, not only the changed files. A pilot
-may therefore initially fail existing workflow findings or old Go/Rust advisories.
+A trusted `changes` job checks full Git history and diffs the PR merge tree against
+its merge base using `git diff --name-only --no-renames -z`. Only a nonempty diff
+containing exclusively `docs/**/*.md`/`.rst` or the root `README.md`, `CHANGELOG.md`,
+`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `SUPPORT.md`, `LICENSE` or
+`LICENSE.md` may skip heavy scanners. Every other path conservatively forces a full
+run, including source, dependency manifests/locks, workflows, tooling, shared code,
+unknown paths and unknown deleted files. Renames include both old and new paths.
+Empty diffs force a full run; history/fetch/merge-base/diff errors fail the gate.
+Vendored metadata and tracked-tree safety inspection run even on docs-only PRs.
+
+When selected, all tracked workflows/actions are audited, not only the changed
+files. A pilot may therefore initially fail existing workflow findings or old Go/Rust advisories.
 Only OSV is a new-vulnerability diff gate. Workflow-template examples outside
 `.github/workflows` are not executable workflows and are not included, unless
 named `action.yml`/`action.yaml`.
@@ -106,13 +116,14 @@ tree removes that tree from the current inventory; deleting only its metadata fa
   at an exact module version with the Go checksum database enabled. setup-go and
   rustup verify toolchain download checksums. No curl-to-shell/latest installer.
 - Each discovery/inspection job has a 10-minute limit; local scanners have a
-  300-second process-group timeout and 16-MiB stdout/stderr file cap. Snapshotting
+  300-second process-group timeout and a parent-enforced 16-MiB cap per stdout/stderr
+  stream (not on scanner-created cache/advisory files). Snapshotting
   has a 120-second deadline. Discovery caps: 20,000 paths, 256 MiB total tracked
   data, 16 MiB per file, 32 modules/lockfiles per language, 256 workflows/actions.
   Workflow-policy and language jobs additionally have 20/30-minute limits. A cap,
   timeout, unavailable advisory service, bad checksum, missing tool or malformed
   output is a **failure**, never a clean verdict.
-- `security-inspection`, `security-osv-validation`, `security-workflow-policy`,
+- `security-changes`, `security-inspection`, `security-osv-validation`, `security-workflow-policy`,
   and `security-language-scans` preserve inspection/validation summaries, raw local
   scanner output, stderr and status where execution reached those stages, retained
   five days. Missing artifact data is an error. Hard job termination can leave
@@ -122,9 +133,10 @@ tree removes that tree from the current inventory; deleting only its metadata fa
   JSON and SARIF; `osv-evidence` must download all three artifacts from this run
   and validate their completeness and the clean diff before aggregation succeeds.
 - `security-ok` uses `always()` and accepts skipped conditional jobs **only** when
-  successful inspection explicitly proved that scanner's inventory was absent.
-  Failures/cancellations/skips of inspection, OSV or OSV evidence validation,
-  absent discovery booleans, and skipped applicable scans fail aggregation.
+  successful change detection proved a docs-only path skip, or successful inspection
+  proved that scanner's inventory was absent. Both cheap jobs must succeed even for
+  docs-only PRs. Failed/cancelled/skipped detectors or inspection, absent/inconsistent
+  booleans, missing OSV evidence on full runs and skipped applicable scans fail aggregation.
 
 ### Upstream OSV boundary
 
@@ -133,10 +145,11 @@ The full action-workflow SHA is pinned to
 before comparing failed scans; that behavior and caller permissions were verified
 at implementation. Its internal scanner/reporter container is **version-tagged**,
 not digest-pinned. Pinning the reusable source does not make that transitive image
-immutable. It also retains credentials for its own branch switching and honors
-upstream scanner configuration; those are upstream implementation boundaries,
-not capabilities provided to our policy step. Do not claim this gate enforces
-image-digest immutability or scans submodules.
+immutable. It also retains credentials for its own branch switching; that is an
+upstream implementation boundary, not a capability provided to our policy step.
+Both comparison scans receive the same explicit immutable empty policy
+(`--config=/dev/null`). Do not claim this gate enforces image-digest immutability
+or scans submodules.
 
 The upstream job does not expose a timeout input and declares no shorter timeout:
 its hosted GitHub job has the platform's **360-minute default**, unlike our 5-minute

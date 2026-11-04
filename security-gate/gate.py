@@ -8,7 +8,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
-import resource
+import selectors
 import signal
 import subprocess
 import tarfile
@@ -19,6 +19,7 @@ MAX_FILES = 20000
 MAX_BYTES = 256 * 1024 * 1024
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_MODULES = 32
+SCAN_SECONDS = 300
 TOOLS = {
     "pinact": {
         "version": "5.0.2",
@@ -79,6 +80,27 @@ def git(repo, *args):
         require(output.tell() <= MAX_FILE_BYTES, "git output too large")
         output.seek(0)
         return output.read()
+
+
+def changes(repo, base, head):
+    require(re.fullmatch(r"[0-9a-f]{40}|HEAD", base or "") and
+            re.fullmatch(r"[0-9a-f]{40}|HEAD", head or ""), "invalid change-detection revision")
+    merge_base = git(repo, "merge-base", base, head).decode("ascii").strip()
+    require(re.fullmatch(r"[0-9a-f]{40}", merge_base), "invalid merge base")
+    raw = git(repo, "diff", "--name-only", "--no-renames", "-z", merge_base, head, "--")
+    require(not raw or raw.endswith(b"\0"), "incomplete changed paths")
+    paths = [p.decode("utf-8", errors="strict") for p in raw.split(b"\0")[:-1]]
+    require(len(paths) <= MAX_FILES, "too many changed paths")
+    for path in paths:
+        safe_path(path)
+    # Only this narrow documentation area can skip. Everything else, including
+    # unknown/deleted sources, dependencies, shared code and CI, forces all scans.
+    def docs(path):
+        return path in ("README.md", "CHANGELOG.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md",
+                        "SECURITY.md", "SUPPORT.md", "LICENSE", "LICENSE.md") or (
+            path.startswith("docs/") and PurePosixPath(path).suffix in (".md", ".rst"))
+    docs_only = bool(paths) and all(docs(path) for path in paths)
+    return {"merge_base": merge_base, "paths": paths, "docs_only": docs_only, "full_run": not docs_only}
 
 
 def inventory(repo):
@@ -216,23 +238,44 @@ def run_scan(command, cwd, evidence, name, env=None):
     result = {"command": command, "complete": False}
     stdout = evidence / (name + ".json")
     stderr = evidence / (name + ".stderr")
-    def limit_output():
-        resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_FILE_BYTES, MAX_FILE_BYTES))
-
-    with stdout.open("wb") as out, stderr.open("wb") as err:
-        process = subprocess.Popen(command, cwd=cwd, env=env, stdout=out, stderr=err,
-                                   start_new_session=True, preexec_fn=limit_output)
+    # The trusted parent bounds only the two evidence streams. A child file-size
+    # rlimit would also break legitimate Go/Cargo cache and advisory DB writes.
+    with stdout.open("wb") as out, stderr.open("wb") as err, selectors.DefaultSelector() as selector:
+        process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, start_new_session=True)
+        selector.register(process.stdout, selectors.EVENT_READ, out)
+        selector.register(process.stderr, selectors.EVENT_READ, err)
         try:
-            process.wait(timeout=300)
+            while selector.get_map():
+                remaining = SCAN_SECONDS - (time.monotonic() - started)
+                require(remaining > 0, f"scanner timeout after {SCAN_SECONDS} seconds")
+                for key, _ in selector.select(timeout=min(remaining, 0.2)):
+                    chunk = os.read(key.fileobj.fileno(), 65536)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    output = key.data
+                    available = MAX_FILE_BYTES - output.tell()
+                    output.write(chunk[:available])
+                    require(len(chunk) <= available, "scanner output exceeded limit")
+            process.wait(timeout=max(0, SCAN_SECONDS - (time.monotonic() - started)))
             result.update(returncode=process.returncode, complete=True)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-            result["error"] = "scanner exceeded 300 seconds"
+        except (GateError, OSError, subprocess.TimeoutExpired) as error:
+            result["error"] = (f"scanner timeout after {SCAN_SECONDS} seconds"
+                               if isinstance(error, subprocess.TimeoutExpired) else str(error))
+        finally:
+            if not result["complete"]:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+            process.stdout.close()
+            process.stderr.close()
     result["seconds"] = round(time.monotonic() - started, 2)
     write_json(evidence / (name + ".status.json"), result)
-    require(result["complete"], f"incomplete {name}: timeout")
-    require(stdout.stat().st_size > 0 and stdout.stat().st_size <= MAX_FILE_BYTES,
+    require(result["complete"], f"incomplete {name}: {result.get('error')}")
+    require(0 < stdout.stat().st_size <= MAX_FILE_BYTES and stderr.stat().st_size <= MAX_FILE_BYTES,
             f"missing or oversized scanner output: {name}")
     return process.returncode, json.loads(stdout.read_text())
 
@@ -376,7 +419,7 @@ def dependency_scans(repo, entries, found, work, evidence, tools, go_targets):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("inspect", "policy", "dependencies", "install", "osv-evidence"))
+    parser.add_argument("mode", choices=("changes", "inspect", "policy", "dependencies", "install", "osv-evidence"))
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--work", required=True, type=Path)
     parser.add_argument("--evidence", required=True, type=Path)
@@ -396,6 +439,14 @@ def main():
                     "invalid tool installation list")
             install_tools(names, tools)
             results.append({"scanner": "install", "status": "passed"})
+        elif args.mode == "changes":
+            changed = changes(args.repo, os.environ["BASE_SHA"], os.environ["HEAD_SHA"])
+            write_json(evidence / "changed-paths.json", changed)
+            if os.environ.get("GITHUB_OUTPUT"):
+                with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                    for key in ("full_run", "docs_only"):
+                        output.write(f"{key}={str(changed[key]).lower()}\n")
+            results.append({"scanner": "changes", "status": "passed", **changed})
         elif args.mode == "osv-evidence":
             results.append(osv_evidence(work))
         else:
