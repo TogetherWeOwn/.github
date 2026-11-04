@@ -16,7 +16,10 @@
 //
 // Run: node --test ci/gradual-promote-action.test.mjs
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 test("shared gradual action promotes 5-50-100 with per-stage gates and auto-rollback", () => {
@@ -205,7 +208,7 @@ test("live error-rate gates run the gate script with the promoted version and ex
     assert.ok(block.includes("if: inputs.error-rate-gate == 'true'\n"), `gate ${pct} if guard`);
     // Same whole-line pin: a trailing `|| true` must not match.
     assert.ok(
-      block.includes('run: node "${{ github.action_path }}/error-rate-gate.mjs"\n'),
+      block.includes('run: node "$ACTION_PATH/error-rate-gate.mjs"\n'),
       `gate ${pct} runs the gate script`,
     );
     for (const envLine of [
@@ -256,4 +259,153 @@ test("live-traffic gate at 100 percent probes production without version overrid
   // The gate must fail closed: replacing the probe with `if true` would let
   // the 100% stage pass without probing and suppress the third rollback.
   assert.match(live, /if node bin\/smoke\.mjs "https:\/\/\$DOMAIN" \$INDEXABLE; then/);
+});
+
+const PREVIOUS = "12345678-1234-1234-1234-123456789abc";
+const PROMOTED = "22345678-1234-1234-1234-123456789abc";
+
+// Execute the manifest's shell, not a restatement of its node command. Only
+// Wrangler is faked; the copied helper and analytics gate are the shipped bytes.
+function manifestHarness(t, pathName) {
+  const root = mkdtempSync(join(tmpdir(), "promotion-manifest-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const tools = join(root, "tools");
+  const actionPath = join(root, pathName);
+  mkdirSync(tools);
+  mkdirSync(actionPath);
+  symlinkSync(process.execPath, join(tools, "node"));
+  symlinkSync("/usr/bin/timeout", join(tools, "timeout"));
+  for (const name of ["gradual-promote.mjs", "error-rate-gate.mjs"]) {
+    copyFileSync(new URL(`../actions/gradual-promote/${name}`, import.meta.url), join(actionPath, name));
+  }
+  writeFileSync(join(tools, "npx"), `#!${process.execPath}
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.NPX_LOG, JSON.stringify(args) + "\\n");
+if (process.env.NPX_STATUS) process.exit(Number(process.env.NPX_STATUS));
+if (args[1] === "deployments") console.log(process.env.DEPLOYMENTS);
+else if (args[1] === "versions" && args[2] === "list") console.log(process.env.VERSIONS);
+else if (args[1] !== "rollback" && !(args[1] === "versions" && args[2] === "deploy")) process.exit(2);
+`, { mode: 0o700 });
+  const action = readFileSync(new URL("../actions/gradual-promote/action.yml", import.meta.url), "utf8");
+  const steps = action.split(/\n(?=    - name: )/).slice(1);
+  const fixture = join(root, "analytics.json");
+  const output = join(root, "output");
+  const log = join(root, "npx.log");
+  const bindings = {
+    "github.action_path": actionPath,
+    "inputs.worker-name": "fixture-worker",
+    "inputs.version-tag": "release-1",
+    "inputs.api-token": "",
+    "inputs.account-id": "a".repeat(32),
+    "steps.rollback-target.outputs.target": PREVIOUS,
+    "steps.promoted-version.outputs.id": PROMOTED,
+    "inputs.error-rate-threshold": "0.05",
+    "inputs.error-rate-min-requests": "20",
+    "inputs.error-rate-window-minutes": "10",
+    "inputs.error-rate-soak-seconds": "0",
+    ...Object.fromEntries([5, 50, 100].map((pct) => [
+      `steps.smoke-${pct}.outputs.finished-at`, new Date(Date.now() - 60_000).toISOString(),
+    ])),
+  };
+  function run(id, overrides = {}, errors = 0) {
+    const step = steps.find((s) => s.includes(`      id: ${id}\n`));
+    assert.ok(step, `step ${id} exists`);
+    const match = step.match(/^      run: (\|\n((?:        .*\n)+)|([^\n]+)\n)/m);
+    assert.ok(match, `${id} has a shell block`);
+    const rawScript = match[2] ? match[2].split("\n").map((line) => line.slice(8)).join("\n") : match[3];
+    const script = rawScript.replaceAll("${{ github.action_path }}", actionPath);
+    const env = {};
+    for (const [, name, expression] of step.matchAll(/^        ([A-Z_]+): \$\{\{ (.+) \}\}$/gm)) {
+      assert.ok(Object.hasOwn(bindings, expression), `known binding ${expression}`);
+      env[name] = bindings[expression];
+    }
+    writeFileSync(output, "");
+    writeFileSync(log, "");
+    writeFileSync(fixture, JSON.stringify({ data: { viewer: { accounts: [{
+      workersInvocationsAdaptive: [{ dimensions: { scriptVersion: PROMOTED }, sum: { requests: 100, errors } }],
+    }] } } }));
+    const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script], {
+      cwd: root,
+      env: {
+        PATH: tools,
+        GITHUB_OUTPUT: output,
+        NPX_LOG: log,
+        DEPLOYMENTS: JSON.stringify([{ created_on: "2026-01-01", versions: [{ version_id: PREVIOUS, percentage: 100 }] }]),
+        VERSIONS: JSON.stringify([{ id: PROMOTED, annotations: { "workers/tag": "release-1" } }]),
+        ERROR_RATE_FIXTURE: fixture,
+        ...env,
+        ...overrides,
+      },
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    assert.ifError(result.error);
+    return {
+      ...result,
+      output: readFileSync(output, "utf8"),
+      calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)),
+    };
+  }
+  return { run, steps };
+}
+
+for (const pathName of ["shared action with spaces", "shared action ü \"quoted\" 'single' $literal [one]"]) {
+  test(`manifest resolves every action-owned script under ${pathName}`, (t) => {
+    const { run, steps } = manifestHarness(t, pathName);
+    const ids = ["rollback-target", "promoted-version", "deploy-5", "deploy-50", "deploy-100", "error-rate-5", "error-rate-50", "error-rate-100"];
+    const target = run("rollback-target");
+    assert.equal(target.status, 0, target.stderr);
+    assert.equal(steps.filter((s) => s.includes("ACTION_PATH: ${{ github.action_path }}")).length, 8);
+    for (const id of ids) {
+      assert.ok(steps.find((s) => s.includes(`      id: ${id}\n`)).includes("ACTION_PATH: ${{ github.action_path }}"), id);
+    }
+    assert.equal(target.output, `target=${PREVIOUS}\n`);
+    assert.deepEqual(target.calls, [["wrangler", "deployments", "list", "--env", "production", "--name", "fixture-worker", "--json"]]);
+    const promoted = run("promoted-version");
+    assert.equal(promoted.status, 0, promoted.stderr);
+    assert.equal(promoted.output, `id=${PROMOTED}\n`);
+    assert.deepEqual(promoted.calls, [["wrangler", "versions", "list", "--env", "production", "--name", "fixture-worker", "--json"]]);
+    for (const pct of [5, 50, 100]) {
+      const deploy = run(`deploy-${pct}`);
+      assert.equal(deploy.status, 0, deploy.stderr);
+      assert.deepEqual(deploy.calls, [["wrangler", "versions", "deploy", "--env", "production", "--name", "fixture-worker",
+        ...(pct < 100 ? [`${PREVIOUS}@${100 - pct}`] : []), "--version-tag", `release-1@${pct}%`, "--yes"]]);
+      const gate = run(`error-rate-${pct}`);
+      assert.equal(gate.status, 0, gate.stderr);
+      assert.match(gate.stdout, /verdict=pass/);
+      assert.deepEqual(gate.calls, []);
+      const failedGate = run(`error-rate-${pct}`, {}, 40);
+      assert.equal(failedGate.status, 1, failedGate.stderr);
+      assert.match(failedGate.stdout, /verdict=fail/);
+    }
+  });
+}
+
+test("manifest script failures remain failures and rollback records only successful restores", (t) => {
+  const { run } = manifestHarness(t, "shared action with spaces");
+  for (const id of ["rollback-target", "promoted-version"]) {
+    const malformed = run(id, { DEPLOYMENTS: "not-json", VERSIONS: "not-json" });
+    assert.equal(malformed.status, 1, malformed.stderr);
+    assert.equal(malformed.output, "");
+    const failedWrangler = run(id, { NPX_STATUS: "7" });
+    assert.notEqual(failedWrangler.status, 0);
+    assert.equal(failedWrangler.output, "");
+  }
+  for (const pct of [5, 50, 100]) {
+    assert.equal(run(`deploy-${pct}`, { NPX_STATUS: "7" }).status, 7);
+    const badSpec = run(`deploy-${pct}`, { VERSION_TAG: "invalid tag" });
+    assert.notEqual(badSpec.status, 0);
+    assert.deepEqual(badSpec.calls, [], "bad helper output must never reach Wrangler");
+    const restored = run(`rollback-${pct}`);
+    assert.equal(restored.status, 1, "rollback still fails the job after restoring");
+    assert.equal(restored.output, "restored=true\n");
+    assert.deepEqual(restored.calls, [["wrangler", "rollback", PREVIOUS, "--name", "fixture-worker", "--yes"]]);
+    const failedRestore = run(`rollback-${pct}`, { NPX_STATUS: "7" });
+    assert.equal(failedRestore.status, 7);
+    assert.equal(failedRestore.output, "");
+    const missingTarget = run(`rollback-${pct}`, { PREV_VERSION: "" });
+    assert.notEqual(missingTarget.status, 0);
+    assert.deepEqual(missingTarget.calls, []);
+  }
 });
