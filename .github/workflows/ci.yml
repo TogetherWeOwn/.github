@@ -191,6 +191,10 @@ jobs:
         run: python3 -I .github/scripts/test_checkout_credentials.py
       - name: Required reusable pincheck regressions
         run: python3 -I .github/scripts/test_changes_pins.py
+      - name: Public PR security gate regressions (offline fixtures, no target scans)
+        run: |
+          python3 -I security-gate/test_gate.py
+          python3 -I security-gate/test_workflow.py
       - name: Label-sync script contract (fake gh, never deletes)
         run: python3 -I .github/scripts/test_sync_labels.py
       # Fetch/check the pinned source object before acceptance inspects it;
