@@ -89,6 +89,20 @@ def requested_union(path):
 
 
 class TemplatePermissionContract(unittest.TestCase):
+    def test_both_callers_pin_reviewed_main_snapshot(self):
+        # This main commit contains both reusable workflows. The old template
+        # pinned a pre-squash commit GitHub could not resolve for callers.
+        reviewed_sha = "97fc0e24038021dfaa1fc9da754c6c5d6429130f"
+        _, jobs = parse_workflow(TEMPLATE)
+        callers = {name: job["uses"] for name, job in jobs.items() if job["uses"]}
+        self.assertEqual(
+            callers,
+            {
+                name: f"TogetherWeOwn/.github/.github/workflows/{name}.yml@{reviewed_sha}"
+                for name in ("pr-size", "pr-size-weekly")
+            },
+        )
+
     def test_every_template_caller_grants_what_its_reusable_requests(self):
         top, jobs = parse_workflow(TEMPLATE)
         callers = {
