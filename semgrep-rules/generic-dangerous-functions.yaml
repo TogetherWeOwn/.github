@@ -1,0 +1,112 @@
+# Live generic rules: dynamic code execution and shell sinks.
+#
+# One rule per language family. Multi-language rules parse every pattern
+# once as the first language, so Python-only spellings (eval as a plain
+# call, shell=True keywords) never match inside a [javascript, typescript,
+# python] rule. Keep the JS/TS and Python shapes in separate rules with
+# per-language fixtures.
+rules:
+  - id: tier0-no-eval
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: "Avoid eval()/exec() on dynamic input — it is invisible to static review and a standing injection sink."
+    metadata:
+      tier0: "live"
+      false-positive-budget: "under 5% over the last 20 PRs per the rollout rule"
+    patterns:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: exec(...)
+          - pattern: new Function(...)
+      - pattern-not: eval("...")
+      - pattern-not: exec("...")
+    paths:
+      exclude:
+        - "*.test.*"
+        - test/*
+        - tests/*
+        - vendor/*
+
+  - id: tier0-no-eval-python
+    languages: [python]
+    severity: WARNING
+    message: "Avoid eval()/exec() on dynamic input — it is invisible to static review and a standing injection sink."
+    metadata:
+      tier0: "live"
+      false-positive-budget: "under 5% over the last 20 PRs per the rollout rule"
+    patterns:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: exec(...)
+      - pattern-not: eval("...")
+      - pattern-not: exec("...")
+    paths:
+      exclude:
+        - "*.test.*"
+        - test/*
+        - tests/*
+        - vendor/*
+
+  - id: tier0-no-shell-exec-interpolation
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: "Shell execution with interpolated input — prefer argv arrays / shlex.join over string commands."
+    metadata:
+      tier0: "live"
+    patterns:
+      - pattern-either:
+          - pattern: child_process.exec(`...${...}...`)
+          - pattern: child_process.execSync(`...${...}...`)
+    paths:
+      exclude:
+        - "*.test.*"
+        - test/*
+        - tests/*
+        - vendor/*
+
+  - id: tier0-no-shell-exec-interpolation-python
+    languages: [python]
+    severity: WARNING
+    message: "Shell-enabled command execution — prefer argv arrays with shell disabled."
+    metadata:
+      tier0: "live"
+    patterns:
+      - pattern-either:
+          - pattern: os.system(...)
+          - pattern: os.popen(...)
+          - pattern: subprocess.getoutput(...)
+          - pattern: subprocess.getstatusoutput(...)
+          - patterns:
+              - pattern-either:
+                  - pattern: subprocess.run(..., shell=$SHELL, ...)
+                  - pattern: subprocess.call(..., shell=$SHELL, ...)
+                  - pattern: subprocess.check_call(..., shell=$SHELL, ...)
+                  - pattern: subprocess.check_output(..., shell=$SHELL, ...)
+                  - pattern: subprocess.Popen(..., shell=$SHELL, ...)
+                  - pattern: 'subprocess.run(..., **{..., "shell": $SHELL, ...}, ...)'
+                  - pattern: 'subprocess.call(..., **{..., "shell": $SHELL, ...}, ...)'
+                  - pattern: 'subprocess.check_call(..., **{..., "shell": $SHELL, ...}, ...)'
+                  - pattern: 'subprocess.check_output(..., **{..., "shell": $SHELL, ...}, ...)'
+                  - pattern: 'subprocess.Popen(..., **{..., "shell": $SHELL, ...}, ...)'
+                  # Each wrapper forwards positional arguments to Popen;
+                  # shell is its ninth parameter, not close_fds (the eighth).
+                  - pattern: subprocess.run($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
+                  - pattern: subprocess.call($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
+                  - pattern: subprocess.check_call($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
+                  - pattern: subprocess.check_output($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
+                  - pattern: subprocess.Popen($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
+              # Filter the bound value, not the entire call: a safe value in
+              # another argument must not suppress an enabled shell finding.
+              - metavariable-pattern:
+                  metavariable: $SHELL
+                  patterns:
+                    - pattern: $VALUE
+                    - pattern-not: "False"
+                    - pattern-not: "0"
+                    - pattern-not: "None"
+    paths:
+      exclude:
+        - "*.test.*"
+        - test/*
+        - tests/*
+        - vendor/*
