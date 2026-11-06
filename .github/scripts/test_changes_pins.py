@@ -26,6 +26,7 @@ TEMPLATE = "workflow-templates/starter-ci.yml"
 SOURCE = ".github/workflows/changes.yml"
 GUARD = ".github/workflows/test-guard.yml"
 WRAPPER = ".github/workflows/test-guard-required.yml"
+TIER0 = ".github/workflows/tier-0-quality-gate.yml"
 CHECKER = ".github/scripts/check_changes_pins.py"
 USES = "TogetherWeOwn/.github/.github/workflows/changes.yml@"
 
@@ -64,6 +65,8 @@ class ChangesPinTests(unittest.TestCase):
         self.git("config", "user.email", "fixture@example.invalid")
         self.write(SOURCE, "old detector\n")
         self.write(GUARD, "current guard\n")
+        self.write("semgrep-rules/fixture.yml", "rules: []\n")
+        self.write("tier0/fixture.txt", "current gate tooling\n")
         self.stale = self.commit()
         self.write(SOURCE, "current detector\n")
         self.current = self.commit()
@@ -72,6 +75,7 @@ class ChangesPinTests(unittest.TestCase):
         self.repin(CI, self.current)
         self.repin(TEMPLATE, self.current)
         self.write(WRAPPER, f"jobs:\n  gate:\n    uses: TogetherWeOwn/.github/{GUARD}@{self.current}\n")
+        self.write(TIER0, f'env:\n  TIER0_SELF_PIN: "{self.current}"\n')
         # Before the fix the actual pincheck is inline and this file is absent.
         if (ROOT / CHECKER).is_file():
             self.write(CHECKER, (ROOT / CHECKER).read_text(encoding="utf-8"))
@@ -425,6 +429,26 @@ class ChangesPinTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("test-guard-pincheck: no pinned test-guard.yml", result.stdout)
         self.assertNotIn("changes-pincheck:", result.stdout)
+
+    def test_stale_tier0_pin_still_fails_for_each_gate_tree(self):
+        for path in ("semgrep-rules/fixture.yml", "tier0/fixture.txt"):
+            with self.subTest(path=path):
+                original = (self.repo / path).read_text(encoding="utf-8")
+                self.write(path, "changed gate content\n")
+                self.commit()
+                result = self.run_pincheck()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("tier-0-pincheck: pin", result.stdout)
+                self.assertIn("is stale", result.stdout)
+                self.assertIn("repin TIER0_SELF_PIN", result.stdout)
+                self.write(path, original)
+                self.commit()
+
+    def test_missing_tier0_pin_still_fails(self):
+        self.write(TIER0, "env: {}\n")
+        result = self.run_pincheck()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("tier-0-pincheck: no TIER0_SELF_PIN", result.stdout)
 
     def test_change_gated_dependencies_cannot_skip_mandatory_jobs(self):
         original = (ROOT / CI).read_text(encoding="utf-8")
