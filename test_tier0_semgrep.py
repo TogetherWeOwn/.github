@@ -270,6 +270,36 @@ class RealSemgrepContract(unittest.TestCase):
                     calls.append(f'{prefix}{function}(command, **{{"cwd": workspace}})\n')
                 self.assert_rule_fixture(imported + '\n' + ''.join(calls), 'execute.py', rule, [])
 
+    def test_python_shell_exec_literal_mapping_merges_are_conservative(self):
+        # Scanner input only. A literal expansion can override an outer safe
+        # flag. Dictionary patterns are unordered, so an unsafe value in either
+        # merge order is reported, even if a later safe value would override it.
+        rule = 'tier0-no-shell-exec-interpolation-python'
+        for binding, imported, prefix in SUBPROCESS_BINDINGS:
+            with self.subTest(binding=binding):
+                calls = []
+                expected = []
+                for function in ('run', 'call', 'check_call', 'check_output', 'Popen'):
+                    for flag in ('True', '1', 'use_shell', 'False', '0', 'None'):
+                        for fields in (
+                            f'"shell": False, **{{"shell": {flag}}}',
+                            f'**{{"shell": {flag}}}, "shell": False',
+                            f'"shell": {flag}, **{{"shell": False}}',
+                            f'**{{"shell": False}}, "shell": {flag}',
+                        ):
+                            calls.append(f'{prefix}{function}(command, **{{{fields}}})\n')
+                            if flag in ('True', '1', 'use_shell'):
+                                expected.append((rule, len(calls) + 1))
+                    # Non-shell nested data and a safe-only expansion must not
+                    # become shell findings merely because they contain a dict.
+                    calls.extend((
+                        f'{prefix}{function}(command, **{{"cwd": workspace, **{{"shell": False}}}})\n',
+                        f'{prefix}{function}(command, **{{"cwd": workspace, **{{"env": environment}}}})\n',
+                        f'{prefix}{function}(command, **{{"env": {{"shell": True}}}})\n',
+                    ))
+                self.assert_rule_fixture(imported + '\n' + ''.join(calls), 'execute.py', rule,
+                                         expected)
+
     def test_python_shell_exec_reports_ninth_positional_forwarded_shell_flags(self):
         rule = 'tier0-no-shell-exec-interpolation-python'
         for binding, imported, prefix in SUBPROCESS_BINDINGS:
