@@ -241,7 +241,7 @@ jobs:
           if [[ ! -x node_modules/.bin/tsc ]]; then echo "no repo-provided typescript — skipping (add typescript to devDependencies to enable)"; exit 0; fi
           failed=0
           node_modules/.bin/tsc --strict --noEmit -p tsconfig.json || failed=1
-          if [[ -e eslint.config.mjs || -e eslint.config.js || -e .eslintrc.json ]]; then
+          if [[ -e eslint.config.mjs || -e eslint.config.js || -e eslint.config.cjs || -e .eslintrc.json ]]; then
             node_modules/.bin/eslint . --max-warnings 0 || failed=1
           else
             echo "no eslint flat config — skipping typescript-eslint (adopt no-floating-promises, switch-exhaustiveness-check, no-misused-promises to enable)"
@@ -276,7 +276,7 @@ jobs:
           failed=0
           if [[ ! -e pyproject.toml && ! -e ruff.toml && ! -e .ruff.toml ]]; then echo "no ruff config — running ruff defaults"; fi
           python3 -m ruff check . || failed=1
-          if [[ -e mypy.ini || -e .mypy.ini ]] || grep -q '\[tool.mypy\]' pyproject.toml 2>/dev/null; then python3 -m mypy . || failed=1; else echo "no mypy config — skipping (adopt mypy to enable)"; fi
+          if [[ -e mypy.ini || -e .mypy.ini ]] || grep -q '\[tool.mypy\]' pyproject.toml 2>/dev/null || grep -q '^\[mypy\]' setup.cfg 2>/dev/null; then python3 -m mypy . || failed=1; else echo "no mypy config — skipping (adopt mypy to enable)"; fi
           exit "$failed"
       - name: Summarise findings
         if: always()
@@ -354,7 +354,14 @@ jobs:
         if: ${{ !cancelled() && needs.detect.outputs.has-ts == 'true' }}
         run: |
           set -euo pipefail
-          if [[ ! -e knip.json && ! -e knip.jsonc && ! -e .knip.json ]]; then echo "no knip config — skipping (adopt knip to enable)"; exit 0; fi
+          has_knip_config=false
+          for config in knip.json knip.jsonc .knip.json .knip.jsonc knip.ts knip.js knip.config.ts knip.config.js; do
+            if [[ -e "$config" ]]; then has_knip_config=true; break; fi
+          done
+          if [[ "$has_knip_config" == false && -f package.json ]]; then
+            has_knip_config="$(node -e 'const fs = require("fs"); const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")); console.log(Object.prototype.hasOwnProperty.call(pkg, "knip"));')"
+          fi
+          if [[ "$has_knip_config" == false ]]; then echo "no knip config — skipping (adopt knip to enable)"; exit 0; fi
           if [[ ! -x node_modules/.bin/knip && -e package-lock.json ]]; then npm ci --no-audit --no-fund --ignore-scripts 2>&1 | tail -2; fi
           if [[ ! -x node_modules/.bin/knip ]]; then echo "no repo-provided knip — skipping (add knip to devDependencies to enable)"; exit 0; fi
           node_modules/.bin/knip

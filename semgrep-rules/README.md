@@ -1,13 +1,15 @@
 # Tier-0 org Semgrep starter pack
 
-Two live rules, two disabled templates. The bar for a rule to stay live is
-the rollout rule: under 5% false positives over the last 20 PRs.
+Five live rules across two files, plus two disabled templates. The bar for a
+rule to stay live is the rollout rule: under 5% false positives over the last
+20 PRs.
 A rule that guesses at repo-specific names (authz helpers, grant writes)
 cannot clear that bar blind, so those ship as `paths:`-scoped templates
 each repo enables by naming its own functions — not as generic regexes.
 
-- `generic-dangerous-functions.yaml` — live, language-scoped: dynamic `eval`,
-  interpolated JavaScript/TypeScript shell commands, and Python shell-enabled
+- `generic-dangerous-functions.yaml` — live, language-scoped: dynamic
+  JavaScript/TypeScript `eval`, `exec` and `new Function`, Python `eval` and
+  `exec`, interpolated JavaScript/TypeScript shell commands, and Python shell-enabled
   command execution. Python covers always-shell helpers and shell flags supplied
   by explicit `shell=`, literal `**{"shell": ...}` mappings, one nested literal
   expansion (`**{..., **{"shell": ...}}`), or Popen's ninth positional parameter

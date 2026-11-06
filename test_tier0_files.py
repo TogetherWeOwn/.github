@@ -80,6 +80,79 @@ class FileExecutionContract(unittest.TestCase):
             text=True, capture_output=True, timeout=15, check=False,
         )
 
+    def test_eslint_cjs_config_is_not_silently_skipped(self):
+        self.write('tsconfig.json', '{}\n')
+        self.write('node_modules/.bin/tsc', '#!/bin/bash\nexit 0\n').chmod(0o755)
+        self.write('node_modules/.bin/eslint',
+                   '#!/bin/bash\nprintf eslint > "$EXEC_LOG"\nexit "$TOOL_EXIT"\n').chmod(0o755)
+        script = self.step('lint-types', 'TypeScript — tsc')['run']
+        for configured in (False, True):
+            for status in ('0', '17'):
+                with self.subTest(configured=configured, status=status):
+                    if configured:
+                        self.write('eslint.config.cjs', 'module.exports = [];\n')
+                    self.log.unlink(missing_ok=True)
+                    result = self.run_step(script, TOOL_EXIT=status)
+                    self.assertEqual(result.returncode, 1 if configured and status != '0' else 0,
+                                     result.stdout + result.stderr)
+                    self.assertEqual(self.log.exists(), configured)
+
+    def test_mypy_setup_cfg_section_is_not_silently_skipped(self):
+        binary = self.root / 'bin'
+        binary.mkdir()
+        launcher = binary / 'python3'
+        launcher.write_text('#!/bin/bash\n'
+                            'if [[ "$*" == "-m mypy ." ]]; then\n'
+                            '  printf mypy > "$EXEC_LOG"; exit "$TOOL_EXIT"\n'
+                            'fi\nexit 0\n')
+        launcher.chmod(0o755)
+        script = self.step('lint-types', 'Python — ruff plus mypy')['run']
+        for section in ('[metadata]', '[mypy]'):
+            for status in ('0', '17'):
+                with self.subTest(section=section, status=status):
+                    self.write('setup.cfg', section + '\n')
+                    self.log.unlink(missing_ok=True)
+                    result = self.run_step(script, PATH=f'{binary}:/usr/bin:/bin',
+                                           TOOL_EXIT=status)
+                    configured = section == '[mypy]'
+                    self.assertEqual(result.returncode, 1 if configured and status != '0' else 0,
+                                     result.stdout + result.stderr)
+                    self.assertEqual(self.log.exists(), configured)
+
+    def test_knip_native_config_spellings_and_package_key_are_not_skipped(self):
+        self.write('node_modules/.bin/knip',
+                   '#!/bin/bash\nprintf knip > "$EXEC_LOG"\nexit "$TOOL_EXIT"\n').chmod(0o755)
+        binary = self.root / 'bin'
+        binary.mkdir()
+        node = shutil.which('node')
+        self.assertIsNotNone(node, 'hosted selftest needs Node for package.json parsing')
+        (binary / 'node').symlink_to(node)
+        script = self.step('unused-code', 'TypeScript — knip')['run']
+        configs = ('knip.json', 'knip.jsonc', '.knip.json', '.knip.jsonc',
+                   'knip.ts', 'knip.js', 'knip.config.ts', 'knip.config.js', 'package.json')
+        for config in configs:
+            for status in ('0', '17'):
+                with self.subTest(config=config, status=status):
+                    content = '{"knip": {}}\n' if config == 'package.json' else '{}\n'
+                    target = self.write(config, content)
+                    self.log.unlink(missing_ok=True)
+                    result = self.run_step(script, PATH=f'{binary}:/usr/bin:/bin',
+                                           TOOL_EXIT=status)
+                    self.assertEqual(result.returncode, int(status), result.stdout + result.stderr)
+                    self.assertTrue(self.log.exists(), 'configured Knip must execute')
+                    target.unlink()
+        for content in ('{}\n', '{"scripts": {"knip": "echo not-config"}}\n', 'invalid JSON\n'):
+            with self.subTest(package_json=content):
+                self.write('package.json', content)
+                self.log.unlink(missing_ok=True)
+                result = self.run_step(script, PATH=f'{binary}:/usr/bin:/bin', TOOL_EXIT='0')
+                if content.startswith('invalid'):
+                    self.assertNotEqual(result.returncode, 0, 'invalid manifest must not silently skip')
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn('no knip config', result.stdout)
+                self.assertFalse(self.log.exists())
+
     def test_actionlint_uses_native_discovery_for_yaml_only_workflows(self):
         self.write('.github/workflows/ci.yaml', 'on: push\njobs: {}\n')
         binary = self.root / 'bin'

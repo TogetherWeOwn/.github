@@ -28,12 +28,12 @@ it; timeouts live inside the reusable workflow.
 caller job to its `needs:`. Wire exactly one context — `tier-0-ok` is the
 gate's only aggregator, and in report-only mode it always passes.
 
-## The six gates (all auto-detect stack, all run only what changed)
+## The six gates (root-project stack detection; scan scope varies by gate)
 
 | # | Gate | Tools | Skips when |
 |---|------|-------|-----------|
 | 1 | lint + strict types | tsc --strict + typescript-eslint / PHPStan max / clippy -D warnings / ruff + mypy / go vet + gofmt | stack absent, or repo has no config yet (skip notes what to adopt) |
-| 2 | unused code | knip / vulture on changed files / PHPStan max | no config / no changed files |
+| 2 | unused code | knip / vulture with tracked context and changed-path findings / PHPStan max | no config / no changed files |
 | 3 | generator drift | `.tier0-generators` commands, else universal lockfile checks (cargo `--locked`, `go mod tidy -diff`, composer validity; npm/pip freshness needs a declared generator — npm has no reliable dry check), then `git status` must be clean | never — always runs |
 | 4 | workflow checks | actionlint + zizmor + structural rule (no `paths:` on gating workflows) | never — always runs |
 | 5 | security | gitleaks on the PR diff + Semgrep org rules + squawk on changed migrations | squawk only: no changed `migrations/*.sql` |
@@ -47,14 +47,18 @@ false-positive budget on day one.
 
 - Every gate ships `mode: report-only`: gates stay green
   (`continue-on-error`) so callers stay green, but each publishes an
-  honest `verdict` output. Findings land in the step summary and the
-  truthful `tier-0-findings` artifact; the run stays green.
+  honest `verdict` output. Step summaries report gate status; the
+  `tier-0-findings` artifact contains only each job's result and verdict,
+  not finding text, counts, rule IDs or locations. Scanner details remain
+  in the individual job logs; the report-only run stays green.
 - A check becomes required (`mode: enforcing`, per-gate as the workflow
-  grows per-gate inputs, or whole-gate) once its false-positive rate over
-  the last 20 PRs is measured under 5%.
-- Catch-rate bookkeeping: each finding carries its gate id, so the count
-  of reviewer findings that Tier-0 would have caught is a query, not an
-  argument. Every finding below is already labelled for that join.
+  grows per-gate inputs, or whole-gate) only after its false-positive rate
+  over the last 20 PRs is measured under 5%. The verdict artifact alone
+  cannot establish that rate: retain and classify individual findings from
+  the exact-run scanner logs before proposing promotion.
+- Catch-rate bookkeeping requires retaining each finding with its gate id
+  and comparing it with reviewer findings. V1 does not automate that join;
+  aggregate verdicts cannot supply individual catch or false-positive counts.
 
 ## Repo-owned extension points (adopt to enable)
 
@@ -76,6 +80,16 @@ false-positive budget on day one.
 
 ## Limits
 
+- V1 supports only root projects: manifests, lockfiles and tool configs are
+  resolved from the repository root. Detecting a source path in a nested
+  project does not discover or select its project configuration. Nested-only
+  projects and monorepos need their own CI; do not treat a Tier-0 skip as
+  evidence that they were checked.
+- Root manifests conservatively enable stack scans even for docs-only PRs.
+  Lint and Knip may therefore inspect unchanged code; Python unused-code
+  findings are filtered to changed paths after scanning tracked context.
+  Workflow hygiene, generator drift and security are not universally
+  changed-stack-only. This is not a docs-only fast path.
 - Changed-file lists never cross a job boundary: each gate re-runs
   `git diff` itself into a job-local file, so PRs touching thousands of
   files never hit the 128 KiB environment (E2BIG) limit.
