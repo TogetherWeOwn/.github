@@ -4,6 +4,7 @@ Execute the actual YAML run blocks with real Git history, no scanners,
 installers, network or inherited credentials. Only job-local /tmp paths move.
 """
 import copy
+import json
 import os
 import shutil
 import subprocess
@@ -71,7 +72,8 @@ class FileExecutionContract(unittest.TestCase):
 
     def run_step(self, script, **env):
         # The workflow's absolute scratch file must not collide across tests.
-        script = script.replace('/tmp/tier0-changed.txt', str(self.changed))
+        for name in ('tier0-changed.txt', 'changed-py.txt', 'tracked-py.txt', 'vulture.txt'):
+            script = script.replace('/tmp/' + name, str(self.root / name))
         return subprocess.run(
             ['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', script],
             cwd=self.repo, env={**self.env, **env},
@@ -201,7 +203,108 @@ class FileExecutionContract(unittest.TestCase):
                 with self.subTest(job=job, event=event):
                     result = self.produce_changes(job, before, event)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    actual_expected = (set(self.git('ls-files').splitlines())
+                                       if event == 'workflow_dispatch' else expected)
+                    self.assertEqual(set(self.changed.read_text().splitlines()), actual_expected)
+
+    def test_missing_push_base_lists_the_whole_tree_even_with_existing_history(self):
+        self.changed_history()
+        self.write('src/é space.py', 'before\n')
+        self.commit()
+        self.write('docs/latest.md', 'latest\n')
+        self.commit()
+        expected = set(self.git('-c', 'core.quotePath=false', 'ls-files').splitlines())
+        for job in ('detect', 'unused-code', 'security', 'tests'):
+            for event, before in (('push', ''), ('push', '0' * 40),
+                                  ('workflow_dispatch', '')):
+                with self.subTest(job=job, event=event, before=before):
+                    result = self.produce_changes(job, before, event)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertEqual(set(self.changed.read_text().splitlines()), expected)
+
+    def test_changed_paths_preserve_unicode_and_spaces_in_every_producer(self):
+        self.write('src/unchanged.py', 'before\n')
+        base = self.commit()
+        expected = {'src/é space.py', 'migrations/日本語.sql'}
+        for path in expected:
+            self.write(path, 'after\n')
+        self.commit()
+        # Explicitly enable Git's default quoting to prove the command overrides it.
+        self.git('config', 'core.quotePath', 'true')
+        for job in ('detect', 'unused-code', 'security', 'tests'):
+            for event in ('pull_request', 'push'):
+                with self.subTest(job=job, event=event):
+                    result = self.produce_changes(job, base, event)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(set(self.changed.read_text().splitlines()), expected)
+
+    def test_vulture_uses_tracked_context_and_reports_only_changed_paths(self):
+        self.write('src/é space.py', 'def referenced():\n    return 1\n')
+        self.write('src/caller.py', 'referenced()\n')
+        self.write('src/old.py', 'def old_unused():\n    return 2\n')
+        self.write('src/colon:name.py', 'def unused():\n    return 3\n')
+        self.commit()
+        # These are deliberately untracked and must not become scanner inputs.
+        self.write('.tier0-gate/helper.py', 'gate_owned()\n')
+        self.write('scratch.py', 'untracked()\n')
+        changed_paths = ['src/é space.py', 'src/colon:name.py']
+        self.changed.write_text('\n'.join(changed_paths) + '\n')
+        binary = self.root / 'bin'
+        binary.mkdir()
+        launcher = binary / 'python3'
+        launcher.write_text(
+            '#!/bin/bash\n'
+            'if [[ "${1-} ${2-}" == "-m pip" ]]; then exit 0; fi\n'
+            f'exec "{sys.executable}" -I "$@"\n'
+        )
+        launcher.chmod(0o755)
+        # Stub only Vulture, not the workflow's result filter. Model a usage in
+        # an unchanged caller so a changed-file-only scan exposes the false positive.
+        scanner = self.root / 'scanner.py'
+        scanner.write_text('''import json, os, sys
+from pathlib import Path
+paths = sys.argv[1:]
+Path(os.environ['EXEC_LOG']).write_text(json.dumps(paths))
+if os.environ['SCAN_EXIT'] in ('1', '2'):
+    print('scanner error')
+    raise SystemExit(int(os.environ['SCAN_EXIT']))
+if os.environ['SCAN_EXIT'] == '0':
+    raise SystemExit(0)
+if 'src/caller.py' not in paths:
+    print('src/é space.py:1: unused function referenced (100% confidence)')
+print('src/old.py:1: unused function old_unused (100% confidence)')
+if os.environ['CHANGED_FINDING'] == 'yes':
+    print(str(Path('src/colon:name.py').resolve()) + ':1: unused function unused (100% confidence)')
+raise SystemExit(3)
+''')
+        step = self.step('unused-code', 'Python — vulture')
+        script = step['run'].replace('python3 -m vulture', f'python3 "{scanner}"')
+        tracked = sorted(['src/é space.py', 'src/caller.py', 'src/old.py',
+                          'src/colon:name.py'])
+        for status, changed_finding, expected_status in (
+                ('3', 'no', 0), ('3', 'yes', 1), ('0', 'no', 0),
+                ('1', 'no', 1), ('2', 'no', 2)):
+            with self.subTest(status=status, changed_finding=changed_finding):
+                result = self.run_step(script, PATH=f'{binary}:/usr/bin:/bin',
+                                       SCAN_EXIT=status, CHANGED_FINDING=changed_finding)
+                self.assertEqual(result.returncode, expected_status,
+                                 result.stdout + result.stderr)
+                self.assertEqual(json.loads(self.log.read_text()),
+                                 ['--min-confidence', '80', '--', *tracked])
+                self.assertNotIn('old_unused', result.stdout)
+                self.assertNotIn('unused function referenced', result.stdout)
+                if status == '3' and changed_finding == 'yes':
+                    self.assertIn('unused function unused', result.stdout)
+                if status in ('1', '2'):
+                    self.assertIn('scanner error', result.stdout)
+        self.log.unlink()
+        self.changed.write_text('docs/note.md\n')
+        result = self.run_step(script, PATH=f'{binary}:/usr/bin:/bin')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('no changed Python files', result.stdout)
+        self.assertFalse(self.log.exists(), 'no changed Python means no scan')
+        self.assertEqual(self.jobs['unused-code']['continue-on-error'],
+                         "${{ inputs.mode == 'report-only' }}")
 
     def test_detection_and_test_entrypoint_still_receive_deletions(self):
         # Scanner-only filtering must not suppress deletion-triggered stacks

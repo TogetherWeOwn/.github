@@ -157,14 +157,14 @@ jobs:
           elif [[ -n "$TIER0_BEFORE" && "$TIER0_BEFORE" != "0000000000000000000000000000000000000000" ]]; then
             base="$TIER0_BEFORE"
           else
-            base="$(git rev-parse HEAD~1 2>/dev/null || echo '')"
+            base=""
           fi
           if [[ -z "$base" ]]; then
             echo "no base resolvable; treating the whole tree as changed"
-            git ls-files > /tmp/tier0-changed.txt
+            git -c core.quotePath=false ls-files > /tmp/tier0-changed.txt
           else
             git cat-file -e "$base" || { echo "base not in local history; failing closed"; exit 1; }
-            git diff --name-only --no-renames "$base" HEAD -- > /tmp/tier0-changed.txt || git ls-files > /tmp/tier0-changed.txt
+            git -c core.quotePath=false diff --name-only --no-renames "$base" HEAD -- > /tmp/tier0-changed.txt || git -c core.quotePath=false ls-files > /tmp/tier0-changed.txt
           fi
           echo "changed files: $(wc -l < /tmp/tier0-changed.txt)"
       - name: Detect stacks from manifests and changed files
@@ -330,13 +330,13 @@ jobs:
           elif [[ -n "$TIER0_BEFORE" && "$TIER0_BEFORE" != "0000000000000000000000000000000000000000" ]]; then
             base="$TIER0_BEFORE"
           else
-            base="$(git rev-parse HEAD~1 2>/dev/null || echo '')"
+            base=""
           fi
           if [[ -z "$base" ]]; then
-            git ls-files > /tmp/tier0-changed.txt
+            git -c core.quotePath=false ls-files > /tmp/tier0-changed.txt
           else
             git cat-file -e "$base" || { echo "base not in local history; failing closed"; exit 1; }
-            git diff --name-only --no-renames --diff-filter=d "$base" HEAD -- > /tmp/tier0-changed.txt || git ls-files > /tmp/tier0-changed.txt
+            git -c core.quotePath=false diff --name-only --no-renames --diff-filter=d "$base" HEAD -- > /tmp/tier0-changed.txt || git -c core.quotePath=false ls-files > /tmp/tier0-changed.txt
           fi
           echo "changed files: $(wc -l < /tmp/tier0-changed.txt)"
       # Gate-owned hashed pip pins (this workflow's own repo+SHA: external
@@ -365,9 +365,33 @@ jobs:
           python3 -m pip install --disable-pip-version-check --require-hashes -q -r .tier0-gate/tier0/requirements-unused.txt 2>&1 | tail -1
           grep '\.py$' /tmp/tier0-changed.txt > /tmp/changed-py.txt || true
           if [[ ! -s /tmp/changed-py.txt ]]; then echo "no changed Python files — skipping"; exit 0; fi
-          # Intentional word-splitting of a file list below.
-          # shellcheck disable=SC2046
-          python3 -m vulture --min-confidence 80 $(tr '\n' ' ' < /tmp/changed-py.txt) || {
+          # Scan tracked project context, then restrict findings to changed paths.
+          git -c core.quotePath=false ls-files -- '*.py' > /tmp/tracked-py.txt
+          mapfile -t python_files < /tmp/tracked-py.txt
+          scan_status=0
+          python3 -m vulture --min-confidence 80 -- "${python_files[@]}" > /tmp/vulture.txt || scan_status=$?
+          # Vulture uses 3 for unused-code findings; other failures must not be filtered away.
+          if [[ "$scan_status" != 0 && "$scan_status" != 3 ]]; then
+            cat /tmp/vulture.txt
+            exit "$scan_status"
+          fi
+          python3 - <<'PY' || {
+          import re
+          import sys
+          from pathlib import Path
+
+          changed = {Path(path).resolve() for path in Path('/tmp/changed-py.txt').read_text().splitlines()}
+          findings = False
+          for line in Path('/tmp/vulture.txt').read_text().splitlines():
+              match = re.match(r'^(.*):\d+: ', line)
+              if not match:
+                  print(f'::error::unexpected vulture output: {line}')
+                  sys.exit(1)
+              if Path(match[1]).resolve() in changed:
+                  print(line)
+                  findings = True
+          sys.exit(1 if findings else 0)
+          PY
             echo "::warning::vulture reported candidates above (advisory in report-only mode)"
             exit 1
           }
@@ -606,13 +630,13 @@ jobs:
           elif [[ -n "$TIER0_BEFORE" && "$TIER0_BEFORE" != "0000000000000000000000000000000000000000" ]]; then
             base="$TIER0_BEFORE"
           else
-            base="$(git rev-parse HEAD~1 2>/dev/null || echo '')"
+            base=""
           fi
           if [[ -z "$base" ]]; then
-            git ls-files > /tmp/tier0-changed.txt
+            git -c core.quotePath=false ls-files > /tmp/tier0-changed.txt
           else
             git cat-file -e "$base" || { echo "base not in local history; failing closed"; exit 1; }
-            git diff --name-only --no-renames --diff-filter=d "$base" HEAD -- > /tmp/tier0-changed.txt || git ls-files > /tmp/tier0-changed.txt
+            git -c core.quotePath=false diff --name-only --no-renames --diff-filter=d "$base" HEAD -- > /tmp/tier0-changed.txt || git -c core.quotePath=false ls-files > /tmp/tier0-changed.txt
           fi
           echo "changed files: $(wc -l < /tmp/tier0-changed.txt)"
       - name: gitleaks secret scan on the PR diff
@@ -724,13 +748,13 @@ jobs:
           elif [[ -n "$TIER0_BEFORE" && "$TIER0_BEFORE" != "0000000000000000000000000000000000000000" ]]; then
             base="$TIER0_BEFORE"
           else
-            base="$(git rev-parse HEAD~1 2>/dev/null || echo '')"
+            base=""
           fi
           if [[ -z "$base" ]]; then
-            git ls-files > /tmp/tier0-changed.txt
+            git -c core.quotePath=false ls-files > /tmp/tier0-changed.txt
           else
             git cat-file -e "$base" || { echo "base not in local history; failing closed"; exit 1; }
-            git diff --name-only --no-renames "$base" HEAD -- > /tmp/tier0-changed.txt || git ls-files > /tmp/tier0-changed.txt
+            git -c core.quotePath=false diff --name-only --no-renames "$base" HEAD -- > /tmp/tier0-changed.txt || git -c core.quotePath=false ls-files > /tmp/tier0-changed.txt
           fi
           echo "changed files: $(wc -l < /tmp/tier0-changed.txt)"
       - name: Diff coverage and mutation via the repo test entrypoint
