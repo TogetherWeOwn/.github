@@ -1,0 +1,51 @@
+{
+  "id": 26726857,
+  "name": "baseline-codeql",
+  "target": "branch",
+  "source_type": "Organization",
+  "source": "TogetherWeOwn",
+  "enforcement": "evaluate",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "~DEFAULT_BRANCH"
+      ]
+    },
+    "repository_property": {
+      "exclude": [],
+      "include": [
+        {
+          "name": "governance",
+          "source": "custom",
+          "property_values": [
+            "standard"
+          ]
+        },
+        {
+          "name": "codeql",
+          "source": "custom",
+          "property_values": [
+            "required"
+          ]
+        }
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "code_scanning",
+      "parameters": {
+        "code_scanning_tools": [
+          {
+            "tool": "CodeQL",
+            "security_alerts_threshold": "high_or_higher",
+            "alerts_threshold": "errors"
+          }
+        ]
+      }
+    }
+  ],
+  "node_id": "RRS_lACkVXNlcs4TEfOWzgGX0ck",
+  "bypass_actors": []
+}

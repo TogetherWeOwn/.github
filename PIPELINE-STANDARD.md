@@ -1,120 +1,51 @@
-# Pipeline standard: one PR, one review, one merge, one deploy (every TogetherWeOwn repo)
+# Pipeline standard — moved
 
-Owner directive, 2026-10-10. Our own process was the biggest blocker. Each rule below removes a step that cost time,
-CI minutes or model allowance without making anything safer. It sits alongside [CI-STANDARD.md](CI-STANDARD.md),
-which governs what CI runs; this document covers the whole path from PR to production.
+The single canonical PR, CI, deploy and release contract is now
+[STANDARD.md](STANDARD.md). This path and its legacy section anchors are
+retained for existing links; do not add policy here. Follow the links below
+to the canonical sections.
 
-Every repo links this file from its CONTRIBUTING.md or README. New repos start from the
-[workflow templates](workflow-templates/).
+<a id="pipeline-standard-one-pr-one-review-one-merge-one-deploy-every-togetherweown-repo"></a>
 
-## 1. Review
+[Pipeline standard](STANDARD.md)
 
-- **Required checks come from the ruleset.** Every protect-main ruleset requires the repo's CI and
-  `Devin Review`. No approving review is required. **CodeRabbit is advisory**: answer each of its
-  findings (fixed, rejected with evidence, or duplicate), but never wait for it and never post
-  `@coderabbitai` commands to trigger it. Read the live set with
-  `gh api repos/<repo>/rules/branches/main`.
-- **The Paperclip Review check is retired (2026-10-31).** No ruleset requires it. Do not wait for it, and do not
-  ask anyone to run or waive it.
-- **Answer every finding.** Fix each review finding, or reply on the PR with evidence of why it does not apply.
-- **Batch fixes.** Push the fixes for one review round together. Every push re-runs CI and the reviews.
-- Never fake or bypass a required check.
+<a id="1-review"></a>
 
-## 2. Merge
+[1. Review](STANDARD.md#2-pr-review-and-merge)
 
-- **The agent that did the work merges it (owner decision 2026-10-31).** A PR merges with no owner approval once
-  every required check is green and each finding is fixed or answered with evidence.
-- **Production deploys need the owner.** If a merge to the default branch deploys production (today two-web-next
-  and two-bot-next), the merge needs the owner's approval through `request_confirmation` on the card. So does
-  every other production deploy, such as a manual dispatch or promotion.
-- **No rebase churn.** Every repo's rulesets have `strict_required_status_checks_policy=false`, so a BEHIND PR
-  merges as-is once its checks and review pass.
-- **Rule:** never update-branch, rebase or merge main into a PR unless it is DIRTY (has conflicts). Each refresh
-  pushes a new head and re-runs all CI and the reviews.
-- Host `pr_automerge.sh` enables `--auto --squash` and no longer runs update-branch, except for repos that are
-  strict.
+<a id="2-merge"></a>
 
-### 2a. Merge queue (not enabled)
+[2. Merge](STANDARD.md#2-pr-review-and-merge)
 
-The merge queue is off, because non-strict checks already remove the churn it would fix. If a repo enables it
-later, every workflow that provides a required check must add `merge_group:`; the starter `ci.yml` template
-already does.
+<a id="2a-merge-queue-not-enabled"></a>
 
-## 3. Deploy
+[2a. Merge queue (not enabled)](STANDARD.md#2-pr-review-and-merge)
 
-- **Production promotes the last green staging SHA.** The production deploy takes the commit of the most recent
-  successful staging deploy on main. It no longer demands the newest main SHA, which main churn kept cancelling,
-  and nobody freezes main to deploy.
+<a id="3-deploy"></a>
 
-### 3a. Promote the last staging-verified commit
+[3. Deploy](STANDARD.md#3-deploy-and-staging)
 
-The reusable workflow `.github/workflows/promote-staging.yml` in this repo has these inputs and output:
+<a id="3a-promote-the-last-staging-verified-commit"></a>
 
-| | Name | Meaning |
-|---|---|---|
-| Input (required) | `staging-workflow` | The repo's staging workflow file, e.g. `deploy-staging.yml` |
-| Input (optional) | `sha` | Empty means the latest successful run of that workflow on main |
-| Output | `sha` | The commit to deploy |
+[3a. Promote the last staging-verified commit](STANDARD.md#3-deploy-and-staging)
 
-The caller keeps its own environment and exact-SHA gates and checks out `needs.<job>.outputs.sha`. Two rules:
+<a id="4-ci"></a>
 
-- `staging-workflow` must be a workflow that ONLY deploys staging, for example a separate `deploy-staging.yml`.
-  Never point it at the workflow that also runs the production deploy. A successful production run, or a
-  dispatch where every job is skipped, would otherwise count as "staging-verified".
-- Before deploying, the caller verifies that the commit is an ancestor of `origin/main`. A `sha` override must
-  never ship an unmerged commit with production secrets.
+[4. CI](STANDARD.md#4-ci-rules)
 
-Adopted in two-bot-next #755 and two-web-next #629. Never freeze main to deploy.
+<a id="5-release"></a>
 
-## 4. CI
+[5. Release](STANDARD.md#5-release)
 
-- **Change-gated, per [CI-STANDARD.md](CI-STANDARD.md).** Nightly and heavy suites run on schedule and on push to
-  main, never on every PR push. Superseded PR runs are cancelled early. Push-to-main, deploy and release runs are
-  never cancelled.
-- The CI rules, including "no nightly or scheduled-only suites on every pull request", live in
-  [CI-STANDARD.md](CI-STANDARD.md) and are not repeated here.
+<a id="5a-no-host-release-train"></a>
 
-## 5. Release
+[5a. No host release train](STANDARD.md#no-host-release-train)
 
-- **Applications use numeric CalVer:** stable `YYYY.MDD.P` (`vYYYY.MDD.P`), staging
-  `YYYY.MDD.P-canary.N` (`canary/vYYYY.MDD.P-canary.N`). Month is not zero-padded;
-  day is two digits. Examples: `2026.105.0`, `2026.303.0`, `2026.1028.0`.
-- The [shared releaser](actions/calver/README.md) and its step adapter share one
-  implementation. Callers pin both workflow and tooling to the same full commit
-  SHA. Package/plugin/API compatibility versions remain SemVer.
-- Counters come from complete repository tag history, not npm publications. This
-  adopts upstream Paperclip's syntax, not its nightly/beta/three-day-soak policy.
-  Existing staging, approval, artifact, smoke, takeover and rollback gates stay.
-- A caller's transaction boundary spans plan, version stamping, deploy and publish.
-  Planning is otherwise advisory. Publish the exact frozen version after the
-  required successful deployment evidence; never relabel a stamped build after
-  a collision. Promotion uses its attempt's UTC date and the same saved artifact.
-- Only stables create Releases. Canary tags carry source run/attempt/artifact
-  provenance. Historical repairs and Routeware build releases never regress Latest.
-- TWO bot keeps its daily live-production digest, quiet-day/rollback checks and
-  legacy repair/SBOM adapters outside the production workflow. Kagi keeps its
-  release-selection and package/tag equality gate; it releases before deployment.
-  Routeware keeps SemVer API tags and a separate `build/` CalVer namespace; its
-  disabled production lane stays disabled.
-- Do not globally enable immutable Releases: asynchronous bot SBOM uploads and
-  repairs require mutable assets. Never move tags or freeze main for a release.
+<a id="6-self-blocking-anti-patterns-each-measured-on-2026-10-10"></a>
 
-### 5a. No host release train
+[6. Self-blocking anti-patterns](STANDARD.md#banned)
 
-The old release-please/host-timer merge-freeze description is retired. Do not
-create a host timer, cron, ruleset mutation or release train for this migration.
-Use existing GitHub workflows and native task dependencies/monitors. GitHub
-concurrency preserves a running transaction with `cancel-in-progress: false`, but
-pending runs can replace older pending runs: it is not a FIFO deployment queue.
-
-## 6. Self-blocking anti-patterns (each measured on 2026-10-10)
-
-| Anti-pattern | Evidence (24h, two-bot-next + two-web-next) | Fix |
-|---|---|---|
-| Review on every push and on drafts | 1,081 reviews for 180 PRs (about 6 per PR); **36% superseded**, 17% incomplete or errored, 20% ended 5/5; 28% of reviews were on drafts | §1 review gate, no draft reviews |
-| CI churn | **About 220 cancelled runs per day**: each push restarts suites and BEHIND PRs are rebased onto every merge | §2 merge queue, §4 cancel-superseded |
-| Nightly suites on PRs | two-bot-next `nightly` ran **168 times** on PRs; `supply-chain` 259 times | §4 schedule/change-gate |
-| Exact-newest-SHA production gate vs main churn | `deploy-staging` superseded/cancelled 8 times; main **frozen twice** in one day to deploy | §3 promote last green staging |
-| Release PR racing main | release PR regenerated 5+ times; manual merge freeze | §5 |
-| Automation fighting itself | idle-waker woke review cards that could never publish (102/117 wakes); the stuck-run reaper parked review cards (mentions silently skipped); auto-merge merged unreviewed PRs into a non-default base | Host automation runbook (`ops/productivity/PIPELINE-HOST-AUTOMATION.md` on the operator host) |
-| Server-side drops | about 50% of GitHub webhooks rejected (`credentials` lease contention); a duplicate review row overwrote a 5/5 check | Paperclip fork tog.6/tog.7 |
+The historical 2026-10-10 measurement table and its per-row fixes are retired,
+not relocated to that section. Some fixes referred to superseded merge/release
+policy and host automation; consult repository history for that dated evidence.
+The link above points to the current banned practices, not the old evidence table.

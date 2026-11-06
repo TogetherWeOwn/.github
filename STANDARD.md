@@ -1,0 +1,521 @@
+# TogetherWeOwn PR, CI and release standard
+
+This is the canonical org-wide standard. It consolidates PIPELINE-STANDARD.md and
+CI-STANDARD.md; those paths remain compatibility links. Repositories may add
+stricter, stack-specific requirements, not silently weaken this baseline.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers contribution syntax and attestations;
+[NEW-REPO-CHECKLIST.md](NEW-REPO-CHECKLIST.md) covers bootstrap.
+
+## 1. Governance and required gates
+
+The policy below is the target standard, **not a claim that rollout has finished**.
+Read effective rules before merging:
+`gh api repos/TogetherWeOwn/<repo>/rules/branches/<branch>` and
+`gh api 'repos/TogetherWeOwn/<repo>/rulesets?includes_parents=true'`.
+On 2026-11-06, 17 repos required Devin Review; enrollment and org targeting were
+still being qualified. An Evaluate ruleset observes; it does not enforce.
+
+### Custom properties
+
+Configure these org custom properties as single-select strings. Values are explicit
+on existing repositories and verified during bootstrap; defaults alone do not prove
+that a new repo inherits the intended protections.
+
+| Property | Allowed values | Default | Assignment |
+|---|---|---|---|
+| `governance` | `standard`, `fork-contrib`, `fixture` | `standard` | Standard for product/local-development repos; explicitly classify contribution forks and fixtures before rollout. |
+| `codeql` | `required`, `deferred` | `required` | Required on public standard repos; deferred on the two private standards below and excluded repos. |
+| `ci` | `standard`, `custom` | `custom` | Standard only after a real `ci-ok` producer is merged and verified; custom otherwise. |
+
+Contribution-only forks `acpx`, `OmniRoute`, `Cli-Proxy-API-Management-Center` and
+`sub2api` use `governance=fork-contrib`; they are outside the new baselines.
+Fixtures `paperclip-shadow-staging`, `qerith` and `velmora` use `fixture` until
+explicitly reclassified. Forks with maintained local development (`paperclip`,
+`CLIProxyAPI`, `hindsight`) remain `standard`: being a fork is not itself an exemption.
+For a protected non-default local branch (for example CLIProxyAPI's `tog`), retain
+explicit repo-level protection; the baseline default-branch target does not cover it.
+
+**Private-repo boundary:** `kofra-cloud` and `open-serverless-vault` remain
+`governance=standard`, `codeql=deferred`. CodeQL stays disabled there until an
+owner decision on paid Code Security. Do not request/enable Code Security or attach
+security configuration 17 to them. Devin remains required; private Devin charges
+are accepted. Public repositories are unchanged by this private-repo exception.
+For every new private repo, explicitly set `codeql=deferred` before enrollment or
+configuration attachment and keep CodeQL disabled until the owner authorizes paid
+scanning. The org-wide `required` default is not that authorization.
+
+### Reviewed ruleset source
+
+JSON under [rulesets/](rulesets/README.md) is reviewable source; committing it does
+not change live settings. `baseline-review` (26726856) and `baseline-codeql`
+(26726857) are sanitized live org exports supplied by the operator on 2026-11-06
+at 21:51 UTC, when both were already in **Evaluate**. Both baselines target
+`~DEFAULT_BRANCH`, have **no bypass actors**, and retain `evaluate` enforcement
+pending a separately authorized activation:
+
+| Ruleset | Repository condition | Rules |
+|---|---|---|
+| [baseline-review](rulesets/baseline-review.json) | `governance=standard`, including private repos | PR required, squash only, 0 GitHub approving reviews, resolved review threads; required commit status `Devin Review` pinned to App **811515**, non-strict. No code-scanning rule. |
+| [baseline-codeql](rulesets/baseline-codeql.json) | `governance=standard` **AND** `codeql=required` | CodeQL code scanning: `security_alerts_threshold=high_or_higher`, `alerts_threshold=errors`, copied from two-web-next ruleset 24197355. |
+| [baseline-ci](rulesets/baseline-ci.json) | `governance=standard` **AND** `ci=standard` | Optional, **disabled / not yet applied**: `ci-ok` pinned to GitHub Actions App **15368**, non-strict. |
+
+Devin Review is a **commit status**, not a check-run. A success from another App is
+not the pinned status. Require completed analysis at the exact reviewed head.
+CodeRabbit is **advisory**, never a required check: answer each finding, but never
+wait for a review to start and never post commands to trigger it. The retired
+Paperclip Review check is not a gate. No check may be forged, bypassed or waived.
+Zero required GitHub approvals does not remove independent task/security review.
+
+Existing org rulesets **25234562** (default-branch deletion/force-push protection)
+and **26327170** (`pr-standards`) stay unchanged. The required workflow remains
+pinned to **97fc0e24038021dfaa1fc9da754c6c5d6429130f**; merging documentation or
+workflow changes here does not repin that live rule. Repository-scoped snapshots
+are in [rulesets/exports/](rulesets/exports/); they do not expose complete org
+repository targeting and must not be used as replacement create payloads.
+
+### Rollout: qualify, Evaluate, then Active
+
+1. Verify classification/property values on all targets, including every exclusion
+   and both private `deferred` values. Prove new-repo inheritance with a test repo;
+   never assume that community-file inheritance installs Actions workflows.
+   Qualify new-repository and default-branch creation under the effective rules.
+   If bootstrap cannot create the initial ref before Devin can report, stop
+   activation and route a separate reviewed policy decision; do not silently add
+   a branch-creation exemption to the exported ruleset source.
+2. Qualify automatic Devin Review for user and bot authors on every standard repo.
+   For every CodeQL target, confirm a successful supported-language analysis on the
+   target branch; missing target-branch analysis can block code-scanning merges.
+   Unsupported/no-code repos need explicit classification, not fake scans.
+3. Attach security configuration **17** (GitHub recommended) **only to
+   `codeql=required` targets**; enforce it with advanced setup allowed so existing
+   advanced setups (including nntunev2 and paperclip-plugin-vuln-sentinel) survive.
+   Never attach it to the two private deferred repos or enable paid Code Security.
+4. Create **both baseline-review and baseline-codeql in Evaluate together**.
+   Canary on agent-toolkit, cliproxy-provider-synthetic and paperclip-ops; inspect
+   rule insights for three days. An absent status/analysis is a rollout defect,
+   not a reason to bypass. Record actual target lists, head SHAs and rule insights.
+5. After qualification, promote **both baselines to Active together** for canaries,
+   then all eligible targets; inform the release lane before web/bot are affected.
+   This document/PR applies no settings and authorizes no early activation.
+6. Verify effective rules and fresh PR evidence before separately removing duplicate
+   repo Devin/CodeQL entries. Preserve all unique repo checks, strictness and branch
+   coverage. Rollback or weakening an active security gate needs its normal approval;
+   never add a bypass actor as a rollout workaround.
+
+### Repo-specific extras remain
+
+| Repo | Retain outside the new baseline |
+|---|---|
+| two-web-next | `e2e-ok`, stack CI and gitleaks. Its duplicate CodeQL rule is removable only after the org rule is active and verified. |
+| two-bot-next | Stack CI and gitleaks; same verified-before-removal condition for duplicate CodeQL. |
+| open-serverless-vault | All 14 extra checks; private CodeQL remains deferred. |
+| kofra-cloud | `check`, pinned to GitHub Actions App 15368 in its settings rollout; private CodeQL remains deferred. |
+| paperclip-ops | `public-safety` and `pr-lint` (inherited ruleset 25135242), including inherited strict status checks. |
+| paperclip-operator-toolkit | Secret scan and disclosure scan. |
+
+`ci-ok` and gitleaks stay repo-level where job names differ. Do not add optional
+baseline-ci until its exact producer exists on main and has reported there.
+
+## 2. PR review and merge
+
+- Open a draft while incomplete; mark ready when reviewable work is complete.
+  Use the org PR template, honest attestation, Conventional Commits title and squash
+  only. Keep internal tracker references out of public and private GitHub metadata.
+- Answer every finding in its own thread: `Fixed in <commit sha>`,
+  `Rejected: <proof>` or `Duplicate of <link>`. A green review status alone does
+  not dispose findings. Batch fixes per review round and push once.
+- GitHub Actions is the CI of record. Record run/job links and conclusions for the
+  **exact PR head SHA**. Full suites and CI mirrors never run on the shared host
+  or an offload fallback. Only a focused reproduction of one failing test/crate
+  is local diagnostic work; it is not required-check evidence.
+- Merge only after every required check is green, findings are dispositioned and
+  applicable independent review is complete. The **final-stage reviewer merges in
+  the same run as approval**; the author merges only when no review stage exists.
+  Pin the squash merge request to the reviewed head SHA. Done means merged, with
+  the squash SHA recorded, not merely approved.
+- A production deploy or merge with an automatic production path needs exact-head
+  **Release Manager** acceptance, not owner approval. Check workflows (including
+  schedules/chained promotions) and hosting-provider deployments/checks; unknown
+  classification is treated as production. Manual-only production dispatch is
+  gated when dispatched. Non-production merges need no extra confirmation.
+- Avoid rebase churn for non-strict baselines: a BEHIND PR need not refresh merely
+  because main moved. **Not every effective ruleset is non-strict** (paperclip-ops
+  inherits strict checks). Follow effective rules; restack for real conflicts or
+  an actual strict requirement, not routine main churn.
+- Merge queue is not enabled by this standard. Before enabling one, every required
+  producer must support `merge_group`; do not change current gates implicitly.
+
+## 3. Deploy and staging
+
+Production promotes the last **qualified staging SHA**, not necessarily newest
+main. Never freeze main merely to deploy. The reusable
+[`.github/workflows/promote-staging.yml`](.github/workflows/promote-staging.yml)
+accepts required `staging-workflow`, optional `verify-job` and optional `sha`, and
+outputs `sha`. **Standard callers must set `verify-job`** to the job that actually
+verifies staging, so a successful workflow with that job skipped cannot qualify.
+The reusable permits an empty `verify-job` for workflows that cannot succeed
+without verification; do not rely on that fallback for standard adoption.
+
+```yaml
+jobs:
+  target:
+    uses: TogetherWeOwn/.github/.github/workflows/promote-staging.yml@<reviewed-full-commit-sha>
+    with:
+      staging-workflow: e2e-staging.yml
+      verify-job: staging-journeys
+      sha: ${{ inputs.sha }}
+```
+
+Use a staging-only workflow; a successful production run or all-skipped dispatch
+is not staging evidence. An explicit `sha` selects a target without verifying it:
+for both automatic selection and overrides, the caller must require successful
+qualification for that exact SHA. Verify it is an ancestor of `origin/main`,
+check out that exact SHA, and preserve the caller's qualification/e2e, artifact,
+migration, rollback, environment and exact-head Release Manager gates.
+
+Staging and preview must have **zero recurring always-on runtime cost when idle**.
+Inventory Containers, Durable Objects and alarms/keep-alive, schedules, Stream
+inputs and database compute, not just whether a container sleeps. Pipeline-owned
+startup/readiness must precede qualification and bind to the tested SHA/environment.
+Use a bounded active window and native stop/scale-to-zero plus expiry/cleanup on
+success, failure and cancellation. Retain evidence; unsupported cleanup is a real
+prerequisite, not permission to skip qualification. Do not add host timers or probes
+that resurrect idle resources. An always-on exception requires explicit dated owner
+spend approval with resource scope, recurring cost and expiry/review date. Production
+is untouched; sleeping never waives security, health, qualification or release gates.
+
+## 4. CI rules
+
+The numbered CI rules below retain the detailed change-gating and quality contract.
+Their numbering is stable for links from older callers. All scheduled staging
+checks, including nightly scans and daily exploration, must open and close the
+bounded pipeline-owned window in §3; no schedule keeps idle staging alive.
+A test-local full stack below runs inside GitHub Actions, not on the shared host.
+
+1. **Change detection job.** Every workflow with jobs heavier than ~2 min
+   starts with a `changes` job that diffs the PR against its merge base with
+   native `git diff --name-only --no-renames -z <merge-base> <head>` (no
+   unpinned third-party action) and outputs one boolean per area (e.g. `web`,
+   `bot`, `docs`). Always pass `--no-renames`: with rename detection on, a
+   moved file lists only its destination, so `git mv CHANGELOG.md
+   docs/CHANGELOG.md` looks docs-only and `git mv src/x.ts docs/x.ts` hides a
+   deleted code file. The flag makes a rename a delete plus an add, so both
+   paths reach the filter. `-z` emits lossless NUL-separated paths rather
+   than quoted lines; parse bytes without stripping whitespace. A failed
+   fetch, merge-base or diff fails the detector, never reports an empty
+   successful change. Run embedded Python with `python3 -I -` so checked-out
+   modules and `PYTHONPATH` cannot replace stdlib imports ([isolated mode](https://docs.python.org/3/using/cmdline.html#cmdoption-I)).
+   Docs-only requires EVERY changed path to match a docs area, with no non-doc
+   area hit. Unclassified paths conservatively force `full_run=true`; a false
+   `docs_only` flag alone does not select a heavy job. Sources:
+   [git diff](https://git-scm.com/docs/git-diff),
+   [fnmatchcase](https://docs.python.org/3/library/fnmatch.html).
+   Use the reusable
+   `changes.yml` in this repo: required JSON-string inputs are `areas-json`
+   (an object mapping area names to glob arrays) and `full-run-globs-json`
+   (an array of full-run globs). Optional inputs are `docs-areas-json` and
+   `base-ref`. The `areas` output is one JSON object of per-area booleans;
+   `full_run` and `docs_only` are string booleans. Read an area's flag with
+   `fromJSON(needs.changes.outputs.areas).<area>`, not a separate area output.
+2. **Job-level gating.** Heavy jobs run only if their area changed or a full run
+   is required, for example:
+   `if: fromJSON(needs.changes.outputs.areas).web || needs.changes.outputs.full_run == 'true'`.
+   Area flags are JSON booleans, not separate string outputs; do not compare them
+   to the string `'true'`.
+   NEVER put workflow-level `on: pull_request: paths:` on a workflow that
+   produces a required check. GitHub then never reports the check, and the PR
+   hangs on "Expected — waiting" forever.
+3. **One required aggregator.** The target stack-CI aggregator is `ci-ok`
+   (`if: always()`, `needs:` every gated job), which passes when every needed
+   job succeeded or was skipped. Require the aggregator rather than individual
+   skippable jobs; preserve the repo-specific extra checks listed in §1 until
+   separately reviewed migration. A failed or cancelled needed job fails CI.
+   The target baseline requires `Devin Review`; verify effective rollout per §1.
+   **CodeRabbit is advisory**, never
+   a required check: answer each of its findings (fixed, rejected with
+   evidence, or duplicate), but never wait for it and never post
+   `@coderabbitai` commands to trigger it.
+4. **Full-run triggers.** Changes to dependency manifests or lockfiles,
+   `.github/**`, shared/common code, build/tooling config, or the
+   change-detection filter itself make EVERYTHING run. Include root AND
+   nested manifests/locks for each supported stack: `package.json`,
+   `Cargo.toml`, `go.mod`, `pyproject.toml`, `requirements*.txt`, `Gemfile`,
+   `composer.json` and their lockfiles. fnmatch is not recursive globstar:
+   `**/package.json` alone does not match root `package.json`. Include shared
+   workspace/compiler inputs such as `pnpm-workspace.yaml`, `go.work`,
+   `go.work.sum`, `tsconfig*.json` and `.cargo/**`, even under a code area.
+   Keep the reference example and starter filters aligned. Any path outside
+   the supplied area map forces a full run, including unknown deleted sources;
+   extend the map only when a narrower selection is demonstrably safe.
+5. **Safety net.** `push` to `main` plus a nightly `schedule` run the FULL
+   suite, including mutation/long gates. A regression that slips past a PR is
+   caught within hours.
+6. **Always run (cheap or security).** PR title lint, secret scanning, the
+   `ci-ok` aggregator. CodeQL/supply-chain scans run when code or
+   dependencies change, plus weekly on schedule.
+7. **CI-layout exceptions.** Release/deploy workflows use their own triggers.
+   Upstream-derived forks may retain upstream CI layout. This does not exempt
+   maintained local-development forks from governance: §1 determines baseline
+   eligibility; only contribution-only forks are excluded.
+8. **Every new repo** starts from the org template with this already wired in
+   (`workflow-templates/starter-ci.yml`).
+9. **Concurrency and timeouts.** PR runs cancel superseded runs for the same
+   ref (`concurrency: group: pr-${{ github.event.pull_request.number }},
+   cancel-in-progress: true` on pull_request only; never on `main`,
+   release, deploy or merge-queue flows). Give non-PR events a unique
+   `github.run_id` group: a shared group cancels older PENDING runs even with
+   `cancel-in-progress: false` ([GitHub concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)).
+   Every job sets `timeout-minutes` (~2-3x its p95).
+10. **Drafts skip heavy jobs (PR events only).** The draft check must never
+    gate non-PR events (push/schedule/merge_group/dispatch have no
+    `pull_request` object, so a bare `draft == false` first conjunct would
+    skip the full-suite-on-main safety net). Gate force/full-run first and
+    apply the draft check only to `pull_request` events, e.g.
+    `if: <force> || <full_run> || (<area> && (github.event_name !=
+    'pull_request' || github.event.pull_request.draft == false))`.
+    PR triggers include `types: [opened, synchronize, reopened,
+    ready_for_review]`. `ci-ok` (`if: always()`) still reports so the check
+    never hangs.
+11. **Merge-queue tier (optional).** Light checks run on PR; heavy suites may
+    additionally run on `merge_group` once merge queues are enabled. `ci-ok`
+    aggregates both events.
+12. **Reusable stack workflows.** Prefer shared, SHA-pinned workflows/composite
+    actions where implemented; see README for the actual callable inventory.
+    A per-stack reusable for every stack is a target, not existing coverage.
+    Matrix shards set `fail-fast: false`.
+13. **Caches and single runs.** `setup-node` uses `cache:`; Rust uses
+    `Swatinem/rust-cache` (hosted) or sccache (self-hosted); buildx uses
+    `cache-from/to: type=gha`. Never run full `push` + `pull_request` builds
+    on the same SHA (gate push to `main` only or skip duplicates); pass
+    artifacts between jobs instead of rebuilding.
+14. **Affected tests inside a repo.** Prefer changed-aware runners
+    (`vitest --changed` / `--related`, `cargo -p` for affected crates,
+    `pytest --testmon`); full suite still runs on `main` plus nightly.
+15. **Shard long suites.** Shard Playwright (`--shard`), `cargo nextest
+    --partition` or equivalent, then merge the reports into one artifact.
+16. **Flakes are never silent green.** CI-only retries are bounded (1-2),
+    logged as FLAKY, and paired with a quarantine job that files or links a
+    ticket. No retry may turn a real failure green without a trace.
+17. **Mutation: incremental on PR, full on schedule.** PRs run incremental /
+    diff-based mutation (e.g. Stryker `--incremental`) as informational;
+    the full sweep runs nightly/weekly, informational.
+18. **E2E: smoke on PR, full on schedule.** PRs run the smoke path only; the
+    full E2E runs nightly plus pre-release against staging.
+19. **Security cadence.** Secrets scan on every run; CodeQL on PR for changed
+    languages plus weekly; dependency/SBOM scans on lockfile change plus
+    weekly.
+20. **Governance.** Track minutes per PR, queue time and lead time; alert at
+    ~75% of included minutes; set per-repo budgets so one repo cannot starve
+    shared hosted concurrency (seen 2026-10-04: an ops-tooling burst queued
+    TWO Next ~25 min). Clean up stale PRs and old runs.
+21. **Tier 0 before LLM review (2026-10-10).** Deterministic checks catch what
+    a linter can, so the review apps spend their rounds on judgment. Every
+    repo runs, inside `ci-ok`: actionlint (checksum-pinned) and zizmor on
+    workflows; gitleaks; each generator re-run plus `git diff --exit-code`
+    (schema, OpenAPI, lockfiles, vendored lists); and the stack's strict
+    lint/type/unused-code checks. Each repeated review finding becomes a new
+    rule here or a repo lint. Measured 2026-10-09: about 35% of 146 structured
+    review findings were catchable this way, and workflow logic was the
+    largest single class.
+22. **No pushes during review.** The author batches all findings of a review
+    round into one push after `Devin Review` completes and any CodeRabbit
+    findings already posted are answered (CodeRabbit is advisory; never wait
+    for it). Measured
+    2026-10-10: 45% of review rows were superseded or incomplete, mostly
+    from pushes while a review was queued or running.
+
+23. **Web quality gate (2026-10-10).** Every repo that serves a website gates on
+    Lighthouse and web standards, with budgets in a committed file (e.g.
+    `ci/quality-budget.json`) so any loosening is a visible, reviewed diff:
+    - Lighthouse category scores (desktop: performance >= 0.90, accessibility,
+      best-practices and SEO >= 0.95; mobile performance floor) plus Core Web
+      Vitals budgets (LCP <= 2.5 s, CLS <= 0.1, INP <= 200 ms, measured via
+      real-user metrics per rule 24). Keep TBT <= 200 ms as a separate Lighthouse
+      lab-metric budget, 3 runs, median; TBT is not a Core Web Vital;
+    - axe (0 serious/critical), security headers (CSP, nosniff,
+      Referrer-Policy; HSTS where the app, not the edge, owns it), HTML basics
+      (doctype, lang, title, viewport, description, one h1), internal links
+      resolved against the app's own route table, and a bundle-size budget;
+    - one "what to fix" job summary (failing audits, score vs budget, top
+      offending resources), reports uploaded as artifacts (never
+      temporary-public-storage).
+    When it runs:
+    - **PRs:** only when files that can change the rendered site change (app
+      source, components, styles, public assets, build config,
+      package.json/lockfile, the Lighthouse/standards config itself); docs-,
+      CI- and tests-only PRs skip. It reports inside `ci-ok`, which counts a
+      path-skipped job as success (the scope-gate pattern, never `on: paths:`).
+    - **After every staging deploy:** against staging, and it gates promote to
+      production (the promotion resolver requires it alongside the journeys).
+    - **Nightly:** against staging, to catch drift no PR causes (third-party
+      scripts, CDN, content).
+    Agents fix failures; a budget is raised (ratchet) or lowered only in its own
+    justified PR, and reviewers treat loosening as a finding. Template:
+    `workflow-templates/web-quality.yml`. Reference implementation:
+    togetherweown/two-web-next.
+
+24. **Web E2E and quality loop (2026-10-11).** Beyond the quality gate (rule
+    23), every website repo closes the loop from "something broke" to "an agent
+    fixed it":
+    - **Critical journeys required on PR.** Browser journeys run on every PR
+      that can change the site, against a local full stack (Worker + disposable
+      DB, no secrets). Like every gated job (rule 3), the journeys count only
+      through `ci-ok`: the scope step decides whether they run, a scope-skip
+      passes, and a failed or cancelled upstream job fails `ci-ok`. They are not
+      a separately required check. Per-PR remote previews are not used: they
+      would put a deploy-capable credential in PR workflows.
+    - **Visual regression.** Full-page screenshots of the public routes at
+      desktop and mobile widths against committed baselines, before the
+      journeys, with volatile regions (times) masked. CI never rewrites a
+      baseline; an intentional change commits reviewed baselines in the same PR.
+    - **Security scan of staging.** An OWASP ZAP passive baseline runs after
+      every staging deploy (gating promotion: a High, or Medium/Low above the
+      committed budget, fails the run the promotion resolver requires) and
+      nightly. Public repos print alert names and counts only and never upload
+      the report.
+    - **Daily explorer + QA routine.** A GET-only, guest, staging-only crawl at
+      desktop and mobile widths records non-200s, page/console errors, failed
+      subresources, broken images, overflow and serious axe violations with
+      stable finding ids; a daily Paperclip routine files one card per new
+      finding for the site's engineer and notes resolved ones.
+    - **Real-user metrics.** A nightly check of production p75 LCP/CLS/INP from
+      the CDN's RUM data against committed budgets, with a read-only analytics
+      token (never the deploy token).
+    Scheduled failures go through the host flake ledger (one re-run, then a
+    private main-red card); PR failures wake the PR's owner card via the PR
+    controller. Baselines and budgets only ratchet; loosening is its own
+    reviewed PR. Templates: `workflow-templates/web-zap-staging.yml`.
+    Reference implementation: togetherweown/two-web-next (docs/visual-regression.md,
+    docs/zap-baseline.md, docs/explore-staging.md, docs/rum-web-vitals.md).
+
+25. **Never require a check before its workflow exists on the default branch
+    (2026-11-01).** Do not add a status check to a ruleset's required list
+    until the workflow that produces it is merged to the default branch and
+    has reported at least once on a default-branch commit. A required check
+    that has never reported on the default branch stays `Expected` forever
+    and blocks every PR. Seen 2026-11-01: OSV `main-gate` required
+    `docker-profile` while that job was defined only on an open PR, so every
+    OSV PR showed as blocked until the requirement was removed. Ship it in
+    two steps: first merge the workflow and confirm it reports green on the
+    default branch, then add the check to the required list in a follow-up.
+
+### Advisory PR-size labels
+
+One definition, in this repo: `.github/scripts/pr_size.py` (stdlib only,
+unit-tested by the `pr-size selftest` job) behind the reusable workflows
+`.github/workflows/pr-size.yml` (label) and
+`.github/workflows/pr-size-weekly.yml` (weekly tally). Adopters add only the thin caller from
+`workflow-templates/pr-size.yml`, pin its `uses:` to a full SHA of this
+repo's `main`, and pass their generated paths as `exclude-extra`. Nobody
+copies the script. Both reusables check the script out from the literal
+`TogetherWeOwn/.github` repository at the same explicit, reviewed main-branch
+commit SHA, never from caller contexts, inputs or pull-request heads. A
+cross-repository caller or fork PR therefore cannot select a modified
+labeller or silence its own label by deleting a local copy.
+
+- **Thresholds are central and fixed**: `size/S` <= 100, `size/M` <= 400,
+  `size/L` <= 1000 counted lines (additions + deletions, lockfiles /
+  generated files / fixtures excluded), `size/XL` above that. They are not
+  caller inputs; changing them is one reviewed PR here.
+- **Advisory only, permanently.** `pr-size` is never a required status
+  check and must never appear in a ruleset's required-workflows list -
+  either would make it block merges and break the invariant. Org-level
+  inheritance happens through this template and repo bootstrap, not merge
+  blocking. The script exits 0 on any API failure (and fork PRs, whose
+  token is read-only, warn and skip), so labelling can never turn a run red.
+- **Token**: callers grant job-level `issues: write` + `pull-requests:
+  write` to call the label reusable and read-only to call the weekly one.
+  The two modes are separate reusable FILES because GitHub validates a
+  reusable workflow's nested-job permissions against the caller job's
+  grant when parsing the workflow, ignoring nested `if:` conditions: a
+  read-only weekly caller of a file that also holds the write-permission
+  label job would fail the whole workflow at startup. The `pr-size
+  selftest` job statically checks that every caller job in the shipped
+  template grants at least what the file it calls requests. No secrets
+  are passed; never add `secrets: inherit` - the reusable job's
+  `GITHUB_TOKEN` is minted for the caller's repo and capped by the
+  caller's permissions.
+- **Weekly tally**: the schedule stays in the caller (decided once, here).
+  A reusable workflow has no schedule of its own for caller repositories
+  and the tally is per-repository, so the caller's Monday `schedule:` calls
+  the `pr-size-weekly.yml` reusable. The labels are the durable record: the
+  same tally is any `is:pr is:merged label:size/L` search.
+- **Repinning**: merge a labeller change here first, then update the checkout
+  `ref:` in BOTH reusables to that reviewed main-branch commit. After the
+  reusable update merges, adopters repin their caller's `uses:` SHA to the
+  commit carrying the updated workflows in their own small PRs. The script
+  pin and workflow pin are separate; neither comes from a caller input or
+  GitHub caller context. Until adopters repin, they keep running the older
+  pinned labeller, which is safe because it is advisory.
+
+Reference adoption: TogetherWeOwn/two-web-next `.github/workflows/pr-size.yml`.
+
+### Banned
+
+- `on: paths:` on any workflow that produces a required check.
+- Requiring a skippable job without the `ci-ok` aggregator.
+- Adding a required status check before the workflow that produces it has
+  reported on the default branch (rule 25).
+- `cancel-in-progress` on `main`, release, deploy or merge queue.
+- Jobs without `timeout-minutes`.
+- Full mutation / full E2E / full CodeQL on every push.
+- Nightly / scheduled-only suites (full ignored-test sweeps, benchmarks)
+  triggered on every `pull_request`. They run on `schedule`,
+  `workflow_dispatch` and `push` to `main`; on a PR only when that PR changes
+  the suite's own wiring or trips a Rule 4 full-run trigger (decided by the
+  job-level change detector, so the workflow still reports). This never
+  removes a PR-time check: dependency/advisory scans still run on lockfile
+  change (Rules 6 and 19), and any guard that only the nightly suite ran moves
+  into the per-PR workflow first. Measured 2026-10-10: one repo's nightly sweep
+  ran on ~170 PR pushes a day, most cancelled by the next push.
+- Retries that hide flakes (unlogged or ticketless).
+- `push` + `pull_request` duplicate full runs on the same SHA.
+- `[skip ci]` to dodge gates.
+- A change-detection `git diff --name-only` without `--no-renames -z`.
+- Suppressing a change-detection error and reporting an empty successful diff.
+
+## 5. Release
+
+- **Applications use numeric CalVer:** stable `YYYY.MDD.P` (`vYYYY.MDD.P`), staging
+  `YYYY.MDD.P-canary.N` (`canary/vYYYY.MDD.P-canary.N`). Month is not zero-padded;
+  day is two digits. Examples: `2026.105.0`, `2026.303.0`, `2026.1028.0`.
+- The [shared releaser](actions/calver/README.md) and its step adapter share one
+  implementation. Callers pin both workflow and tooling to the same full commit
+  SHA. Package/plugin/API compatibility versions remain SemVer.
+- Counters come from complete repository tag history, not npm publications. This
+  adopts upstream Paperclip's syntax, not its nightly/beta/three-day-soak policy.
+  Existing staging, approval, artifact, smoke, takeover and rollback gates stay.
+- A caller's transaction boundary spans plan, version stamping, deploy and publish.
+  Planning is otherwise advisory. Publish the exact frozen version after the
+  required successful deployment evidence; never relabel a stamped build after
+  a collision. Promotion uses its attempt's UTC date and the same saved artifact.
+- Only stables create Releases. Canary tags carry source run/attempt/artifact
+  provenance. Historical repairs and Routeware build releases never regress Latest.
+- TWO bot keeps its daily live-production digest, quiet-day/rollback checks and
+  legacy repair/SBOM adapters outside the production workflow. Kagi keeps its
+  release-selection and package/tag equality gate; it releases before deployment.
+  Routeware keeps SemVer API tags and a separate `build/` CalVer namespace; its
+  disabled production lane stays disabled.
+- Do not globally enable immutable Releases: asynchronous bot SBOM uploads and
+  repairs require mutable assets. Never move tags or freeze main for a release.
+
+### No host release train
+
+The old release-please/host-timer merge-freeze description is retired. Do not
+create a host timer, cron, ruleset mutation or release train for this migration.
+Use existing GitHub workflows and native task dependencies/monitors. GitHub
+concurrency preserves a running transaction with `cancel-in-progress: false`, but
+pending runs can replace older pending runs: it is not a FIFO deployment queue.
+
+## 6. Verification and adoption
+
+New repos follow the checklist and prove the effective rules, automatic Devin
+status, applicable CodeQL analysis and exact-head Actions results before the first
+merge. Existing repos retain their stronger requirements until a separate reviewed
+settings rollout. To qualify change-gating, prove a docs-only PR skips heavy jobs
+with `ci-ok` green and a dependency change runs the full affected set. Reverting a
+wiring PR rolls back that wiring; it is not authorization to weaken live rulesets.
+
+See the [README index](README.md) for callable workflows and starter files. A
+reusable must actually declare `workflow_call`; pin callers to a reviewed full SHA.
+A starter file is copied and adapted, not called as though it were a reusable.

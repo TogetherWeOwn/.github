@@ -1,0 +1,43 @@
+{
+  "id": 25234562,
+  "name": "Default branch deletion and non-fast-forward protection",
+  "target": "branch",
+  "source_type": "Organization",
+  "source": "TogetherWeOwn",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "~DEFAULT_BRANCH"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    }
+  ],
+  "node_id": "RRS_lACkVXNlcs4TEfOWzgGBDII",
+  "created_at": "2026-10-16T11:04:57.418Z",
+  "updated_at": "2026-10-16T11:04:57.456Z",
+  "bypass_actors": [
+    {
+      "actor_id": null,
+      "actor_type": "OrganizationAdmin",
+      "bypass_mode": "always"
+    }
+  ],
+  "current_user_can_bypass": "always",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/TogetherWeOwn/.github/rulesets/25234562"
+    },
+    "html": {
+      "href": "https://github.com/TogetherWeOwn/.github/rules/25234562"
+    }
+  }
+}

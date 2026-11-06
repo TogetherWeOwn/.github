@@ -237,6 +237,8 @@ jobs:
           python3 -I security-gate/test_workflow.py
       - name: Label-sync script contract (fake gh, never deletes)
         run: python3 -I .github/scripts/test_sync_labels.py
+      - name: Org standard and ruleset source contracts (read-only)
+        run: python3 -I ci/test_org_standard.py
       # Fetch/check the pinned source object before acceptance inspects it;
       # preserve the existing shallow checkout/credential contract.
       - name: CalVer caller pins carry the current tooling
