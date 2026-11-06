@@ -46,9 +46,12 @@ scanning. The org-wide `required` default is not that authorization.
 
 ### Reviewed ruleset source
 
-JSON under [rulesets/](rulesets/README.md) is reviewable source, not live settings.
-Both new baselines target `~DEFAULT_BRANCH`, have **no bypass actors**, and ship
-in `evaluate` enforcement for a separately authorized rollout:
+JSON under [rulesets/](rulesets/README.md) is reviewable source; committing it does
+not change live settings. `baseline-review` (26726856) and `baseline-codeql`
+(26726857) are sanitized live org exports supplied by the operator on 2026-11-06
+at 21:51 UTC, when both were already in **Evaluate**. Both baselines target
+`~DEFAULT_BRANCH`, have **no bypass actors**, and retain `evaluate` enforcement
+pending a separately authorized activation:
 
 | Ruleset | Repository condition | Rules |
 |---|---|---|

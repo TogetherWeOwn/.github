@@ -1,7 +1,21 @@
 # Reviewed org ruleset source
 
-These files are reviewed policy inputs, **not applied settings**. See
-[STANDARD.md](../STANDARD.md#1-governance-and-required-gates) for property schema,
+The two baseline files below are sanitized **live org exports**, not reconstructed
+create payloads. The operator read `GET /orgs/TogetherWeOwn/rulesets/26726856`
+(`baseline-review`) and `GET /orgs/TogetherWeOwn/rulesets/26726857`
+(`baseline-codeql`) on 2026-11-06 at 21:51 UTC and supplied the responses after the
+managed integration's org reads returned HTTP 403. Both were live in **Evaluate**;
+committing these snapshots changes no settings and authorizes no activation.
+
+Sanitization removes only top-level `created_at`, `updated_at` and `_links`;
+`id`, `node_id`, `source_type`, `source`, conditions and every rule parameter are
+retained. In particular, the live review export includes `required_reviewers: []`
+and `require_extra_approval_for_unattributed_changes: true`. Treat these as reviewed
+snapshots, not ready-to-submit create/update payloads: read-only identity fields
+must be handled for the chosen API operation. Future policy changes go through a
+PR and the separately authorized settings rollout, followed by a fresh export.
+
+See [STANDARD.md](../STANDARD.md#1-governance-and-required-gates) for property schema,
 classification, private-repo exclusions, per-repo extras and staged rollout.
 
 - `baseline-review.json`: Evaluate; default branch of `governance=standard` repos,

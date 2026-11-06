@@ -1,33 +1,35 @@
 {
+  "id": 26726857,
   "name": "baseline-codeql",
   "target": "branch",
+  "source_type": "Organization",
+  "source": "TogetherWeOwn",
   "enforcement": "evaluate",
-  "bypass_actors": [],
   "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "~DEFAULT_BRANCH"
+      ]
+    },
     "repository_property": {
+      "exclude": [],
       "include": [
         {
           "name": "governance",
+          "source": "custom",
           "property_values": [
             "standard"
-          ],
-          "source": "custom"
+          ]
         },
         {
           "name": "codeql",
+          "source": "custom",
           "property_values": [
             "required"
-          ],
-          "source": "custom"
+          ]
         }
-      ],
-      "exclude": []
-    },
-    "ref_name": {
-      "include": [
-        "~DEFAULT_BRANCH"
-      ],
-      "exclude": []
+      ]
     }
   },
   "rules": [
@@ -43,5 +45,7 @@
         ]
       }
     }
-  ]
+  ],
+  "node_id": "RRS_lACkVXNlcs4TEfOWzgGX0ck",
+  "bypass_actors": []
 }

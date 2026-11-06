@@ -1,26 +1,28 @@
 {
+  "id": 26726856,
   "name": "baseline-review",
   "target": "branch",
+  "source_type": "Organization",
+  "source": "TogetherWeOwn",
   "enforcement": "evaluate",
-  "bypass_actors": [],
   "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "~DEFAULT_BRANCH"
+      ]
+    },
     "repository_property": {
+      "exclude": [],
       "include": [
         {
           "name": "governance",
+          "source": "custom",
           "property_values": [
             "standard"
-          ],
-          "source": "custom"
+          ]
         }
-      ],
-      "exclude": []
-    },
-    "ref_name": {
-      "include": [
-        "~DEFAULT_BRANCH"
-      ],
-      "exclude": []
+      ]
     }
   },
   "rules": [
@@ -29,9 +31,11 @@
       "parameters": {
         "required_approving_review_count": 0,
         "dismiss_stale_reviews_on_push": false,
+        "required_reviewers": [],
         "require_code_owner_review": false,
         "require_last_push_approval": false,
         "required_review_thread_resolution": true,
+        "require_extra_approval_for_unattributed_changes": true,
         "allowed_merge_methods": [
           "squash"
         ]
@@ -50,5 +54,7 @@
         ]
       }
     }
-  ]
+  ],
+  "node_id": "RRS_lACkVXNlcs4TEfOWzgGX0cg",
+  "bypass_actors": []
 }

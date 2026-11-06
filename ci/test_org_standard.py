@@ -46,6 +46,19 @@ class OrgStandardTests(unittest.TestCase):
                 self.assertEqual(obj["conditions"]["repository_property"], {
                     "include": expected, "exclude": []})
 
+    def test_live_export_identity_and_sanitization(self):
+        for name, ruleset_id, node_id in (
+                ("baseline-review", 26726856, "RRS_lACkVXNlcs4TEfOWzgGX0cg"),
+                ("baseline-codeql", 26726857, "RRS_lACkVXNlcs4TEfOWzgGX0ck")):
+            with self.subTest(name=name):
+                obj = load(name + ".json")
+                self.assertEqual(obj["id"], ruleset_id)
+                self.assertEqual(obj["node_id"], node_id)
+                self.assertEqual(obj["source_type"], "Organization")
+                self.assertEqual(obj["source"], "TogetherWeOwn")
+                for field in ("created_at", "updated_at", "_links"):
+                    self.assertNotIn(field, obj)
+
     def test_review_only_requires_pr_and_pinned_devin(self):
         rules = load("baseline-review.json")["rules"]
         self.assertEqual([rule["type"] for rule in rules],
@@ -53,9 +66,11 @@ class OrgStandardTests(unittest.TestCase):
         self.assertEqual(rules[0]["parameters"], {
             "required_approving_review_count": 0,
             "dismiss_stale_reviews_on_push": False,
+            "required_reviewers": [],
             "require_code_owner_review": False,
             "require_last_push_approval": False,
             "required_review_thread_resolution": True,
+            "require_extra_approval_for_unattributed_changes": True,
             "allowed_merge_methods": ["squash"],
         })
         self.assert_status(rules[1], "Devin Review", 811515)
