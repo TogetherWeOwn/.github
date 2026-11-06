@@ -28,8 +28,11 @@ property defaults alone do not prove that live protections are installed.
       for excluded repos and for private `kofra-cloud` / `open-serverless-vault`.
       Those two keep CodeQL disabled: no paid Code Security enablement and no
       security configuration 17 attachment without an owner decision.
-      A new private repo needs an explicit cost/security decision before enabling
-      paid scanning; do not infer approval from this default.
+      **Set `codeql=deferred` explicitly on every new private repo before baseline
+      targeting or security configuration attachment.** Keep CodeQL disabled until
+      an explicit owner cost/security decision authorizes paid scanning and a
+      reviewed enrollment changes the property; do not infer approval from the
+      org-wide `required` default.
 - [ ] **Verify both new baselines.** `baseline-review` targets `governance=standard`
       including private repos; `baseline-codeql` additionally requires
       `codeql=required`. Confirm rollout state and effective targeting. Evaluate

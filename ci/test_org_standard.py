@@ -1,10 +1,10 @@
 """Read-only contracts for reviewed org ruleset source; no live GitHub writes."""
 
+import fnmatch
 import json
 import re
 import unittest
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 PIN = "97fc0e24038021dfaa1fc9da754c6c5d6429130f"
@@ -147,6 +147,44 @@ class OrgStandardTests(unittest.TestCase):
                     self.assertEqual(path, "STANDARD.md")
                     if fragment:
                         self.assertIn(fragment, destinations)
+
+    def test_new_private_repo_requires_explicit_deferral(self):
+        checklist = (ROOT / "NEW-REPO-CHECKLIST.md").read_text()
+        self.assertIn("Set `codeql=deferred` explicitly on every new private repo", checklist)
+        standard = (ROOT / "STANDARD.md").read_text()
+        self.assertIn("explicitly set `codeql=deferred` before enrollment", standard)
+        self.assertIn("keep CodeQL disabled until the owner authorizes paid", standard)
+
+    def test_callable_documentation_names_real_inputs(self):
+        standard = (ROOT / "STANDARD.md").read_text()
+        promotion = (ROOT / ".github/workflows/promote-staging.yml").read_text()
+        changes = (ROOT / ".github/workflows/changes.yml").read_text()
+        for name in ("staging-workflow", "verify-job", "sha"):
+            self.assertIn(name + ":", promotion)
+            self.assertIn("`" + name + "`", standard)
+        self.assertIn("**Standard callers must set `verify-job`**", standard)
+        self.assertIn("verify-job: staging-journeys", standard)
+        self.assertIn("An explicit `sha` selects a target without verifying it", standard)
+        for name in ("areas-json", "full-run-globs-json", "docs-areas-json", "base-ref"):
+            self.assertIn(name + ":", changes)
+            self.assertIn("`" + name + "`", standard)
+        self.assertIn("The `areas` output is one JSON object", standard)
+
+    def test_readme_full_run_example_matches_starter(self):
+        readme = (ROOT / "README.md").read_text()
+        starter = (ROOT / "workflow-templates/starter-ci.yml").read_text()
+        pattern = r"full-run-globs-json: '([^']+)'"
+        globs = json.loads(re.search(pattern, readme).group(1))
+        self.assertEqual(globs, json.loads(re.search(pattern, starter).group(1)))
+        for name in ("package.json", "package-lock.json", "npm-shrinkwrap.json",
+                     "Cargo.toml", "Cargo.lock", "go.mod", "go.sum", "pyproject.toml",
+                     "uv.lock", "requirements-dev.txt", "Gemfile", "Gemfile.lock",
+                     "composer.json", "composer.lock", "pnpm-workspace.yaml",
+                     "go.work", "go.work.sum", "tsconfig.json"):
+            for prefix in ("", "src/", "src/nested/"):
+                with self.subTest(path=prefix + name):
+                    self.assertTrue(any(fnmatch.fnmatchcase(prefix + name, g) for g in globs))
+        self.assertFalse(any(fnmatch.fnmatchcase("docs/guide.md", g) for g in globs))
 
     def test_canonical_docs_and_local_links(self):
         for old in ("CI-STANDARD.md", "PIPELINE-STANDARD.md"):

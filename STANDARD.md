@@ -40,6 +40,9 @@ explicit repo-level protection; the baseline default-branch target does not cove
 owner decision on paid Code Security. Do not request/enable Code Security or attach
 security configuration 17 to them. Devin remains required; private Devin charges
 are accepted. Public repositories are unchanged by this private-repo exception.
+For every new private repo, explicitly set `codeql=deferred` before enrollment or
+configuration attachment and keep CodeQL disabled until the owner authorizes paid
+scanning. The org-wide `required` default is not that authorization.
 
 ### Reviewed ruleset source
 
@@ -72,6 +75,10 @@ repository targeting and must not be used as replacement create payloads.
 1. Verify classification/property values on all targets, including every exclusion
    and both private `deferred` values. Prove new-repo inheritance with a test repo;
    never assume that community-file inheritance installs Actions workflows.
+   Qualify new-repository and default-branch creation under the effective rules.
+   If bootstrap cannot create the initial ref before Devin can report, stop
+   activation and route a separate reviewed policy decision; do not silently add
+   a branch-creation exemption to the exported ruleset source.
 2. Qualify automatic Devin Review for user and bot authors on every standard repo.
    For every CodeQL target, confirm a successful supported-language analysis on the
    target branch; missing target-branch analysis can block code-scanning merges.
@@ -140,9 +147,26 @@ baseline-ci until its exact producer exists on main and has reported there.
 Production promotes the last **qualified staging SHA**, not necessarily newest
 main. Never freeze main merely to deploy. The reusable
 [`.github/workflows/promote-staging.yml`](.github/workflows/promote-staging.yml)
-accepts required `staging-workflow` and optional `sha`, and outputs `sha`.
+accepts required `staging-workflow`, optional `verify-job` and optional `sha`, and
+outputs `sha`. **Standard callers must set `verify-job`** to the job that actually
+verifies staging, so a successful workflow with that job skipped cannot qualify.
+The reusable permits an empty `verify-job` for workflows that cannot succeed
+without verification; do not rely on that fallback for standard adoption.
+
+```yaml
+jobs:
+  target:
+    uses: TogetherWeOwn/.github/.github/workflows/promote-staging.yml@<reviewed-full-commit-sha>
+    with:
+      staging-workflow: e2e-staging.yml
+      verify-job: staging-journeys
+      sha: ${{ inputs.sha }}
+```
+
 Use a staging-only workflow; a successful production run or all-skipped dispatch
-is not staging evidence. Verify the chosen SHA is an ancestor of `origin/main`,
+is not staging evidence. An explicit `sha` selects a target without verifying it:
+for both automatic selection and overrides, the caller must require successful
+qualification for that exact SHA. Verify it is an ancestor of `origin/main`,
 check out that exact SHA, and preserve the caller's qualification/e2e, artifact,
 migration, rollback, environment and exact-head Release Manager gates.
 
@@ -184,9 +208,12 @@ A test-local full stack below runs inside GitHub Actions, not on the shared host
    [git diff](https://git-scm.com/docs/git-diff),
    [fnmatchcase](https://docs.python.org/3/library/fnmatch.html).
    Use the reusable
-   `changes.yml` in this repo: inputs are a filters map of area to globs plus
-   the full-run globs; outputs are per-area booleans plus `full_run` and
-   `docs_only`.
+   `changes.yml` in this repo: required JSON-string inputs are `areas-json`
+   (an object mapping area names to glob arrays) and `full-run-globs-json`
+   (an array of full-run globs). Optional inputs are `docs-areas-json` and
+   `base-ref`. The `areas` output is one JSON object of per-area booleans;
+   `full_run` and `docs_only` are string booleans. Read an area's flag with
+   `fromJSON(needs.changes.outputs.areas).<area>`, not a separate area output.
 2. **Job-level gating.** Heavy jobs run only if their area changed:
    `if: needs.changes.outputs.<area> == 'true'` (via
    `fromJSON(needs.changes.outputs.areas).<area>`), or when
@@ -298,7 +325,9 @@ A test-local full stack below runs inside GitHub Actions, not on the shared host
     `ci/quality-budget.json`) so any loosening is a visible, reviewed diff:
     - Lighthouse category scores (desktop: performance >= 0.90, accessibility,
       best-practices and SEO >= 0.95; mobile performance floor) plus Core Web
-      Vitals budgets (LCP <= 2.5 s, CLS <= 0.1, TBT <= 200 ms), 3 runs, median;
+      Vitals budgets (LCP <= 2.5 s, CLS <= 0.1, INP <= 200 ms, measured via
+      real-user metrics per rule 24). Keep TBT <= 200 ms as a separate Lighthouse
+      lab-metric budget, 3 runs, median; TBT is not a Core Web Vital;
     - axe (0 serious/critical), security headers (CSP, nosniff,
       Referrer-Policy; HSTS where the app, not the edge, owns it), HTML basics
       (doctype, lang, title, viewport, description, one h1), internal links
