@@ -302,7 +302,9 @@ jobs:
           # proves the gate's own pins install. Outside the workspace so no
           # suite walks it.
           venv="$RUNNER_TEMP/tier0-selftest-venv"
-          python3 -m venv "$venv"
+          # Semgrep 1.133.0 declares Python >=3.9; the retained dependency
+          # lock requires >=3.12. Use hosted Python 3.12, not PATH's 3.14.
+          python3.12 -m venv "$venv"
           "$venv/bin/pip" install --disable-pip-version-check --require-hashes -q -r tier0/requirements-security.txt -r tier0/requirements-selftest.txt 2>&1 | tail -1
           echo "$venv/bin" >> "$GITHUB_PATH"
       - name: Structural contract and hermetic suites
