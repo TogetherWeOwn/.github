@@ -27,7 +27,9 @@ property defaults alone do not prove that live protections are installed.
 - [ ] **Set `codeql`.** Default `required` for public standard repos; use `deferred`
       for excluded repos and for private `kofra-cloud` / `open-serverless-vault`.
       Those two keep CodeQL disabled: no paid Code Security enablement and no
-      security configuration 17 attachment without an owner decision.
+      security configuration 17 attachment under the current policy. Any future
+      owner decision must first update [the private-repo boundary](STANDARD.md#custom-properties)
+      and pass reviewed enrollment before either setting changes.
       **Set `codeql=deferred` explicitly on every new private repo before baseline
       targeting or security configuration attachment.** Keep CodeQL disabled until
       an explicit owner cost/security decision authorizes paid scanning and a
@@ -44,9 +46,12 @@ property defaults alone do not prove that live protections are installed.
       never a required check. Preserve applicable independent review.
 - [ ] **Set `ci`.** Start `custom`; set `standard` only after `ci-ok` is on main
       and has reported green. Optional `baseline-ci` is not yet applied. Keep
-      repo-specific CI/security checks in repo rulesets, pinned to App 15368 where
-      produced by GitHub Actions. Never require a check before its producer exists
-      on main and has reported there (STANDARD.md CI rule 25).
+      repo-specific CI/security checks in repo rulesets. **Require `ci-ok` and
+      applicable security checks on the default branch** after their producers
+      report green on main, pinning GitHub Actions-produced statuses to App 15368.
+      `ci=custom` and disabled `baseline-ci` do not make CI advisory. Never require
+      a check before its producer exists on main and has reported there
+      (STANDARD.md CI rule 25).
 
 ## Set once in repo settings
 

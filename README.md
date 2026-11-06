@@ -23,7 +23,7 @@ Call only files with `on: workflow_call`, using a reviewed **full commit SHA**:
 
 | Reusable | Purpose |
 |---|---|
-| [changes.yml](.github/workflows/changes.yml) | Merge-base change detector for stack CI. |
+| [changes.yml](.github/workflows/changes.yml) | Merge-base change detector. Required inputs: `areas-json`, `full-run-globs-json`; optional: `docs-areas-json`, `base-ref`. Outputs: `areas` (one JSON object, consumed as `fromJSON(needs.changes.outputs.areas).<area>`), `full_run` and `docs_only` (string booleans). |
 | [tier-0-quality-gate.yml](.github/workflows/tier-0-quality-gate.yml) | Deterministic quality/security checks, including gitleaks; mode and stack inputs are documented in the file. |
 | [public-pr-security.yml](.github/workflows/public-pr-security.yml) | Opt-in public PR security gate. |
 | [test-guard.yml](.github/workflows/test-guard.yml) | Test ownership gate. |
@@ -43,7 +43,20 @@ jobs:
       areas-json: '{"app":["src/**"],"docs":["docs/**","*.md"]}'
       full-run-globs-json: '["package.json","**/package.json","package-lock.json","**/package-lock.json","npm-shrinkwrap.json","**/npm-shrinkwrap.json","pnpm-lock.yaml","**/pnpm-lock.yaml","yarn.lock","**/yarn.lock","Gemfile","**/Gemfile","Gemfile.lock","**/Gemfile.lock","Cargo.toml","**/Cargo.toml","Cargo.lock","**/Cargo.lock","go.mod","**/go.mod","go.sum","**/go.sum","pyproject.toml","**/pyproject.toml","poetry.lock","**/poetry.lock","uv.lock","**/uv.lock","requirements*.txt","**/requirements*.txt","requirements*.in","**/requirements*.in","setup.py","**/setup.py","setup.cfg","**/setup.cfg","Pipfile","**/Pipfile","Pipfile.lock","**/Pipfile.lock","composer.json","**/composer.json","composer.lock","**/composer.lock","pnpm-workspace.yaml","**/pnpm-workspace.yaml","go.work","**/go.work","go.work.sum","**/go.work.sum","tsconfig*.json","**/tsconfig*.json","jsconfig*.json","**/jsconfig*.json",".cargo/**","**/.cargo/**","rust-toolchain*","**/rust-toolchain*",".npmrc","**/.npmrc",".yarnrc*","**/.yarnrc*","Makefile*","**/Makefile*","CMakeLists.txt","**/CMakeLists.txt",".github/**","shared/**","common/**","build/**","Dockerfile*","**/Dockerfile*","docker-compose*.yml","**/docker-compose*.yml"]'
       docs-areas-json: '["docs"]'
+  app:
+    needs: changes
+    if: fromJSON(needs.changes.outputs.areas).app || needs.changes.outputs.full_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: printf '%s\n' 'Run the stack-specific app checks here'
 ```
+
+`full_run` forces every heavy job when a full-run glob or unclassified path changes.
+`docs_only == 'true'` means every path belongs only to docs areas and no full run
+was triggered; it can select documentation jobs, but is not a substitute for the
+area/full-run condition on heavy jobs. Add the real stack checks and an always-run,
+fail-closed `ci-ok` aggregator before adopting this illustrative fragment.
 
 There is **no standalone callable `ci.yml` or `gitleaks.yml`** here today:
 [ci.yml](.github/workflows/ci.yml) is this repo's CI, not a reusable. Use the

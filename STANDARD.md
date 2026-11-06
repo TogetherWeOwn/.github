@@ -217,10 +217,11 @@ A test-local full stack below runs inside GitHub Actions, not on the shared host
    `base-ref`. The `areas` output is one JSON object of per-area booleans;
    `full_run` and `docs_only` are string booleans. Read an area's flag with
    `fromJSON(needs.changes.outputs.areas).<area>`, not a separate area output.
-2. **Job-level gating.** Heavy jobs run only if their area changed:
-   `if: needs.changes.outputs.<area> == 'true'` (via
-   `fromJSON(needs.changes.outputs.areas).<area>`), or when
-   `needs.changes.outputs.full_run == 'true'`.
+2. **Job-level gating.** Heavy jobs run only if their area changed or a full run
+   is required, for example:
+   `if: fromJSON(needs.changes.outputs.areas).web || needs.changes.outputs.full_run == 'true'`.
+   Area flags are JSON booleans, not separate string outputs; do not compare them
+   to the string `'true'`.
    NEVER put workflow-level `on: pull_request: paths:` on a workflow that
    produces a required check. GitHub then never reports the check, and the PR
    hangs on "Expected — waiting" forever.

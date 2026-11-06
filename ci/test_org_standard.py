@@ -14,6 +14,15 @@ def load(name):
     return json.loads((ROOT / "rulesets" / name).read_text())
 
 
+def callable_inputs(text):
+    block = re.search(
+        r"^on:\n  workflow_call:\n    inputs:\n(.*?)(?=^\S|^  \S|^    \S|\Z)",
+        text, re.MULTILINE | re.DOTALL)
+    if block is None:
+        raise ValueError("Missing workflow_call.inputs declaration")
+    return set(re.findall(r"^      ([\w-]+):", block.group(1), re.MULTILINE))
+
+
 def property_spec(name, value):
     return {"name": name, "property_values": [value], "source": "custom"}
 
@@ -135,15 +144,25 @@ class OrgStandardTests(unittest.TestCase):
     def test_legacy_section_anchors(self):
         expected = {
             "CI-STANDARD.md": {
-                "ci-standard-only-run-what-the-change-affects-permanent-every-togetherweown-repo",
-                "rules", "advisory-pr-size-labels", "banned", "verification-per-repo",
+                "ci-standard-only-run-what-the-change-affects-permanent-every-togetherweown-repo":
+                    "STANDARD.md#4-ci-rules",
+                "rules": "STANDARD.md#4-ci-rules",
+                "advisory-pr-size-labels": "STANDARD.md#advisory-pr-size-labels",
+                "banned": "STANDARD.md#banned",
+                "verification-per-repo": "STANDARD.md#6-verification-and-adoption",
             },
             "PIPELINE-STANDARD.md": {
-                "pipeline-standard-one-pr-one-review-one-merge-one-deploy-every-togetherweown-repo",
-                "1-review", "2-merge", "2a-merge-queue-not-enabled", "3-deploy",
-                "3a-promote-the-last-staging-verified-commit", "4-ci", "5-release",
-                "5a-no-host-release-train",
-                "6-self-blocking-anti-patterns-each-measured-on-2026-10-10",
+                "pipeline-standard-one-pr-one-review-one-merge-one-deploy-every-togetherweown-repo":
+                    "STANDARD.md",
+                "1-review": "STANDARD.md#2-pr-review-and-merge",
+                "2-merge": "STANDARD.md#2-pr-review-and-merge",
+                "2a-merge-queue-not-enabled": "STANDARD.md#2-pr-review-and-merge",
+                "3-deploy": "STANDARD.md#3-deploy-and-staging",
+                "3a-promote-the-last-staging-verified-commit": "STANDARD.md#3-deploy-and-staging",
+                "4-ci": "STANDARD.md#4-ci-rules",
+                "5-release": "STANDARD.md#5-release",
+                "5a-no-host-release-train": "STANDARD.md#no-host-release-train",
+                "6-self-blocking-anti-patterns-each-measured-on-2026-10-10": "STANDARD.md#banned",
             },
         }
         standard = (ROOT / "STANDARD.md").read_text()
@@ -154,10 +173,11 @@ class OrgStandardTests(unittest.TestCase):
         for name, anchors in expected.items():
             with self.subTest(document=name):
                 text = (ROOT / name).read_text()
-                self.assertEqual(set(re.findall(r'<a id="([^"]+)"></a>', text)), anchors)
-                links = re.findall(r'<a id="[^"]+"></a>\s+\[[^\]]+\]\(([^)]+)\)', text)
+                self.assertEqual(set(re.findall(r'<a id="([^"]+)"></a>', text)), set(anchors))
+                links = re.findall(r'<a id="([^"]+)"></a>\s+\[[^\]]+\]\(([^)]+)\)', text)
                 self.assertEqual(len(links), len(anchors))
-                for link in links:
+                self.assertEqual(dict(links), anchors)
+                for _, link in links:
                     path, _, fragment = link.partition("#")
                     self.assertEqual(path, "STANDARD.md")
                     if fragment:
@@ -174,16 +194,47 @@ class OrgStandardTests(unittest.TestCase):
         standard = (ROOT / "STANDARD.md").read_text()
         promotion = (ROOT / ".github/workflows/promote-staging.yml").read_text()
         changes = (ROOT / ".github/workflows/changes.yml").read_text()
+        self.assertEqual(callable_inputs(promotion), {"staging-workflow", "verify-job", "sha"})
+        self.assertEqual(callable_inputs(changes), {
+            "areas-json", "full-run-globs-json", "docs-areas-json", "base-ref"})
         for name in ("staging-workflow", "verify-job", "sha"):
-            self.assertIn(name + ":", promotion)
             self.assertIn("`" + name + "`", standard)
         self.assertIn("**Standard callers must set `verify-job`**", standard)
         self.assertIn("verify-job: staging-journeys", standard)
         self.assertIn("An explicit `sha` selects a target without verifying it", standard)
         for name in ("areas-json", "full-run-globs-json", "docs-areas-json", "base-ref"):
-            self.assertIn(name + ":", changes)
             self.assertIn("`" + name + "`", standard)
         self.assertIn("The `areas` output is one JSON object", standard)
+
+    def test_callable_input_declarations_ignore_comments_and_outputs(self):
+        workflow = (
+            "#      comment-only:\n"
+            "on:\n  workflow_call:\n    inputs:\n"
+            "      real-input:\n        type: string\n"
+            "      # removed-input:\n"
+            "        description: 'sha: is not an input'\n"
+            "    outputs:\n      sha:\n        description: selected commit\n"
+            "jobs:\n  example:\n    outputs:\n      unrelated: value\n")
+        self.assertEqual(callable_inputs(workflow), {"real-input"})
+        with self.assertRaises(ValueError):
+            callable_inputs("# on:\n#   workflow_call:\n#     inputs:\n#       sha:\n")
+
+    def test_reviewed_documentation_contracts(self):
+        standard = (ROOT / "STANDARD.md").read_text()
+        readme = (ROOT / "README.md").read_text()
+        checklist = (ROOT / "NEW-REPO-CHECKLIST.md").read_text()
+        redirect = (ROOT / "PIPELINE-STANDARD.md").read_text()
+        self.assertNotIn("needs.changes.outputs.<area>", standard)
+        for area, text in (("web", standard), ("app", readme)):
+            self.assertIn(
+                "if: fromJSON(needs.changes.outputs.areas)." + area
+                + " || needs.changes.outputs.full_run == 'true'", text)
+        for name in ("areas-json", "full-run-globs-json", "docs-areas-json", "base-ref",
+                     "areas", "full_run", "docs_only"):
+            self.assertIn("`" + name + "`", readme)
+        self.assertIn("**Require `ci-ok` and\n      applicable security checks", checklist)
+        self.assertIn("must first update [the private-repo boundary]", checklist)
+        self.assertIn("measurement table and its per-row fixes are retired", redirect)
 
     def test_readme_full_run_example_matches_starter(self):
         readme = (ROOT / "README.md").read_text()

@@ -44,3 +44,8 @@ to the canonical sections.
 <a id="6-self-blocking-anti-patterns-each-measured-on-2026-10-10"></a>
 
 [6. Self-blocking anti-patterns](STANDARD.md#banned)
+
+The historical 2026-10-10 measurement table and its per-row fixes are retired,
+not relocated to that section. Some fixes referred to superseded merge/release
+policy and host automation; consult repository history for that dated evidence.
+The link above points to the current banned practices, not the old evidence table.
