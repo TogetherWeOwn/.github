@@ -113,7 +113,7 @@ env:
   # Pinned commit carrying the gate-owned files checked out into .tier0-gate
   # (semgrep-rules/, tier0/). Must stay a commit whose trees match HEAD for
   # those paths; pincheck fails otherwise. Refresh after squash-merges.
-  TIER0_SELF_PIN: "d2fd838499d1ac1dd7dc03adfb340298f4e76823"
+  TIER0_SELF_PIN: "ce9136cbc8cdb1e788c6cf40b18b87ccbdb89a30"
   # Pip installs reference tier0/requirements-<job>.txt with --require-hashes;
   # the files pin these same versions with per-file hashes (regenerate with
   # pip-compile after any bump; see the header of each file).
