@@ -529,7 +529,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          actionlint .github/workflows/*.yml
+          actionlint
       - name: zizmor on all workflows
         if: ${{ !cancelled() }}
         run: |
@@ -542,7 +542,7 @@ jobs:
           python3 - <<'PY'
           import glob, sys, yaml
           bad = []
-          for path in glob.glob('.github/workflows/*.yml'):
+          for path in glob.glob('.github/workflows/*.yml') + glob.glob('.github/workflows/*.yaml'):
               with open(path) as f:
                   wf = yaml.safe_load(f)
               # YAML 1.1 reads the `on:` key as boolean True.
@@ -848,6 +848,7 @@ jobs:
                 + f" [mode={mode}]")
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() }}
         with:
           name: tier-0-findings
           path: needs.json

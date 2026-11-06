@@ -80,6 +80,63 @@ class FileExecutionContract(unittest.TestCase):
             text=True, capture_output=True, timeout=15, check=False,
         )
 
+    def test_actionlint_uses_native_discovery_for_yaml_only_workflows(self):
+        self.write('.github/workflows/ci.yaml', 'on: push\njobs: {}\n')
+        binary = self.root / 'bin'
+        binary.mkdir()
+        actionlint = binary / 'actionlint'
+        # Native actionlint discovers both extensions when given no paths.
+        # Reject any explicit argument, including Bash's unmatched *.yml glob.
+        actionlint.write_text('#!/bin/bash\n'
+                              '[[ "$#" == 0 ]] || exit 23\n'
+                              '[[ -f .github/workflows/ci.yaml ]] || exit 24\n')
+        actionlint.chmod(0o755)
+        result = self.run_step(
+            self.step('workflow-checks', 'actionlint on all workflows')['run'],
+            PATH=f'{binary}:/usr/bin:/bin',
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_path_filter_rule_checks_both_workflow_extensions(self):
+        binary = self.root / 'bin'
+        binary.mkdir()
+        launcher = binary / 'python3'
+        launcher.write_text(f'#!/bin/bash\nexec "{sys.executable}" -I "$@"\n')
+        launcher.chmod(0o755)
+        script = self.step('workflow-checks', 'Structural rule')['run']
+        for extension in ('yml', 'yaml'):
+            path = f'.github/workflows/ci.{extension}'
+            for key in ('paths', 'paths-ignore'):
+                with self.subTest(extension=extension, key=key):
+                    self.write(path, f'on:\n  pull_request:\n    {key}: [src/**]\njobs: {{}}\n')
+                    result = self.run_step(script, PATH=f'{binary}:/usr/bin:/bin')
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn(path, result.stdout)
+                    self.write(path, 'on: [push, pull_request]\njobs: {}\n')
+                    result = self.run_step(script, PATH=f'{binary}:/usr/bin:/bin')
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_enforcing_failure_retains_verdict_for_non_cancelled_upload(self):
+        needs = {'security': {'result': 'failure', 'outputs': {'verdict': 'failure'}}}
+        step = self.step('tier-0-ok', 'Aggregate gate verdicts')
+        for mode, expected_status in (('enforcing', 1), ('report-only', 0)):
+            with self.subTest(mode=mode):
+                result = self.run_step(step['run'], TIER0_MODE=mode,
+                                       TIER0_NEEDS_JSON=json.dumps(needs))
+                self.assertEqual(result.returncode, expected_status,
+                                 result.stdout + result.stderr)
+                self.assertEqual(json.loads((self.repo / 'needs.json').read_text()),
+                                 {'security': {'result': 'failure', 'verdict': 'failure'}})
+        steps = self.jobs['tier-0-ok']['steps']
+        uploads = [s for s in steps if s.get('uses', '').startswith('actions/upload-artifact@')]
+        self.assertEqual(len(uploads), 1)
+        upload = uploads[0]
+        self.assertGreater(steps.index(upload), steps.index(step))
+        self.assertEqual(upload.get('if'), '${{ !cancelled() }}',
+                         'upload must survive enforcing failure, but not cancellation')
+        self.assertEqual(upload['with']['name'], 'tier-0-findings')
+        self.assertEqual(upload['with']['path'], 'needs.json')
+
     def test_self_pincheck_reads_the_workflow_pin_and_checks_both_directories(self):
         caller = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())
         matches = [step for step in caller['jobs']['pincheck']['steps']
