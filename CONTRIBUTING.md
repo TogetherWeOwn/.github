@@ -65,7 +65,7 @@ The PR follows the rename. Never rewrite merged history.
   commit's sha, then push once. The check reads the threads when it runs,
   so replies posted after the last push are only seen at the next run —
   push a commit or close and reopen the PR to re-run it.
-- The merge gate is the ruleset's required checks: the repo CI and `Devin Review`. No approving review is required (see PIPELINE-STANDARD.md §1). **CodeRabbit is advisory**: read its findings and answer each one (fixed, rejected with evidence, or duplicate), but never wait for it and never post `@coderabbitai` commands to trigger it.
+- The target merge gate is CI, `Devin Review` pinned to App 811515 and CodeQL where `codeql=required`; verify the effective rules and rollout state per [STANDARD.md](STANDARD.md#1-governance-and-required-gates). Zero required GitHub approving reviews does not waive independent task/security review. **CodeRabbit is advisory**: read and answer each finding, but never wait for it or post commands to trigger it. The final-stage reviewer merges; the author merges only when no review stage exists. Production deploys and merges with an automatic production path need exact-head Release Manager acceptance (STANDARD.md §2), not owner merge approval.
 - Fix findings on the same PR and reply on the finding's thread; do not open a
   new PR to get a fresh review.
 - Ask for a security review when the diff touches auth, sessions, secrets,
@@ -127,7 +127,7 @@ The D-items are:
 
 ## 6. Releases
 
-Releases follow [PIPELINE-STANDARD.md](PIPELINE-STANDARD.md) §5: applications use
+Releases follow [STANDARD.md](STANDARD.md#5-release): applications use
 numeric CalVer, packages/plugins/APIs use SemVer, and only stables create Releases.
 Release notes are grouped by each repo's `.github/release.yml` categories
 (Security, Features, Fixes, Documentation, Other changes).

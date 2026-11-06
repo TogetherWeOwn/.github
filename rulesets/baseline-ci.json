@@ -1,0 +1,48 @@
+{
+  "name": "baseline-ci",
+  "target": "branch",
+  "enforcement": "disabled",
+  "bypass_actors": [],
+  "conditions": {
+    "repository_property": {
+      "include": [
+        {
+          "name": "governance",
+          "property_values": [
+            "standard"
+          ],
+          "source": "custom"
+        },
+        {
+          "name": "ci",
+          "property_values": [
+            "standard"
+          ],
+          "source": "custom"
+        }
+      ],
+      "exclude": []
+    },
+    "ref_name": {
+      "include": [
+        "~DEFAULT_BRANCH"
+      ],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {
+            "context": "ci-ok",
+            "integration_id": 15368
+          }
+        ]
+      }
+    }
+  ]
+}

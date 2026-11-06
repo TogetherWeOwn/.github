@@ -1,0 +1,44 @@
+{
+  "id": 26327170,
+  "name": "pr-standards",
+  "target": "branch",
+  "source_type": "Organization",
+  "source": "TogetherWeOwn",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "~DEFAULT_BRANCH"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "workflows",
+      "parameters": {
+        "do_not_enforce_on_create": true,
+        "workflows": [
+          {
+            "repository_id": 1403503756,
+            "path": ".github/workflows/pr-standards-required.yml",
+            "sha": "97fc0e24038021dfaa1fc9da754c6c5d6429130f"
+          }
+        ]
+      }
+    }
+  ],
+  "node_id": "RRS_lACkVXNlcs4TEfOWzgGRuII",
+  "created_at": "2026-11-01T21:19:17.564Z",
+  "updated_at": "2026-11-04T00:21:03.608Z",
+  "bypass_actors": [],
+  "current_user_can_bypass": "never",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/TogetherWeOwn/.github/rulesets/26327170"
+    },
+    "html": {
+      "href": "https://github.com/TogetherWeOwn/.github/rules/26327170"
+    }
+  }
+}

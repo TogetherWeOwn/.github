@@ -1,0 +1,47 @@
+{
+  "name": "baseline-codeql",
+  "target": "branch",
+  "enforcement": "evaluate",
+  "bypass_actors": [],
+  "conditions": {
+    "repository_property": {
+      "include": [
+        {
+          "name": "governance",
+          "property_values": [
+            "standard"
+          ],
+          "source": "custom"
+        },
+        {
+          "name": "codeql",
+          "property_values": [
+            "required"
+          ],
+          "source": "custom"
+        }
+      ],
+      "exclude": []
+    },
+    "ref_name": {
+      "include": [
+        "~DEFAULT_BRANCH"
+      ],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "code_scanning",
+      "parameters": {
+        "code_scanning_tools": [
+          {
+            "tool": "CodeQL",
+            "security_alerts_threshold": "high_or_higher",
+            "alerts_threshold": "errors"
+          }
+        ]
+      }
+    }
+  ]
+}
