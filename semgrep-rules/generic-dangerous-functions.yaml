@@ -96,6 +96,13 @@ rules:
                   - pattern: 'subprocess.check_call(..., **{..., **{..., "shell": $SHELL, ...}, ...}, ...)'
                   - pattern: 'subprocess.check_output(..., **{..., **{..., "shell": $SHELL, ...}, ...}, ...)'
                   - pattern: 'subprocess.Popen(..., **{..., **{..., "shell": $SHELL, ...}, ...}, ...)'
+                  # Also bind an outer shell value beside an expansion. The
+                  # expansion's contents must not replace the outer binding.
+                  - pattern: 'subprocess.run(..., **{..., "shell": $SHELL, **$MERGED, ...}, ...)'
+                  - pattern: 'subprocess.call(..., **{..., "shell": $SHELL, **$MERGED, ...}, ...)'
+                  - pattern: 'subprocess.check_call(..., **{..., "shell": $SHELL, **$MERGED, ...}, ...)'
+                  - pattern: 'subprocess.check_output(..., **{..., "shell": $SHELL, **$MERGED, ...}, ...)'
+                  - pattern: 'subprocess.Popen(..., **{..., "shell": $SHELL, **$MERGED, ...}, ...)'
                   # Each wrapper forwards positional arguments to Popen;
                   # shell is its ninth parameter, not close_fds (the eighth).
                   - pattern: subprocess.run($A, $B, $C, $D, $E, $F, $G, $H, $SHELL, ...)
