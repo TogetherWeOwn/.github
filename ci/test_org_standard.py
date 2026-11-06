@@ -1,9 +1,9 @@
 """Read-only contracts for reviewed org ruleset source; no live GitHub writes."""
 
 import json
-from pathlib import Path
 import re
 import unittest
+from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -117,11 +117,42 @@ class OrgStandardTests(unittest.TestCase):
                 "repository_id": 1403503756,
                 "path": ".github/workflows/pr-standards-required.yml", "sha": PIN}]}}])
 
+    def test_legacy_section_anchors(self):
+        expected = {
+            "CI-STANDARD.md": {
+                "ci-standard-only-run-what-the-change-affects-permanent-every-togetherweown-repo",
+                "rules", "advisory-pr-size-labels", "banned", "verification-per-repo",
+            },
+            "PIPELINE-STANDARD.md": {
+                "pipeline-standard-one-pr-one-review-one-merge-one-deploy-every-togetherweown-repo",
+                "1-review", "2-merge", "2a-merge-queue-not-enabled", "3-deploy",
+                "3a-promote-the-last-staging-verified-commit", "4-ci", "5-release",
+                "5a-no-host-release-train",
+                "6-self-blocking-anti-patterns-each-measured-on-2026-10-10",
+            },
+        }
+        standard = (ROOT / "STANDARD.md").read_text()
+        destinations = {
+            re.sub(r"[^\w\- ]", "", heading.lower()).replace(" ", "-")
+            for heading in re.findall(r"^#+ (.+)$", standard, re.MULTILINE)
+        }
+        for name, anchors in expected.items():
+            with self.subTest(document=name):
+                text = (ROOT / name).read_text()
+                self.assertEqual(set(re.findall(r'<a id="([^"]+)"></a>', text)), anchors)
+                links = re.findall(r'<a id="[^"]+"></a>\s+\[[^\]]+\]\(([^)]+)\)', text)
+                self.assertEqual(len(links), len(anchors))
+                for link in links:
+                    path, _, fragment = link.partition("#")
+                    self.assertEqual(path, "STANDARD.md")
+                    if fragment:
+                        self.assertIn(fragment, destinations)
+
     def test_canonical_docs_and_local_links(self):
         for old in ("CI-STANDARD.md", "PIPELINE-STANDARD.md"):
             text = (ROOT / old).read_text()
             self.assertIn("[STANDARD.md](STANDARD.md)", text)
-            self.assertLess(len(text.splitlines()), 15)
+            self.assertIn("do not add policy here", text)
         documents = ["STANDARD.md", "README.md", "NEW-REPO-CHECKLIST.md",
                      "CI-STANDARD.md", "PIPELINE-STANDARD.md", "rulesets/README.md"]
         for name in documents:
