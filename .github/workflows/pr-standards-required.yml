@@ -390,7 +390,8 @@ jobs:
                   value = re.sub(r"^[\W_]+|[\W_]+$", "", value)
                   value = re.sub(r"(?i)^n/?a\b\s*[-—–:]?\s*", "", value)
                   value = re.sub(r"^[\W_]+|[\W_]+$", "", value)
-                  placeholder = re.fullmatch(r"(?i)(?:n/?a|none|todo|tbd|reason|testing|risk|how to revert|what these checks would miss)", value)
+                  placeholder = (re.fullmatch(r"(?i)(?:n/?a|none|reason|testing|risk|how to revert|what these checks would miss)", value)
+                                 or re.match(r"(?i)^(?:(?:todo|tbd)\b|none\s+yet\b)", value))
                   if not value or placeholder:
                       report("PR contract", f"Section '## {name}' is missing, empty or a placeholder. Use evidence or N/A — a concrete reason.")
 
@@ -469,8 +470,13 @@ jobs:
                       quote = text[i]
                       if language == "py" and text.startswith(quote * 3, i):
                           quote *= 3
+                      multiline = (len(quote) == 3 or (quote == "`" and language in ("js", "go"))
+                                   or (quote == '"' and language == "rs"))
                       i += len(quote)
                       while i < len(text):
+                          # Ordinary quotes cannot consume a raw new-file newline.
+                          if text[i] == "\n" and not multiline:
+                              break
                           if text[i] == "\\":
                               i = min(i + 2, len(text))
                           elif text.startswith(quote, i):
@@ -496,14 +502,19 @@ jobs:
           def comment_reason(comments):
               return bool(re.search(r"(?://|#|/\*)\s*skip-reason:\s*[^\s*/].*", comments, re.I))
 
+          REGISTRATION = r"(?<![\w$.])(?:it|test|describe)(?:\s*\.\s*(?:concurrent|sequential|serial|describe))*"
+
+          def focused(code_lines, index):
+              # Look back within this hunk; only an added 'only' token is judged.
+              window = "\n".join(code_lines[max(0, index - 20):index + 1])
+              start = len(window) - len(code_lines[index])
+              return any(match.start("focus") >= start for match in re.finditer(
+                  REGISTRATION + r"\s*\.\s*(?P<focus>only)\b", window))
+
           def skip_problem(text, code, comments, previous_comments, language):
               first_code = code.split("\n", 1)[0]
-              registration = r"(?<![\w$.])(?:it|test|describe)(?:\s*\.\s*(?:concurrent|sequential|serial|describe))*"
-              # Focus is never justified, including chained/tagged registrations.
-              if language == "js" and re.search(registration + r"\s*\.\s*only\b", first_code):
-                  return "Focused .only test suppresses the rest of the suite. Remove it."
               reason = comment_reason(comments) or comment_reason(previous_comments)
-              js = language == "js" and re.search(registration + r"\s*\.\s*skip\b|\b(?:xit|xdescribe)\s*\(", first_code)
+              js = language == "js" and re.search(REGISTRATION + r"\s*\.\s*skip\b|\b(?:xit|xdescribe)\s*\(", first_code)
               py_mark = language == "py" and re.search(r"@pytest\.mark\.skip(?:if)?\b", first_code)
               py_call = language == "py" and re.search(r"\bpytest\.skip\s*\(", first_code)
               rust = language == "rs" and re.search(r"#\s*\[\s*ignore\b", first_code)
@@ -564,6 +575,8 @@ jobs:
                           for index, (number, text, added_line) in enumerate(rows):
                               if not added_line:
                                   continue
+                              if language == "js" and focused(code_lines, index):
+                                  report("Test skip lint", "Focused .only test suppresses the rest of the suite. Remove it.", path, number)
                               # Only markers on added lines count; arguments may
                               # continue over at most 20 following visible lines.
                               end = index + 1

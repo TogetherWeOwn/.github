@@ -36,7 +36,7 @@ LABEL_SCRIPT = script(LABEL_WORKFLOW, "LABEL_PY")
 def changed(line, path="src/unit.test.ts", previous="", removed=""):
     diff = "@@ -1,3 +1,4 @@\n"
     if previous:
-        diff += f" {previous}\n"
+        diff += "".join(f" {part}\n" for part in previous.splitlines())
     if removed:
         diff += f"-{removed}\n"
     diff += "\n".join("+" + part for part in line.splitlines()) + "\n"
@@ -94,6 +94,19 @@ class Contract(unittest.TestCase):
             with self.subTest(value=value):
                 body = BODY.replace("N/A — source-only fixture, no runtime change.", value)
                 self.assertEqual(run(body=body)[0], 1)
+
+    def test_qualified_placeholders_fail_but_concrete_na_reasons_pass(self):
+        for value, expected in (("N/A — TODO: add tests later", 1),
+                                ("TODO add tests later", 1), ("N/A — TBD after review", 1),
+                                ("N/A — none yet", 1), ("None yet; will fill later", 1),
+                                ("N/A — documentation-only; no runtime behavior changed", 0),
+                                ("N/A — no database or external side effects exist", 0),
+                                ("No TODO markers remain; Actions passed 42 tests", 0),
+                                ("None of the changed files executes at runtime", 0)):
+            with self.subTest(value=value):
+                body = BODY.replace("N/A — source-only fixture, no runtime change.", value)
+                code, out, _ = run(body=body)
+                self.assertEqual(code, expected, out)
 
     def test_subsection_heading_alone_is_not_evidence(self):
         for value, expected in (("### CI", 1), ("#### Results\n###### Details", 1),
@@ -205,6 +218,59 @@ class AddedLineSkips(unittest.TestCase):
             result = run(files=[changed(line)])
             self.assertEqual(result[0], 1, result[1])
             self.assertIn("Focused .only", result[1])
+
+    def test_split_focus_is_anchored_to_added_marker(self):
+        for registration in ("test", "it\n  .concurrent", "test\n  .describe", "describe"):
+            for marker in (".only('focus', fn);", ".only.each([1])('case', fn);", ".only`case`;"):
+                for context_registration in (False, True):
+                    with self.subTest(registration=registration, marker=marker,
+                                      context_registration=context_registration):
+                        file = (changed(marker, previous=registration) if context_registration
+                                else changed(registration + "\n" + marker))
+                        code, out, _ = run(files=[file])
+                        self.assertEqual(code, 1, out)
+                        marker_line = len(registration.splitlines()) + 1
+                        self.assertIn(f"file=src/unit.test.ts,line={marker_line}::Focused .only", out)
+
+    def test_split_focus_preserves_non_registration_and_context_controls(self):
+        for line, previous in ((".only('email');", "query"),
+                               ("test\n.other.only('value');", ""),
+                               ("// test\n.only('sample');", ""),
+                               ("const sample = `test\n.only('sample')`;", "")):
+            code, out, _ = run(files=[changed(line, previous=previous)])
+            self.assertEqual(code, 0, out)
+        file = changed("// unrelated addition", previous="test\n  .only('existing', fn);")
+        self.assertEqual(run(files=[file])[0], 0)
+        file = changed("test")
+        file["patch"] += "   .only('existing', fn);\n"
+        self.assertEqual(run(files=[file])[0], 0)
+        file = changed("test")
+        file["patch"] += "@@ -40,1 +40,1 @@\n+.only('not adjacent', fn);\n"
+        self.assertEqual(run(files=[file])[0], 0)
+
+    def test_raw_newline_quotes_do_not_hide_following_added_markers(self):
+        for prefix, path in (("render(<p>Don't</p>);", "unit.test.tsx"),
+                             ("const apostrophe = /'/;", "unit.test.ts"),
+                             ('const quote = /"/;', "unit.test.ts"),
+                             ("const quote = /'/;", "unit_test.go"),
+                             ("unclosed = '", "test_unit.py")):
+            marker = "pytest.skip()" if path.endswith(".py") else 't.Skip()' if path.endswith(".go") else "it.only('focus', fn);"
+            for added_prefix in (False, True):
+                with self.subTest(prefix=prefix, added_prefix=added_prefix):
+                    file = changed(prefix + "\n" + marker, path) if added_prefix else changed(marker, path, previous=prefix)
+                    code, out, _ = run(files=[file])
+                    self.assertEqual(code, 1, out)
+                    self.assertIn("file=" + path + ",line=2", out)
+        file = changed("render(<p>Don't</p>);\ntest.skip('case', fn);", "unit.test.tsx")
+        self.assertEqual(run(files=[file])[0], 1)
+
+    def test_escaped_newlines_and_multiline_literals_still_mask_examples(self):
+        for line, path in (("const sample = 'continued\\\nit.only(example)';", "unit.test.ts"),
+                           ("sample = 'continued\\\npytest.skip()'", "test_unit.py"),
+                           ('sample := `example\nt.Skip()`', "unit_test.go"),
+                           ('let sample = "example\n#[ignore]\n";', "src/lib.rs")):
+            code, out, _ = run(files=[changed(line, path)])
+            self.assertEqual(code, 0, out)
 
     def test_multiline_comment_and_string_context_masks_added_examples(self):
         for opener, example, closer, path in (("/* Examples:", "test.only('case', fn);", "*/", "unit.test.ts"),

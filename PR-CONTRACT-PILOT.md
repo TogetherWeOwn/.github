@@ -26,7 +26,9 @@ Use the existing org template, not a second contract block:
 - **What these checks would miss:** gaps in the evidence and automation.
 
 Each section needs non-placeholder evidence. `N/A — a concrete reason` is valid
-for non-runtime changes; an empty or placeholder reason is not. Fenced command
+for non-runtime changes; an empty or placeholder reason is not. Leading TODO/TBD
+promises and "none yet" forms are placeholders, even with qualifying text; this
+is a bounded syntax check, not a semantic judgment of arbitrary prose. Fenced command
 output/results count, but empty fences, comments and headings alone do not.
 Headings inside fences never open sections. Verification and Risks were folded
 into Testing and Risk. The legacy pr-lint caller accepts Testing or Verification,
@@ -54,7 +56,11 @@ The matcher follows the registration/adjacent-comment shape from
 [T3 Code's skip lint](https://github.com/pingdotgg/t3code/blob/main/oxlint-plugin-t3code/rules/no-test-timeout-or-unreasoned-skip.ts),
 not its timeout policy. No third-party code or parser dependency is installed.
 String/comment examples are masked across context and added lines within each
-visible new-file diff hunk, including Python triple-quoted strings. Static Python
+visible new-file diff hunk, including Python triple-quoted strings. Ordinary
+single/double quotes in JS/TS, Python and Go stop at unescaped newlines;
+templates/triple quotes and Rust multiline strings retain multiline masking. Focus registrations may span up to 20 preceding visible lines,
+with the diagnostic anchored to an added `only` token, never a context-only marker.
+Static Python
 raw/unicode text literals count as reasons; bytes, dynamic f-strings and positional
 pytest mark reasons do not replace the required literal `reason=` or adjacent
 comment. Multiline literal arguments use at most 20 following visible diff lines.
