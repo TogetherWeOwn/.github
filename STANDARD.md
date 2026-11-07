@@ -116,6 +116,40 @@ repository targeting and must not be used as replacement create payloads.
 `ci-ok` and gitleaks stay repo-level where job names differ. Do not add optional
 baseline-ci until its exact producer exists on main and has reported there.
 
+### Target-context workflows in forks
+
+`pull_request_target` runs in the target repository's privileged context. Do not
+retain inherited target-event automation merely because upstream uses it. Prefer
+ordinary `pull_request` checks when target-context authority is unnecessary;
+never expose credentials or a write-capable token to untrusted PR code.
+
+No target-event exception was approved for the following retirement. These exact
+workflows were independently verified `disabled_manually` on **2026-11-07 UTC**;
+all paths are under `.github/workflows/`:
+
+| Repository | Workflow | Workflow ID | Disposition |
+|---|---|---|---|
+| CLIProxyAPI | `agents-md-guard.yml` | 373007151 | Natively disabled 2026-11-07; upstream protects its own contributor flow. |
+| CLIProxyAPI | `auto-retarget-main-pr-to-dev.yml` | 373007153 | Natively disabled 2026-11-07; no demonstrated fork-contributor need. |
+| paperclip | `commitperclip-review.yml` | 356889984 | Natively disabled 2026-11-07; unneeded inherited review automation. |
+| hindsight | `triage-labels.yml` | 374031483 | Natively disabled 2026-11-07; cosmetic labels have no required consumer. |
+| acpx | `clawsweeper-dispatch.yml` | 369213021 | Retain the disabled state in effect since 2026-10-30. |
+
+The four new disables used native workflow settings, not workflow-source edits.
+No target-event allow-policy change or replacement credential was applied, and
+no re-enable is scheduled. Ordinary required CI, Devin/CodeQL where applicable
+and existing rulesets remain in force; retiring these workflows is not a waiver
+of any required check. This dated inventory is not proof that future workflows
+or newly activated bases are covered.
+
+After upstream sync, workflow introduction or activation of a new PR base,
+inspect actual event triggers on **every applicable base**, not only the default
+branch, and read back the repository's native workflow states. Reassess newly
+required target-context behavior through technical and Security review. Any
+security-weakening exception requires owner authorization before an authorized
+administrator applies it. Neither upstream's use nor this inventory grants an
+exception or permission to re-enable a retired workflow.
+
 ## 2. PR review and merge
 
 - Open a draft while incomplete; mark ready when reviewable work is complete.
