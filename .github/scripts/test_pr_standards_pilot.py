@@ -5,13 +5,14 @@ Full verification runs in GitHub Actions (pr-standards selftest), never locally.
 
 import json
 import os
-from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,7 +24,7 @@ BODY = "\n\n".join(f"## {name}\n\nN/A — source-only fixture, no runtime change
 
 
 def script(path, delimiter):
-    match = re.search(rf"<<'{delimiter}'\n(.*?)\n\s*{delimiter}\n", path.read_text(), re.S)
+    match = re.search(rf"<<'{delimiter}'\n(.*?)\n\s*{delimiter}\n", path.read_text(), re.DOTALL)
     assert match, f"Missing {delimiter} heredoc"
     return textwrap.dedent(match[1])
 
@@ -53,7 +54,7 @@ def run(body=BODY, files=(), repo=PILOT, head_repo=None, draft="false", author="
                "FILES_JSON": raw if raw is not None else json.dumps(list(files)),
                "GITHUB_STEP_SUMMARY": str(summary)}
         result = subprocess.run([sys.executable, "-I", "-c", LABEL_SCRIPT if label else SCRIPT],
-                                env=env, capture_output=True, text=True, timeout=30)
+                                env=env, capture_output=True, text=True, timeout=30, check=False)
         return result.returncode, result.stdout + result.stderr, summary.read_text() if summary.exists() else ""
 
 
@@ -199,9 +200,11 @@ class AddedLineSkips(unittest.TestCase):
 
 class ExactHeadFiles(unittest.TestCase):
     def namespace(self):
-        result = {"__name__": "pilot_fixture"}
-        exec(SCRIPT.split('if os.environ.get("EVENT") != "pull_request":')[0], result)
-        return result
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "pilot_fixture.py"
+            source.write_text(SCRIPT.split('if os.environ.get("EVENT") != "pull_request":')[0])
+            result = runpy.run_path(str(source))
+        return result["files"].__globals__
 
     def test_complete_exact_head_listing(self):
         with patch.dict(os.environ, {"HEAD_SHA": "a" * 40}, clear=True):
@@ -209,7 +212,7 @@ class ExactHeadFiles(unittest.TestCase):
             state = {"head": {"sha": "a" * 40}, "base": {"sha": "b" * 40}, "changed_files": 1}
             file = changed("test('valid', fn);")
             replies = iter([state, [file], state])
-            namespace["api"] = lambda suffix: next(replies)
+            namespace["api"] = lambda suffix, replies=replies: next(replies)
             self.assertEqual(namespace["files"](), [file])
 
     def test_stale_or_incomplete_diff_is_refused(self):
@@ -220,7 +223,7 @@ class ExactHeadFiles(unittest.TestCase):
             with self.subTest(after=after), patch.dict(os.environ, {"HEAD_SHA": "a" * 40}, clear=True):
                 namespace = self.namespace()
                 replies = iter([state, [changed("test('valid', fn);")], after])
-                namespace["api"] = lambda suffix: next(replies)
+                namespace["api"] = lambda suffix, replies=replies: next(replies)
                 with self.assertRaises(ValueError):
                     namespace["files"]()
         with patch.dict(os.environ, {"HEAD_SHA": "f" * 40}, clear=True):
@@ -303,8 +306,7 @@ class ShapeAndCompatibility(unittest.TestCase):
 
     def test_attestation_parser_ignores_renamed_outer_sections(self):
         # Parser is independent of Verification/Risks; no runtime change needed.
-        namespace = {"__name__": "attestation_fixture", "__file__": str(ROOT / ".github/scripts/pr_attestation.py")}
-        exec(compile((ROOT / ".github/scripts/pr_attestation.py").read_text(), "attestation", "exec"), namespace)
+        namespace = runpy.run_path(str(ROOT / ".github/scripts/pr_attestation.py"))
         attestation = ("## Attestation\nrisk_tier: T2\n### Claims\n- C1: Documentation only.\n"
                        "### Tests\n- none | reason=Documentation-only; no behavior changed.\n"
                        "### High-risk checklist\n" + "\n".join(f"- [ ] D{i}: N/A, docs only." for i in range(1, 9)))
@@ -319,7 +321,7 @@ class ShapeAndCompatibility(unittest.TestCase):
                    "BODY": f"## {heading}\nExact-head Actions evidence recorded for this source-only fixture.",
                    "AUTHOR": "contributor", "PR_STANDARDS_MODE": "error"}
             result = subprocess.run([sys.executable, "-I", "-c", lint], env=env,
-                                    capture_output=True, text=True, timeout=30)
+                                    capture_output=True, text=True, timeout=30, check=False)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 

@@ -508,7 +508,7 @@ jobs:
                   if not (reason or (argument and string(text[py_mark.end() + argument.end():]))):
                       return "pytest skip/skipif needs a non-empty reason= or skip-reason comment."
               if py_call:
-                  argument = re.match(r"\s*reason\s*=\s*", code[py_call.end():])
+                  argument = re.match(r"\s*reason\s*=", code[py_call.end():])
                   start = py_call.end() + (argument.end() if argument else 0)
                   if not (reason or string(text[start:])):
                       return "pytest.skip needs a non-empty message or skip-reason comment."
