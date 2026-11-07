@@ -368,6 +368,8 @@ jobs:
                   if fence:
                       if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
                           fence = None
+                      elif current and not re.match(r"^\s*#{1,6}\s", line):
+                          sections[current].append(line)
                       continue
                   if marker:
                       fence = marker[1]
@@ -376,14 +378,19 @@ jobs:
                   if heading:
                       current = heading[1].casefold()
                       sections.setdefault(current, [])
-                  elif current:
+                  elif re.match(r"^#\s", line):
+                      current = None
+                  elif current and not re.match(r"^\s*#{1,6}\s", line):
                       sections[current].append(line)
               for name in SECTIONS:
                   value = "\n".join(sections.get(name.casefold(), []))
                   value = re.sub(r"<[^>]*>", "", value)
                   value = re.sub(r"(?m)^\s*(?:[-*+]\s*|\[[ xX]\]\s*)", "", value).strip()
-                  value = value.strip(" \n\t-*_`.:…")
-                  placeholder = re.fullmatch(r"(?i)(?:n/?a|none|todo|tbd|testing|risk|how to revert|what these checks would miss)", value)
+                  # N/A is an exemption only when its reason is substantive too.
+                  value = re.sub(r"^[\W_]+|[\W_]+$", "", value)
+                  value = re.sub(r"(?i)^n/?a\b\s*[-—–:]?\s*", "", value)
+                  value = re.sub(r"^[\W_]+|[\W_]+$", "", value)
+                  placeholder = re.fullmatch(r"(?i)(?:n/?a|none|todo|tbd|reason|testing|risk|how to revert|what these checks would miss)", value)
                   if not value or placeholder:
                       report("PR contract", f"Section '## {name}' is missing, empty or a placeholder. Use evidence or N/A — a concrete reason.")
 
@@ -422,95 +429,97 @@ jobs:
               return bool(path.endswith(".rs") or re.search(r"(?:^|/)(?:__tests__|tests?|specs?)/", path)
                           or re.search(r"(?:^test_.*\.py$|_test\.(?:py|go)$|\.(?:test|spec)\.[cm]?[jt]sx?$)", name))
 
-          def lines(patch, added_only=True):
-              old, new, previous = 0, 0, ""
+          def hunks(patch):
+              new, rows = 0, []
               for raw in patch.splitlines():
-                  hunk = re.match(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw)
+                  hunk = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw)
                   if hunk:
-                      old, new, previous = int(hunk[1]), int(hunk[2]), ""
-                  elif raw.startswith("+"):
-                      yield new, raw[1:], previous
+                      if rows:
+                          yield rows
+                      new, rows = int(hunk[1]), []
+                  elif raw.startswith(("+", " ")):
+                      rows.append((new, raw[1:], raw.startswith("+")))
                       new += 1
-                      previous = raw[1:]
-                  elif raw.startswith(" "):
-                      if not added_only:
-                          yield new, raw[1:], previous
-                      old += 1
-                      new += 1
-                      previous = raw[1:]
-                  elif raw.startswith("-"):
-                      old += 1
-                  # A removed line is not the previous line in the new file.
+                  # Removed lines are not part of the new file's lexical context.
+              if rows:
+                  yield rows
 
-          def string(value):
-              # A literal is evidence of a message, not truth of that message.
-              match = re.match(r'''\s*((?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'))''', value, re.S)
+          def string(value, python=False):
+              # Only safe static text literals count, never f-strings or bytes.
+              prefix = r"(?i:[ru])?" if python else ""
+              match = re.match(r"\s*(" + prefix + r'''(?:"{3}[\s\S]*?"{3}|'{3}[\s\S]*?'{3}|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'))''', value)
               if not match:
                   return False
               try:
-                  return bool(ast.literal_eval(match[1]).strip())
-              except (ValueError, SyntaxError, AttributeError):
+                  literal = ast.literal_eval(match[1])
+                  return isinstance(literal, str) and bool(literal.strip())
+              except (ValueError, SyntaxError):
                   return False
 
-          def syntax(text):
-              # Preserve offsets but hide literal/comment contents from marker matching.
-              mask, comments, i = list(text), [], 0
+          def syntax(text, language):
+              # Lex each visible new-file hunk once, preserving offsets/newlines.
+              mask = list(text)
+              comments = ["\n" if c == "\n" else " " for c in text]
+              i = 0
               while i < len(text):
-                  if text[i] in "\"'`":
-                      quote, start = text[i], i
-                      i += 1
+                  start = i
+                  # A Rust lifetime is not the start of a quoted character.
+                  lifetime = language == "rs" and text[i] == "'" and not re.match(r"'(?:\\.|[^'\\\n])'", text[i:])
+                  if text[i] in "\"'`" and not lifetime:
+                      quote = text[i]
+                      if language == "py" and text.startswith(quote * 3, i):
+                          quote *= 3
+                      i += len(quote)
                       while i < len(text):
                           if text[i] == "\\":
-                              i += 2
-                          elif text[i] == quote:
-                              i += 1
+                              i = min(i + 2, len(text))
+                          elif text.startswith(quote, i):
+                              i += len(quote)
                               break
                           else:
                               i += 1
-                      mask[start:i] = " " * (i - start)
-                  elif text.startswith(("//", "/*"), i) or (text[i] == "#" and not re.match(r"#\s*\[", text[i:])):
-                      start = i
+                  elif ((language == "py" and text[i] == "#")
+                        or (language != "py" and text.startswith(("//", "/*"), i))):
                       if text.startswith("/*", i):
                           end = text.find("*/", i + 2)
                           i = len(text) if end < 0 else end + 2
                       else:
                           end = text.find("\n", i)
                           i = len(text) if end < 0 else end
-                      comments.append(text[start:i])
-                      mask[start:i] = " " * (i - start)
+                      comments[start:i] = text[start:i]
                   else:
                       i += 1
-              return "".join(mask), comments
+                      continue
+                  mask[start:i] = ["\n" if c == "\n" else " " for c in text[start:i]]
+              return "".join(mask), "".join(comments)
 
           def comment_reason(comments):
-              return any(re.search(r"(?://|#|/\*)\s*skip-reason:\s*[^\s*/].*", c, re.I) for c in comments)
+              return bool(re.search(r"(?://|#|/\*)\s*skip-reason:\s*[^\s*/].*", comments, re.I))
 
-          def skip_problem(text, previous, following=""):
-              code, comments = syntax(text)
-              first_code = code
-              text += following
-              code = syntax(text)[0]
-              # .only is never justified: it suppresses the rest of the test suite.
-              if re.search(r"\.\s*only\s*\(", first_code):
+          def skip_problem(text, code, comments, previous_comments, language):
+              first_code = code.split("\n", 1)[0]
+              registration = r"(?<![\w$.])(?:it|test|describe)(?:\s*\.\s*(?:concurrent|sequential|serial|describe))*"
+              # Focus is never justified, including chained/tagged registrations.
+              if language == "js" and re.search(registration + r"\s*\.\s*only\b", first_code):
                   return "Focused .only test suppresses the rest of the suite. Remove it."
-              reason = comment_reason(comments) or comment_reason(syntax(previous)[1])
-              js = re.search(r"\b(?:(?:it|test|describe)\s*\.\s*skip|xit|xdescribe)\s*\(", first_code)
-              py_mark = re.search(r"@pytest\.mark\.skip(?:if)?\b", first_code)
-              py_call = re.search(r"\bpytest\.skip\s*\(", first_code)
-              rust = re.search(r"#\s*\[\s*ignore\b", first_code)
-              go = re.search(r"\bt\.Skip\s*\(", first_code)
+              reason = comment_reason(comments) or comment_reason(previous_comments)
+              js = language == "js" and re.search(registration + r"\s*\.\s*skip\b|\b(?:xit|xdescribe)\s*\(", first_code)
+              py_mark = language == "py" and re.search(r"@pytest\.mark\.skip(?:if)?\b", first_code)
+              py_call = language == "py" and re.search(r"\bpytest\.skip\s*\(", first_code)
+              rust = language == "rs" and re.search(r"#\s*\[\s*ignore\b", first_code)
+              go = language == "go" and re.search(r"\bt\.Skip\s*\(", first_code)
               # A JS test's name is not a skip reason. As in the T3 matcher,
               # justification belongs in a comment adjacent to registration.
               if js and not reason:
                   return "JS test skip needs an adjacent skip-reason comment (the test name is not a reason)."
               if py_mark:
                   argument = re.search(r"\breason\s*=", code[py_mark.end():])
-                  if not (reason or (argument and string(text[py_mark.end() + argument.end():]))):
+                  if not (reason or (argument and string(text[py_mark.end() + argument.end():], python=True))):
                       return "pytest skip/skipif needs a non-empty reason= or skip-reason comment."
               if py_call:
                   argument = re.match(r"\s*reason\s*=", code[py_call.end():])
                   start = py_call.end() + (argument.end() if argument else 0)
-                  if not (reason or string(text[start:])):
+                  if not (reason or string(text[start:], python=True)):
                       return "pytest.skip needs a non-empty message or skip-reason comment."
               if rust:
                   argument = re.match(r"\s*=", code[rust.end():])
@@ -546,20 +555,31 @@ jobs:
                   if removed and added and min(added) < max(removed):
                       report("Coverage setting lowered (advisory)", "A numeric coverage/threshold setting may have decreased; inspect the diff.", path, advisory=True)
                   if test:
-                      context = {n: text for n, text, _ in lines(patch, added_only=False)}
-                      for number, text, previous in lines(patch):
-                          # Bounded continuation for multiline message/reason arguments.
-                          # Only markers on the added line are judged, never context markers.
-                          following = ""
-                          for offset in range(1, 21):
-                              code = syntax(text + following)[0]
-                              depth = sum(code.count(c) for c in "([") - sum(code.count(c) for c in ")]")
-                              if depth <= 0 or number + offset not in context:
-                                  break
-                              following += "\n" + context[number + offset]
-                          problem = skip_problem(text, previous, following)
-                          if problem:
-                              report("Test skip lint", problem, path, number)
+                      extension = path.rsplit(".", 1)[-1]
+                      language = extension if extension in ("py", "go", "rs") else "js"
+                      for rows in hunks(patch):
+                          source = "\n".join(text for _, text, _ in rows)
+                          code, comments = syntax(source, language)
+                          code_lines, comment_lines = code.split("\n"), comments.split("\n")
+                          for index, (number, text, added_line) in enumerate(rows):
+                              if not added_line:
+                                  continue
+                              # Only markers on added lines count; arguments may
+                              # continue over at most 20 following visible lines.
+                              end = index + 1
+                              depth = 0
+                              for offset in range(index, min(index + 21, len(rows))):
+                                  part = code_lines[offset]
+                                  depth += sum(part.count(c) for c in "([") - sum(part.count(c) for c in ")]")
+                                  end = offset + 1
+                                  if depth <= 0:
+                                      break
+                              text = "\n".join(row[1] for row in rows[index:end])
+                              code = "\n".join(code_lines[index:end])
+                              previous_comments = comment_lines[index - 1] if index else ""
+                              problem = skip_problem(text, code, comment_lines[index], previous_comments, language)
+                              if problem:
+                                  report("Test skip lint", problem, path, number)
 
           if os.environ.get("EVENT") != "pull_request":
               print("Not a pull_request event: the PR head was already checked.")

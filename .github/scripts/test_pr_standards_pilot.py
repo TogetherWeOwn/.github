@@ -77,6 +77,32 @@ class Contract(unittest.TestCase):
         for body in (f"<!-- {BODY} -->", f"```md\n{BODY}\n```", f"~~~md\n{BODY}\n~~~"):
             self.assertEqual(run(body=body)[0], 1)
 
+    def test_fenced_results_supply_evidence_but_not_headings_or_empty_fences(self):
+        for fence in ("```", "~~~"):
+            for value, expected in ((f"{fence}text\nnpm test: 42 passed\n{fence}", 0),
+                                    (f"{fence}text\n\n{fence}", 1),
+                                    (f"{fence}md\n## Testing\n### CI\n{fence}", 1)):
+                with self.subTest(value=value):
+                    body = BODY.replace("## Testing\n\nN/A — source-only fixture, no runtime change.",
+                                        "## Testing\n" + value)
+                    code, out, _ = run(body=body)
+                    self.assertEqual(code, expected, out)
+
+    def test_na_requires_substantive_non_placeholder_reason(self):
+        for value in ("N/A — <reason>", "N/A —", "N/A -", "N/A: TODO", "N/A — TBD",
+                      "N/A — ...", "N/A — **<reason>**", "N/A — none", "**N/A — TODO**"):
+            with self.subTest(value=value):
+                body = BODY.replace("N/A — source-only fixture, no runtime change.", value)
+                self.assertEqual(run(body=body)[0], 1)
+
+    def test_subsection_heading_alone_is_not_evidence(self):
+        for value, expected in (("### CI", 1), ("#### Results\n###### Details", 1),
+                                ("### CI\n42 tests passed in Actions.", 0)):
+            body = BODY.replace("## Testing\n\nN/A — source-only fixture, no runtime change.",
+                                "## Testing\n" + value)
+            code, out, _ = run(body=body)
+            self.assertEqual(code, expected, out)
+
     def test_body_text_is_not_logged(self):
         code, out, summary = run(body="sensitive-body-never-log")
         self.assertEqual(code, 1)
@@ -162,6 +188,65 @@ class AddedLineSkips(unittest.TestCase):
                      'expect(message).toContain("it.skip(");', "/* test.only('x') */"):
             result = run(files=[changed(line)])
             self.assertEqual(result[0], 0, result[1])
+
+    def test_focus_is_limited_to_js_test_registrations(self):
+        for line, path in (("User.objects.only('email').get(pk=1)", "test_users.py"),
+                           ('query.only("id")', "unit.test.ts"),
+                           ('query.only("id")', "unit_test.go"),
+                           ('query.only("id");', "src/lib.rs"),
+                           ("test.only('not a JS registration')", "test_unit.py")):
+            result = run(files=[changed(line, path)])
+            self.assertEqual(result[0], 0, result[1])
+
+    def test_chained_and_tagged_focus_registrations_fail(self):
+        for line in ("it.only.each([1])('case', fn);", "test.only`case`;",
+                     "test.describe.only('suite', fn);", "it.concurrent.only('case', fn);",
+                     "describe.only.each`cases`('suite', fn);"):
+            result = run(files=[changed(line)])
+            self.assertEqual(result[0], 1, result[1])
+            self.assertIn("Focused .only", result[1])
+
+    def test_multiline_comment_and_string_context_masks_added_examples(self):
+        for opener, example, closer, path in (("/* Examples:", "test.only('case', fn);", "*/", "unit.test.ts"),
+                                              ("const example = `", "it.only('case', fn);", "`;", "unit.test.ts"),
+                                              ('example = """', "pytest.skip()", '"""', "test_unit.py"),
+                                              ("example = r'''", "pytest.skip()", "'''", "test_unit.py")):
+            for added_opener in (False, True):
+                with self.subTest(opener=opener, added_opener=added_opener):
+                    file = changed(f"{opener}\n{example}\n{closer}" if added_opener else example,
+                                   path, previous="" if added_opener else opener)
+                    if not added_opener:
+                        file["patch"] += " " + closer + "\n"
+                    code, out, _ = run(files=[file])
+                    self.assertEqual(code, 0, out)
+
+    def test_multiline_context_does_not_hide_code_after_close_or_in_next_hunk(self):
+        for line, previous in (("test.only('real', fn);", "/* example */"),
+                               ("*/ test.only('real', fn);", "/* example"),
+                               ("/* example\n*/\ntest.only('real', fn);", "")):
+            self.assertEqual(run(files=[changed(line, previous=previous)])[0], 1)
+        file = changed("/* example")
+        file["patch"] += "@@ -40,1 +40,1 @@\n+test.only('real', fn);\n"
+        self.assertEqual(run(files=[file])[0], 1)
+
+    def test_rust_lifetime_context_does_not_hide_added_ignore(self):
+        file = changed("#[ignore]", "src/lib.rs", previous="fn borrowed<'a>(value: &'a str) {")
+        code, out, _ = run(files=[file])
+        self.assertEqual(code, 1, out)
+        self.assertIn("Rust ignore", out)
+
+    def test_static_prefixed_python_reasons_pass(self):
+        for line in ("pytest.skip(r'no win')", "pytest.skip(u'no win')",
+                     "pytest.skip(reason=R'no win')", "@pytest.mark.skip(reason=u'no win')",
+                     'pytest.skip("""platform issue""")'):
+            result = run(files=[changed(line, "test_unit.py")])
+            self.assertEqual(result[0], 0, result[1])
+
+    def test_python_reasons_still_require_static_nonempty_text(self):
+        for line in ("pytest.skip(r'')", "pytest.skip(u'   ')", "pytest.skip(f'needs {dep}')",
+                     "pytest.skip(b'no win')", "@pytest.mark.skip('platform issue')"):
+            result = run(files=[changed(line, "test_unit.py")])
+            self.assertEqual(result[0], 1, result[1])
 
     def test_multiline_reason_arguments_pass(self):
         for line, path in (("pytest.skip(\n    'platform issue'\n)", "test_unit.py"),
@@ -316,13 +401,20 @@ class ShapeAndCompatibility(unittest.TestCase):
 
     def test_pr_lint_accepts_new_and_legacy_testing_heading(self):
         lint = script(ROOT / "workflow-templates/pr-lint.yml", "PYEOF")
-        for heading in ("Testing", "Verification"):
+        evidence = "Exact-head Actions evidence recorded for this source-only fixture."
+        for body, expected in ((f"## Testing\n{evidence}", 0),
+                               (f"## Verification\n{evidence}", 0),
+                               (f"## Testing\n\n## Verification\n{evidence}", 0),
+                               (f"## Verification\n{evidence}\n## Testing\n", 0),
+                               (f"## Verification\n\n## Testing\n{evidence}", 0),
+                               (f"## Verification\n{evidence}\n## Testing\n{evidence}", 0),
+                               ("## Testing\n\n## Verification\n", 1)):
             env = {"PATH": os.environ.get("PATH", ""), "EVENT": "pull_request", "TITLE": "ci: test contract",
-                   "BODY": f"## {heading}\nExact-head Actions evidence recorded for this source-only fixture.",
+                   "BODY": body,
                    "AUTHOR": "contributor", "PR_STANDARDS_MODE": "error"}
             result = subprocess.run([sys.executable, "-I", "-c", lint], env=env,
                                     capture_output=True, text=True, timeout=30, check=False)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

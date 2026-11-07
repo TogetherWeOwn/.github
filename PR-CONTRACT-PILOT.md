@@ -25,11 +25,14 @@ Use the existing org template, not a second contract block:
 - **How to revert:** code, data and external side effects, or why reversal is unsafe.
 - **What these checks would miss:** gaps in the evidence and automation.
 
-Each section needs visible, non-placeholder text. `N/A — <reason>` is valid for
-non-runtime changes. Comments and fenced examples do not supply evidence.
-Verification and Risks were folded into Testing and Risk. The legacy pr-lint
-caller accepts Testing or Verification. The Attestation parser terminates at any
-next level-one/two heading, independent of those names; a compatibility fixture
+Each section needs non-placeholder evidence. `N/A — a concrete reason` is valid
+for non-runtime changes; an empty or placeholder reason is not. Fenced command
+output/results count, but empty fences, comments and headings alone do not.
+Headings inside fences never open sections. Verification and Risks were folded
+into Testing and Risk. The legacy pr-lint caller accepts Testing or Verification,
+preserving substantive Verification when both headings exist. The Attestation
+parser terminates at any next level-one/two heading, independent of those names;
+a compatibility fixture
 checks this without changing the parser or its rollout pins.
 
 ## Added-line skip lint
@@ -42,7 +45,7 @@ because Rust unit tests live inline.
 | Marker | Accepted justification |
 |---|---|
 | `it/test/describe.skip(...)`, `xit(...)`, `xdescribe(...)` | `skip-reason: <text>` comment on the same or previous new-file line. A JS test name is not a skip justification. |
-| `.only(...)` | None; remove focus so the rest of the suite runs. |
+| JS/TS `it/test/describe.only`, including chained/tagged registrations | None; remove focus so the rest of the suite runs. Unrelated `.only` methods are not test focus. |
 | `@pytest.mark.skip` / `skipif` | Non-empty literal `reason=`, or adjacent skip-reason comment. |
 | `pytest.skip(...)`, `t.Skip(...)` | Non-empty literal message, or adjacent skip-reason comment. |
 | `#[ignore]` | `= "reason"`, or adjacent skip-reason comment. |
@@ -50,10 +53,15 @@ because Rust unit tests live inline.
 The matcher follows the registration/adjacent-comment shape from
 [T3 Code's skip lint](https://github.com/pingdotgg/t3code/blob/main/oxlint-plugin-t3code/rules/no-test-timeout-or-unreasoned-skip.ts),
 not its timeout policy. No third-party code or parser dependency is installed.
-String/comment examples are masked, and multiline literal arguments use at most
-20 following visible diff lines. This is a bounded diff lint, not a language AST,
-a proof that the reason is true, or a complete detector of dynamically constructed
-skips. Aliases, computed registrations and pre-existing markers require review.
+String/comment examples are masked across context and added lines within each
+visible new-file diff hunk, including Python triple-quoted strings. Static Python
+raw/unicode text literals count as reasons; bytes, dynamic f-strings and positional
+pytest mark reasons do not replace the required literal `reason=` or adjacent
+comment. Multiline literal arguments use at most 20 following visible diff lines.
+This is a bounded diff lint, not a language AST, a proof that the reason is true,
+or a complete detector of dynamically constructed skips. Lexical openers outside
+the visible hunk, aliases, computed registrations and pre-existing markers require
+review.
 Uninspectable changed test patches/file-list truncation fail closed in enforced
 contexts; transient API failures need a rerun, never a privileged fallback.
 
