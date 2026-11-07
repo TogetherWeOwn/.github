@@ -316,3 +316,265 @@ jobs:
               sys.exit(1 if level == "error" else 0)
           print("Review replies OK")
           PYEOF2
+      - name: Check pilot PR contract and added test lines
+        if: always()
+        env:
+          EVENT: ${{ github.event_name }}
+          BODY: ${{ github.event.pull_request.body }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |-
+          python3 -I - <<'PILOT_PY'
+          import ast, json, os, re, sys, urllib.request
+
+          # Explicit pilot only. Widening this set needs a separately reviewed rollout.
+          PILOTS = {"TogetherWeOwn/paperclip-plugin-sandbox-boat"}
+          SECTIONS = ("Testing", "Risk", "How to revert", "What these checks would miss")
+          bot = re.fullmatch(r"(?:dependabot|renovate)(?:\[bot\]|-bot)?", os.environ.get("AUTHOR", ""))
+          strict = (os.environ.get("REPO") in PILOTS and not bot
+                    and os.environ.get("DRAFT") != "true"
+                    and os.environ.get("HEAD_REPO") == os.environ.get("REPO"))
+          level = "error" if strict else "warning"
+          failed = False
+          notes = []
+
+          def esc(value, prop=False):
+              text = str(value).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              return text.replace(":", "%3A").replace(",", "%2C") if prop else text
+
+          def report(title, message, path=None, line=None, advisory=False):
+              global failed
+              severity = "warning" if advisory else level
+              failed |= severity == "error"
+              props = f"title={esc(title, True)}"
+              if path:
+                  props += f",file={esc(path, True)}"
+              if line:
+                  props += f",line={line}"
+              print(f"::{severity} {props}::{esc(message)}")
+              # Fixed diagnostic text only; never reproduce PR body or test source.
+              notes.append(f"- {severity}: {title}: {message}")
+
+          def contract(body):
+              text = re.sub(r"<!--[\s\S]*?(?:-->|$)", "", body)
+              sections, current, fence = {}, None, None
+              for line in text.splitlines():
+                  marker = re.match(r"^\s*(`{3,}|~{3,})(.*)$", line)
+                  if fence:
+                      if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
+                          fence = None
+                      continue
+                  if marker:
+                      fence = marker[1]
+                      continue
+                  heading = re.match(r"^##\s+(.+?)\s*#*\s*$", line)
+                  if heading:
+                      current = heading[1].casefold()
+                      sections.setdefault(current, [])
+                  elif current:
+                      sections[current].append(line)
+              for name in SECTIONS:
+                  value = "\n".join(sections.get(name.casefold(), []))
+                  value = re.sub(r"<[^>]*>", "", value)
+                  value = re.sub(r"(?m)^\s*(?:[-*+]\s*|\[[ xX]\]\s*)", "", value).strip()
+                  value = value.strip(" \n\t-*_`.:…")
+                  placeholder = re.fullmatch(r"(?i)(?:n/?a|none|todo|tbd|testing|risk|how to revert|what these checks would miss)", value)
+                  if not value or placeholder:
+                      report("PR contract", f"Section '## {name}' is missing, empty or a placeholder. Use evidence or N/A — a concrete reason.")
+
+          def api(suffix):
+              req = urllib.request.Request(
+                  f"https://api.github.com/repos/{os.environ['REPO']}/pulls/{os.environ['PR_NUMBER']}{suffix}",
+                  headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                           "Accept": "application/vnd.github+json", "User-Agent": "pr-standards-pilot"})
+              with urllib.request.urlopen(req, timeout=20) as response:
+                  return json.load(response)
+
+          def files():
+              if "FILES_JSON" in os.environ:  # offline fixtures only, not workflow input
+                  return json.loads(os.environ["FILES_JSON"])
+              before = api("")
+              if before["head"]["sha"] != os.environ["HEAD_SHA"]:
+                  raise ValueError("PR head changed; re-run at its current head")
+              result = []
+              for page in range(1, 31):  # GitHub's 3000-file API limit
+                  batch = api(f"/files?per_page=100&page={page}")
+                  result.extend(batch)
+                  if len(batch) < 100:
+                      break
+              after = api("")
+              if (after["head"]["sha"] != before["head"]["sha"]
+                      or after["base"]["sha"] != before["base"]["sha"]
+                      or len(result) != after["changed_files"]):
+                  raise ValueError("PR diff changed or file listing is incomplete; re-run or split the PR")
+              return result
+
+          def test_file(path):
+              name = path.rsplit("/", 1)[-1]
+              if not re.search(r"\.(?:[cm]?[jt]sx?|py|go|rs)$", name):
+                  return False
+              # Rust unit tests live inline in ordinary .rs source modules.
+              return bool(path.endswith(".rs") or re.search(r"(?:^|/)(?:__tests__|tests?|specs?)/", path)
+                          or re.search(r"(?:^test_.*\.py$|_test\.(?:py|go)$|\.(?:test|spec)\.[cm]?[jt]sx?$)", name))
+
+          def lines(patch, added_only=True):
+              old, new, previous = 0, 0, ""
+              for raw in patch.splitlines():
+                  hunk = re.match(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw)
+                  if hunk:
+                      old, new, previous = int(hunk[1]), int(hunk[2]), ""
+                  elif raw.startswith("+"):
+                      yield new, raw[1:], previous
+                      new += 1
+                      previous = raw[1:]
+                  elif raw.startswith(" "):
+                      if not added_only:
+                          yield new, raw[1:], previous
+                      old += 1
+                      new += 1
+                      previous = raw[1:]
+                  elif raw.startswith("-"):
+                      old += 1
+                  # A removed line is not the previous line in the new file.
+
+          def string(value):
+              # A literal is evidence of a message, not truth of that message.
+              match = re.match(r'''\s*((?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'))''', value, re.S)
+              if not match:
+                  return False
+              try:
+                  return bool(ast.literal_eval(match[1]).strip())
+              except (ValueError, SyntaxError, AttributeError):
+                  return False
+
+          def syntax(text):
+              # Preserve offsets but hide literal/comment contents from marker matching.
+              mask, comments, i = list(text), [], 0
+              while i < len(text):
+                  if text[i] in "\"'`":
+                      quote, start = text[i], i
+                      i += 1
+                      while i < len(text):
+                          if text[i] == "\\":
+                              i += 2
+                          elif text[i] == quote:
+                              i += 1
+                              break
+                          else:
+                              i += 1
+                      mask[start:i] = " " * (i - start)
+                  elif text.startswith(("//", "/*"), i) or (text[i] == "#" and not re.match(r"#\s*\[", text[i:])):
+                      start = i
+                      if text.startswith("/*", i):
+                          end = text.find("*/", i + 2)
+                          i = len(text) if end < 0 else end + 2
+                      else:
+                          end = text.find("\n", i)
+                          i = len(text) if end < 0 else end
+                      comments.append(text[start:i])
+                      mask[start:i] = " " * (i - start)
+                  else:
+                      i += 1
+              return "".join(mask), comments
+
+          def comment_reason(comments):
+              return any(re.search(r"(?://|#|/\*)\s*skip-reason:\s*[^\s*/].*", c, re.I) for c in comments)
+
+          def skip_problem(text, previous, following=""):
+              code, comments = syntax(text)
+              first_code = code
+              text += following
+              code = syntax(text)[0]
+              # .only is never justified: it suppresses the rest of the test suite.
+              if re.search(r"\.\s*only\s*\(", first_code):
+                  return "Focused .only test suppresses the rest of the suite. Remove it."
+              reason = comment_reason(comments) or comment_reason(syntax(previous)[1])
+              js = re.search(r"\b(?:(?:it|test|describe)\s*\.\s*skip|xit|xdescribe)\s*\(", first_code)
+              py_mark = re.search(r"@pytest\.mark\.skip(?:if)?\b", first_code)
+              py_call = re.search(r"\bpytest\.skip\s*\(", first_code)
+              rust = re.search(r"#\s*\[\s*ignore\b", first_code)
+              go = re.search(r"\bt\.Skip\s*\(", first_code)
+              # A JS test's name is not a skip reason. As in the T3 matcher,
+              # justification belongs in a comment adjacent to registration.
+              if js and not reason:
+                  return "JS test skip needs an adjacent skip-reason comment (the test name is not a reason)."
+              if py_mark:
+                  argument = re.search(r"\breason\s*=", code[py_mark.end():])
+                  if not (reason or (argument and string(text[py_mark.end() + argument.end():]))):
+                      return "pytest skip/skipif needs a non-empty reason= or skip-reason comment."
+              if py_call:
+                  argument = re.match(r"\s*reason\s*=\s*", code[py_call.end():])
+                  start = py_call.end() + (argument.end() if argument else 0)
+                  if not (reason or string(text[start:])):
+                      return "pytest.skip needs a non-empty message or skip-reason comment."
+              if rust:
+                  argument = re.match(r"\s*=", code[rust.end():])
+                  if not (reason or (argument and string(text[rust.end() + argument.end():]))):
+                      return 'Rust ignore needs = "reason" or a skip-reason comment.'
+              if go and not (reason or string(text[go.end():])):
+                  return "t.Skip needs a non-empty message or skip-reason comment."
+              return None
+
+          def scan(changed):
+              for file in changed:
+                  path = file["filename"]
+                  test = test_file(path) or test_file(file.get("previous_filename", ""))
+                  if file.get("status") == "removed":
+                      if test:
+                          report("Deleted tests (advisory)", "A test file was deleted; review lost coverage.", path, advisory=True)
+                      continue
+                  patch = file.get("patch")
+                  if patch is None:
+                      if test and file.get("changes", 0):
+                          report("Test diff unavailable", "Cannot inspect added test lines; split this diff or supply a text test file.", path)
+                      continue
+                  if test and any(re.search(r"^-.*\b(?:it|test|describe|def test_|fn |func Test)", line)
+                                  for line in patch.splitlines()):
+                      report("Deleted tests (advisory)", "Test cases may have been deleted or replaced; review lost coverage.", path, advisory=True)
+                  # Changed numeric coverage settings are advisory, never a gate.
+                  removed = [float(n) for line in patch.splitlines() if line.startswith("-")
+                             and re.search(r"coverage|threshold|branches|functions|lines|statements", line, re.I)
+                             for n in re.findall(r"\b\d+(?:\.\d+)?\b", line)]
+                  added = [float(n) for line in patch.splitlines() if line.startswith("+")
+                           and re.search(r"coverage|threshold|branches|functions|lines|statements", line, re.I)
+                           for n in re.findall(r"\b\d+(?:\.\d+)?\b", line)]
+                  if removed and added and min(added) < max(removed):
+                      report("Coverage setting lowered (advisory)", "A numeric coverage/threshold setting may have decreased; inspect the diff.", path, advisory=True)
+                  if test:
+                      context = {n: text for n, text, _ in lines(patch, added_only=False)}
+                      for number, text, previous in lines(patch):
+                          # Bounded continuation for multiline message/reason arguments.
+                          # Only markers on the added line are judged, never context markers.
+                          following = ""
+                          for offset in range(1, 21):
+                              code = syntax(text + following)[0]
+                              depth = sum(code.count(c) for c in "([") - sum(code.count(c) for c in ")]")
+                              if depth <= 0 or number + offset not in context:
+                                  break
+                              following += "\n" + context[number + offset]
+                          problem = skip_problem(text, previous, following)
+                          if problem:
+                              report("Test skip lint", problem, path, number)
+
+          if os.environ.get("EVENT") != "pull_request":
+              print("Not a pull_request event: the PR head was already checked.")
+              sys.exit(0)
+          contract(os.environ.get("BODY", ""))
+          try:
+              scan(files())
+          except Exception:
+              report("PR diff unavailable", "Cannot inspect the complete exact-head PR diff; re-run the check or split the PR.")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as fh:
+                  # Diagnostic text only; paths and source stay out of Markdown.
+                  fh.write("## PR contract / test-skip pilot\n\n"
+                           + ("Enforced pilot.\n\n" if strict else "Warning-only context.\n\n")
+                           + "\n".join(notes) + "\n")
+          sys.exit(1 if failed else 0)
+          PILOT_PY

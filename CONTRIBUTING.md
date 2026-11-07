@@ -10,9 +10,14 @@ where they differ, the repo file wins. Automated contributors follow the same co
   no trailing period). Types: feat, fix, perf, refactor, test, docs, build, ci, chore,
   revert, style, security.
 - Use the PR template. The `pr-lint` check requires two sections, Linked Issues or
-  Issue Description (feat/fix/perf/refactor/security) and Verification: a missing or
-  empty one is a warning by default and an error once a repo sets
-  `PR_STANDARDS_MODE: error`. What Changed and Notes for reviewers are optional.
+  Issue Description (feat/fix/perf/refactor/security) and Testing (legacy
+  Verification is also accepted): a missing or empty one is a warning by default
+  and an error once a repo sets `PR_STANDARDS_MODE: error`.
+- The org template also asks for Risk, How to revert (including data/external
+  effects or why a revert is unsafe), and What these checks would miss. The
+  [contract/skip pilot](PR-CONTRACT-PILOT.md) enforces those four sections only
+  on its explicit pilot repository; other repositories receive warnings only.
+  `N/A — <reason>` is valid, but an empty or untouched template is not evidence.
 - Done means merged. Never leave an orphan PR open: merge it, or close it with a
   comment naming what replaced it.
 - Search open and closed issues and PRs before starting; link duplicates and related PRs instead of opening a parallel one.
