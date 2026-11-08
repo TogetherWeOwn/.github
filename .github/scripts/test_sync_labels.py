@@ -42,7 +42,7 @@ class SyncLabelsTest(unittest.TestCase):
         result = subprocess.run(
             ["bash", str(SCRIPT), *args],
             capture_output=True, text=True, env=env, timeout=60,
-        )
+        , check=False)
         return result, log.read_text().splitlines()
 
     def test_creates_missing_updates_existing_never_deletes(self):

@@ -7,13 +7,13 @@ Only stdlib and local Git fixtures are used; no credentials or remote requests.
 
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github/workflows"
@@ -206,7 +206,7 @@ class OfflineChangesTests(unittest.TestCase):
 
     def git(self, *args):
         run = subprocess.run(["git", *args], cwd=self.repo, env=self.env,
-                             text=True, capture_output=True, timeout=10)
+                             text=True, capture_output=True, timeout=10, check=False)
         self.assertEqual(run.returncode, 0, f"git {args}: {run.stderr}")
         return run.stdout.strip()
 
@@ -233,7 +233,7 @@ class OfflineChangesTests(unittest.TestCase):
                "FULL_RUN_JSON": json.dumps(FULL_RUN if full_globs is None else full_globs),
                "DOCS_AREAS_JSON": '["docs"]'}
         run = subprocess.run(["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", detector_script()],
-                             cwd=self.repo, env=env, text=True, capture_output=True, timeout=10)
+                             cwd=self.repo, env=env, text=True, capture_output=True, timeout=10, check=False)
         values = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
         execution = trace.read_text(encoding="utf-8")
         self.assertNotRegex(execution, r"built-in: git (?:fetch|pull|push|ls-remote)\b",

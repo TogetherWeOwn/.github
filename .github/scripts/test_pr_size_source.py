@@ -40,9 +40,9 @@ def block(text, indent, key):
     end = start
     while end < len(lines):
         line = lines[end]
-        if line.strip() and not line.lstrip().startswith("#"):
-            if len(line) - len(line.lstrip()) <= indent:
-                break
+        if (line.strip() and not line.lstrip().startswith("#")
+                and len(line) - len(line.lstrip()) <= indent):
+            break
         end += 1
     return "\n".join(lines[start:end])
 

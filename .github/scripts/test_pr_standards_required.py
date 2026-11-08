@@ -23,14 +23,14 @@ WORKFLOW = Path(__file__).resolve().parents[1] / "workflows" / "pr-standards-req
 
 def load_script():
     text = WORKFLOW.read_text()
-    m = re.search(r"<<'PYEOF'\n(.*?)\n\s*PYEOF\n", text, re.S)
+    m = re.search(r"<<'PYEOF'\n(.*?)\n\s*PYEOF\n", text, re.DOTALL)
     assert m, "heredoc not found in the workflow"
     return textwrap.dedent(m.group(1))
 
 
 def load_replies_script():
     text = WORKFLOW.read_text()
-    m = re.search(r"<<'PYEOF2'\n(.*?)\n\s*PYEOF2\n", text, re.S)
+    m = re.search(r"<<'PYEOF2'\n(.*?)\n\s*PYEOF2\n", text, re.DOTALL)
     assert m, "review-replies heredoc not found in the workflow"
     return textwrap.dedent(m.group(1))
 
@@ -60,7 +60,7 @@ def run(title="fix(auth): refuse expired sudo sessions", body=CLEAN_BODY,
         "COMMITS_JSON": json.dumps([[f"{i:040x}", s] for i, s in enumerate(commits)]),
     }
     p = subprocess.run([sys.executable, "-I", "-c", SCRIPT], env=env,
-                       capture_output=True, text=True, timeout=30)
+                       capture_output=True, text=True, timeout=30, check=False)
     return p.returncode, p.stdout + p.stderr
 
 
@@ -86,7 +86,7 @@ def run_replies(threads=(), created=NEW, event="pull_request", author="someone",
         "THREADS_JSON": raw if raw is not None else json.dumps(list(threads)),
     }
     p = subprocess.run([sys.executable, "-I", "-c", REPLIES_SCRIPT], env=env,
-                       capture_output=True, text=True, timeout=30)
+                       capture_output=True, text=True, timeout=30, check=False)
     return p.returncode, p.stdout + p.stderr
 
 

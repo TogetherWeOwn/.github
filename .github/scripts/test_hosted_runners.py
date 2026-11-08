@@ -23,7 +23,7 @@ WORKFLOW_DIRS = [ROOT / ".github" / "workflows", ROOT / "workflow-templates"]
 
 # `self-hosted` is the label GitHub gives every self-hosted runner; the rest
 # are the retired pool's own labels and the variable that routed to it.
-SELF_HOSTED = re.compile(r"self[-_ ]?hosted|two-(?:isolated|ephemeral)|CI_OVERFLOW_RUNNER", re.I)
+SELF_HOSTED = re.compile(r"self[-_ ]?hosted|two-(?:isolated|ephemeral)|CI_OVERFLOW_RUNNER", re.IGNORECASE)
 RUNS_ON = re.compile(r"^\s*runs-on:")
 MAPPING_KEY = re.compile(r"^\s*[\w-]+:(?:\s|$)")
 # Runner routing in a pinned revision: runs-on values and input defaults.
@@ -83,7 +83,7 @@ def pinned_reusables():
 
 def show(sha, path):
     def run(*args):
-        return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True)
+        return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True, check=False)
 
     if run("cat-file", "-e", f"{sha}^{{commit}}").returncode != 0:
         run("fetch", "--quiet", "origin", sha)

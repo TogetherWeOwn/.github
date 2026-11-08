@@ -48,7 +48,6 @@ jobs:
           import io
           import json
           import os
-          from pathlib import Path, PurePosixPath
           import re
           import selectors
           import signal
@@ -56,6 +55,7 @@ jobs:
           import tarfile
           import time
           import urllib.request
+          from pathlib import Path, PurePosixPath
 
           MAX_FILES = 20000
           MAX_BYTES = 256 * 1024 * 1024
@@ -486,8 +486,8 @@ jobs:
                       write_json(evidence / "changed-paths.json", changed)
                       if os.environ.get("GITHUB_OUTPUT"):
                           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                              for key in ("full_run", "docs_only"):
-                                  output.write(f"{key}={str(changed[key]).lower()}\n")
+                              output.writelines(f"{key}={str(changed[key]).lower()}\n"
+                                                for key in ("full_run", "docs_only"))
                       results.append({"scanner": "changes", "status": "passed", **changed})
                   elif args.mode == "osv-evidence":
                       results.append(osv_evidence(work))

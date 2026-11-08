@@ -2,10 +2,10 @@
 """Static workflow contracts and execution tests for the embedded trusted driver."""
 import json
 import os
-from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 import yaml
 
@@ -129,7 +129,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_generated_workflow_matches_tested_driver(self):
         result = subprocess.run(["python3", "-I", str(ROOT / "security-gate/render_workflow.py"), "--check"],
-                                capture_output=True, timeout=30)
+                                capture_output=True, timeout=30, check=False)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         driver = next(s for s in self.jobs["inspect"]["steps"] if s.get("id") == "inspect")["run"]
         self.assertIn((ROOT / "security-gate/gate.py").read_text().rstrip(), driver)
@@ -150,7 +150,7 @@ class WorkflowTests(unittest.TestCase):
         step = self.jobs["security-ok"]["steps"][0]
         return subprocess.run(["bash", "-e", "-c", step["run"]],
                               env=dict(os.environ, NEEDS_JSON=json.dumps(needs)),
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+                              capture_output=True, timeout=30, check=False)
 
     def test_change_detection_gates_every_heavy_job(self):
         changes = self.jobs["changes"]
@@ -208,7 +208,7 @@ class WorkflowTests(unittest.TestCase):
             env = dict(os.environ, GITHUB_WORKSPACE=tmp, RUNNER_TEMP=str(root / "temp"),
                        GATE_MODE="changes", GITHUB_OUTPUT=str(output), BASE_SHA="a" * 40, HEAD_SHA="b" * 40)
             result = subprocess.run(["bash", "-e", "-c", step["run"]], env=env,
-                                    capture_output=True, timeout=30)
+                                    capture_output=True, timeout=30, check=False)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(output.exists())
             data = json.loads((root / "temp/gate-evidence/changes.json").read_text())
@@ -227,7 +227,7 @@ class WorkflowTests(unittest.TestCase):
                 subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
             env = dict(os.environ, GITHUB_WORKSPACE=tmp, RUNNER_TEMP=str(root / "temp"), GATE_MODE="inspect")
             result = subprocess.run(["bash", "-e", "-c", driver], cwd=repo, env=env,
-                                    capture_output=True, timeout=30)
+                                    capture_output=True, timeout=30, check=False)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertTrue((root / "temp/gate-evidence/inspect.json").exists())
 
