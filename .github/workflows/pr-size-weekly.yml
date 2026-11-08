@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: TogetherWeOwn/.github
-          ref: fd1eda3ad0db86c4db8dbacf2e72e4b87c1d514f
+          ref: a3c24dfba42f2a8092889541bb256d244e9f67c2
           path: .pr-size-central
           sparse-checkout: .github/scripts/pr_size.py
           persist-credentials: false
