@@ -21,8 +21,9 @@
 # PORTABILITY RULES (so one file serves TS / PHP / Rust / Go / Python repos):
 #   - `ubuntu-latest` only: hosted runners are free on public repos and
 #     reachable from every caller.
-#   - No repo-specific toolchains via setup actions: GH-hosted images ship
-#     node, python3, go, rustup, php and composer. Repo-owned linters
+#   - Repo toolchains use GH-hosted node, python3, go, rustup, php and
+#     composer. The gate-owned Semgrep lock uses explicit Python 3.12.
+#     Repo-owned linters
 #     (tsc, phpstan, clippy, ruff, mypy) run only when the repo configures
 #     them; gate-owned scanners (actionlint, zizmor, gitleaks, semgrep,
 #     squawk) are installed here at pinned versions.
@@ -547,11 +548,24 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import glob, sys, yaml
+          import glob, re, sys, yaml
           bad = []
+          # Same non-required declaration as .github/scripts/ci_policy.py.
+          # Only a standalone top-level comment with a reason declares it;
+          # text in a job, run block or ordinary YAML value cannot exempt it.
+          non_required = re.compile(r'^# ci-policy: non-required -- \S.*$', re.I | re.M)
           for path in glob.glob('.github/workflows/*.yml') + glob.glob('.github/workflows/*.yaml'):
               with open(path) as f:
-                  wf = yaml.safe_load(f)
+                  text = f.read()
+              wf = yaml.safe_load(text)
+              scalars = [token for token in yaml.scan(text)
+                         if isinstance(token, yaml.tokens.ScalarToken)]
+              declarations = [match for match in non_required.finditer(text)
+                              if not any(token.start_mark.index <= match.start() < token.end_mark.index
+                                         for token in scalars)]
+              if declarations:
+                  print(f"workflow structural rules: {path}: declared non-required")
+                  continue
               # YAML 1.1 reads the `on:` key as boolean True.
               on = wf.get('on', wf.get(True, {})) or {}
               if not isinstance(on, dict):
@@ -564,7 +578,7 @@ jobs:
               for b in bad:
                   print(f"::error::{b}")
               sys.exit(1)
-          print("workflow structural rules: clean (no path-filtered triggers)")
+          print("workflow structural rules: clean (no path-filtered gating triggers)")
           PY
       - name: Summarise findings
         if: always()
@@ -662,14 +676,21 @@ jobs:
           else
             gitleaks git --verbose --redact .
           fi
+      # Match the real-scanner selftest runtime: protobuf 4.25.9 in the
+      # retained lock crashes importing google._upb._message on Python 3.14.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: ${{ !cancelled() }}
+        with:
+          python-version: '3.12'
       - name: Semgrep with the org rules folder
         if: ${{ !cancelled() }}
         env:
           TIER0_SEMGREP_CONFIG: ${{ inputs.semgrep_config }}
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check --require-hashes -q -r .tier0-gate/tier0/requirements-security.txt 2>&1 | tail -1
-          semgrep_scripts="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
+          python3.12 --version
+          python3.12 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -q -r .tier0-gate/tier0/requirements-security.txt
+          semgrep_scripts="$(python3.12 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
           export PATH="$semgrep_scripts:$HOME/.local/bin:$PATH"
           command -v semgrep
           semgrep --version

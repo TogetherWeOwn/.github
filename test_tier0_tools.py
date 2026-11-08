@@ -103,6 +103,24 @@ exit 2
                     expected = 'failure' if failing_tool else 'success'
                     self.assertEqual(output.read_text(), f'verdict={expected}\n')
 
+    def test_semgrep_runtime_matches_the_working_real_scanner_selftest(self):
+        steps = self.workflow['jobs']['security']['steps']
+        setups = [s for s in steps if s.get('uses', '').startswith('actions/setup-python@')]
+        self.assertEqual(len(setups), 1, 'security must not inherit hosted Python 3.14')
+        caller = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())
+        reference = next(s for s in caller['jobs']['tier-0-selftest']['steps']
+                         if s.get('uses', '').startswith('actions/setup-python@'))
+        self.assertEqual(setups[0]['uses'], reference['uses'])
+        self.assertEqual(setups[0]['with']['python-version'], '3.12')
+        self.assertEqual(setups[0]['with'], reference['with'])
+        self.assertEqual(setups[0]['if'], '${{ !cancelled() }}',
+                         'a previous scanner failure must not skip runtime setup')
+        scan = next(s for s in steps if s.get('name') == 'Semgrep with the org rules folder')
+        self.assertLess(steps.index(setups[0]), steps.index(scan))
+        self.assertIn('python3.12 -m pip install', scan['run'])
+        self.assertIn('--require-hashes', scan['run'])
+        self.assertNotIn('tail -1', scan['run'], 'retain dependency-install diagnostics')
+
     def test_semgrep_launcher_discovers_user_install_and_preserves_scan_exit(self):
         # A pip user install is not initially on PATH. The workflow must expose
         # and discover its supported executable in BOTH config branches.
@@ -120,12 +138,10 @@ printf '["%s","%s","%s","%s"]\\n' "${1-}" "${2-}" "${3-}" "${4-}" >> "$CALL_LOG"
 [[ "${1-}" == scan && "${2-}" == --config && "${4-}" == --error ]] || exit 2
 exit "$SCAN_EXIT"
 ''')
-        self.stub(self.bin / 'python3', '''
+        self.stub(self.bin / 'python3', 'exit 99 # Simulate incompatible hosted Python.\n')
+        self.stub(self.bin / 'python3.12', '''
+if [[ "${1-}" == '--version' ]]; then printf 'Python 3.12\\n'; exit 0; fi
 if [[ "${1-} ${2-}" == '-m pip' ]]; then exit 0; fi
-if [[ "${1-} ${2-} ${3-}" == '-m site --user-base' ]]; then
-  printf '%s/.local\\n' "$HOME"
-  exit 0
-fi
 if [[ "${1-}" == -c && "${2-}" == 'import sysconfig; print(sysconfig.get_path("scripts"))' ]]; then
   printf '%s/.local/bin\\n' "$HOME"
   exit 0
