@@ -608,6 +608,104 @@ test("an expired original budget cannot accept a late healthy result or renew re
   assert.match(logs.join("\n"), /budget expired; evidence is insufficient, not a rate pass/);
 });
 
+test("validated candidate breaches survive completion at or beyond the original deadline", async () => {
+  for (const [attempts, breachAttempt] of [[1, 1], [2, 2], [3, 1]]) {
+    for (const offsetMs of [-1, 0, 1]) {
+      let elapsed = 0;
+      let queries = 0;
+      const logs = [];
+      const deadlineMs = attempts * 30_000;
+      const result = await runErrorRateGate(gateConfig({ attempts }), {
+        now: () => new Date(Date.parse(UNTIL) + elapsed),
+        monotonicNow: () => elapsed,
+        sleep: async () => assert.fail("no retry delay configured"),
+        fetchJson: async (body, timeoutMs) => {
+          queries += 1;
+          assert.equal(body.variables.versionId, NEXT);
+          assert.equal(timeoutMs, 30_000);
+          if (queries < breachAttempt) {
+            elapsed += 30_000;
+            return envelope({ requests: 1, errors: 0 });
+          }
+          elapsed = deadlineMs + offsetMs;
+          return envelope({ requests: 100, errors: 40 });
+        },
+        log: (line) => logs.push(line),
+      });
+      assert.deepEqual(result, {
+        code: 1, attempts: breachAttempt, requests: 100, errors: 40, rate: 0.4, verdict: "fail",
+      });
+      assert.equal(queries, breachAttempt, "retain the attempt cap; never query after expiry");
+      assert.equal(elapsed, deadlineMs + offsetMs, "do not wait or renew the deadline");
+      assert.match(logs.join("\n"), /requests=100 errors=40 rate=0.4000 verdict=fail/);
+    }
+  }
+});
+
+test("late healthy and low samples cannot become success or inherit an earlier low sample", async () => {
+  for (const attempts of [1, 2]) {
+    for (const offsetMs of [0, 1]) {
+      for (const [requests, errors] of [[100, 0], [19, 0], [19, 19]]) {
+        let elapsed = 0;
+        let queries = 0;
+        const logs = [];
+        const result = await runErrorRateGate(gateConfig({ attempts }), {
+          now: () => new Date(Date.parse(UNTIL) + elapsed),
+          monotonicNow: () => elapsed,
+          sleep: async () => assert.fail("must not sleep after the late response"),
+          fetchJson: async () => {
+            queries += 1;
+            if (queries < attempts) return envelope({ requests: 1, errors: 0 });
+            elapsed = attempts * 30_000 + offsetMs;
+            return envelope({ requests, errors });
+          },
+          log: (line) => logs.push(line),
+        });
+        assert.equal(result.code, 1);
+        assert.equal(result.verdict, "insufficient");
+        assert.equal(result.attempts, attempts);
+        assert.equal(queries, attempts);
+        assert.doesNotMatch(logs.join("\n"), /verdict=pass/);
+        assert.match(logs.join("\n"), /budget expired; evidence is insufficient, not a rate pass/);
+      }
+    }
+  }
+});
+
+test("late invalid evidence and query errors cannot manufacture a candidate breach", async () => {
+  for (const offsetMs of [0, 1]) {
+    for (const payload of [
+      envelope({ requests: 100, errors: 40 }, PREV),
+      {},
+      envelope({ requests: 100, errors: 101 }),
+      { data: null, errors: [{ message: "GraphQL failure" }] },
+      new Error("bounded query timeout"),
+    ]) {
+      let elapsed = 0;
+      let queries = 0;
+      const logs = [];
+      const result = await runErrorRateGate(gateConfig({ attempts: 2 }), {
+        now: () => new Date(Date.parse(UNTIL) + elapsed),
+        monotonicNow: () => elapsed,
+        sleep: async () => assert.fail("must not sleep after the late response"),
+        fetchJson: async () => {
+          queries += 1;
+          if (queries === 1) return envelope({ requests: 1, errors: 0 });
+          elapsed = 60_000 + offsetMs;
+          if (payload instanceof Error) throw payload;
+          return payload;
+        },
+        log: (line) => logs.push(line),
+      });
+      assert.deepEqual(result, {
+        code: 1, attempts: 2, requests: 0, errors: 0, rate: 0, verdict: "insufficient",
+      });
+      assert.equal(queries, 2);
+      assert.doesNotMatch(logs.join("\n"), /verdict=(pass|fail)\b/);
+    }
+  }
+});
+
 test("retry spacing is clipped at the original budget and starts no call after expiry", async () => {
   let time = Date.parse(UNTIL);
   let queries = 0;
