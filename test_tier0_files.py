@@ -189,6 +189,57 @@ class FileExecutionContract(unittest.TestCase):
                     result = self.run_step(script, PATH=f'{binary}:/usr/bin:/bin')
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_non_required_path_filters_keep_required_siblings_guarded(self):
+        binary = self.root / 'bin'
+        binary.mkdir()
+        launcher = binary / 'python3'
+        launcher.write_text(f'#!/bin/bash\nexec "{sys.executable}" -I "$@"\n')
+        launcher.chmod(0o755)
+        script = self.step('workflow-checks', 'Structural rule')['run']
+        # Execute the actual baseline workflow, including its existing marker
+        # after name:, rather than inventing a new exemption for this repair.
+        source = ROOT / '.github/workflows/review-rules-tests.yml'
+        self.write('.github/workflows/review-rules-tests.yml', source.read_text())
+        result = self.run_step(script, PATH=f'{binary}:/usr/bin:/bin')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('declared non-required', result.stdout)
+        for extension in ('yml', 'yaml'):
+            path = f'.github/workflows/required.{extension}'
+            for trigger in ('pull_request', 'push'):
+                for key in ('paths', 'paths-ignore'):
+                    with self.subTest(extension=extension, trigger=trigger, key=key):
+                        self.write(path, f'on:\n  {trigger}:\n    {key}: [src/**]\njobs: {{}}\n')
+                        result = self.run_step(script, PATH=f'{binary}:/usr/bin:/bin')
+                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                        self.assertIn(path, result.stdout)
+            (self.repo / path).unlink()
+
+    def test_non_required_declaration_cannot_be_yaml_data_or_lack_a_reason(self):
+        binary = self.root / 'bin'
+        binary.mkdir()
+        launcher = binary / 'python3'
+        launcher.write_text(f'#!/bin/bash\nexec "{sys.executable}" -I "$@"\n')
+        launcher.chmod(0o755)
+        script = self.step('workflow-checks', 'Structural rule')['run']
+        path = '.github/workflows/required.yml'
+        trigger = 'on:\n  pull_request:\n    paths: [src/**]\n'
+        decoys = (
+            '# ci-policy: non-required\njobs: {}\n',
+            '# ci-policy: non-required -- \njobs: {}\n',
+            'name: "ci-policy: non-required -- not a comment"\njobs: {}\n',
+            'name: "multiline value\n# ci-policy: non-required -- still a value\n"\njobs: {}\n',
+            ('jobs:\n  test:\n    # ci-policy: non-required -- nested comment\n'
+             '    runs-on: ubuntu-latest\n    steps: []\n'),
+            ('jobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n'
+             '      - run: |\n          # ci-policy: non-required -- shell comment\n'),
+        )
+        for text in decoys:
+            with self.subTest(text=text):
+                self.write(path, trigger + text)
+                result = self.run_step(script, PATH=f'{binary}:/usr/bin:/bin')
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(path, result.stdout)
+
     def test_enforcing_failure_retains_verdict_for_non_cancelled_upload(self):
         needs = {'security': {'result': 'failure', 'outputs': {'verdict': 'failure'}}}
         step = self.step('tier-0-ok', 'Aggregate gate verdicts')
