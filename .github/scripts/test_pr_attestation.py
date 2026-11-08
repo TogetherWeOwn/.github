@@ -596,6 +596,28 @@ class APITests(unittest.TestCase):
 
 
 class CLITests(unittest.TestCase):
+    def test_unexpected_error_logs_only_a_fixed_message_and_preserves_error_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            event_path = root / "event.json"
+            event_path.write_text(json.dumps(event()))
+            output_path, summary_path = root / "output", root / "summary"
+            with mock.patch.dict(os.environ, {"GITHUB_EVENT_PATH": str(event_path),
+                                               "GITHUB_OUTPUT": str(output_path),
+                                               "GITHUB_STEP_SUMMARY": str(summary_path)}), \
+                    mock.patch.object(a, "GitHub", side_effect=RuntimeError("private-token-and-body")), \
+                    mock.patch("sys.stdout", new_callable=io.StringIO) as output, \
+                    self.assertLogs(a.LOGGER, level="ERROR") as logs:
+                self.assertEqual(a.main(), 0)
+            report = json.loads(output.getvalue().splitlines()[0])
+            self.assertEqual(report["verdict"], "error")
+            self.assertEqual(report["issues"], ["observation_runtime_error"])
+            self.assertEqual(logs.output, [f"ERROR:{a.LOGGER.name}:PR attestation observation failed; details omitted."])
+            evidence = output.getvalue() + "\n".join(logs.output) + output_path.read_text() + summary_path.read_text()
+            self.assertNotIn("private-token-and-body", evidence)
+            self.assertNotIn("Traceback", evidence)
+            self.assertIn("verdict=error\nwould_fail=true", output_path.read_text())
+
     def test_runtime_error_warns_summary_and_exit_zero_under_isolated_python(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d)

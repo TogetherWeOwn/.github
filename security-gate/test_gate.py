@@ -5,12 +5,12 @@ import importlib.util
 import io
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tarfile
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent
@@ -43,7 +43,7 @@ class RepoCase(unittest.TestCase):
 
     def git(self, *args):
         return subprocess.run(["git", "-C", str(self.repo), *args], check=True,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+                              capture_output=True).stdout
 
     def put(self, path, content="x"):
         file = self.repo / path
@@ -300,6 +300,21 @@ class RepoCase(unittest.TestCase):
         self.assertTrue(gate.changes(self.repo, base, "HEAD")["docs_only"])
         self.assertTrue(gate.changes(self.repo, "HEAD", "HEAD")["full_run"])
 
+    def test_cli_change_outputs_preserve_both_boolean_lines(self):
+        self.put("README.md")
+        self.commit()
+        base = self.git("rev-parse", "HEAD").decode().strip()
+        self.put("docs/guide.md")
+        self.commit()
+        output = self.root / "outputs"
+        env = dict(os.environ, GITHUB_OUTPUT=str(output), BASE_SHA=base, HEAD_SHA="HEAD")
+        process = subprocess.run([sys.executable, "-I", str(ROOT / "gate.py"), "changes", "--repo",
+                                  str(self.repo), "--work", str(self.work), "--evidence", str(self.evidence),
+                                  "--tools", str(self.root)], env=env, capture_output=True, check=False, timeout=30)
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        self.assertEqual(output.read_text(), "full_run=false\ndocs_only=true\n")
+        self.assertEqual(json.loads((self.evidence / "changes.json").read_text())[0]["status"], "passed")
+
     def test_change_detection_full_run_for_sources_dependencies_workflows_and_unknown(self):
         self.put("README.md")
         self.commit()
@@ -380,12 +395,24 @@ class RepoCase(unittest.TestCase):
         with self.assertRaisesRegex(gate.GateError, "incomplete OSV new package"):
             gate.osv_evidence(self.work)
 
+    def test_cli_inspection_outputs_preserve_all_boolean_lines(self):
+        self.put("README.md")
+        self.commit()
+        output = self.root / "outputs"
+        env = dict(os.environ, GITHUB_OUTPUT=str(output))
+        process = subprocess.run([sys.executable, "-I", str(ROOT / "gate.py"), "inspect", "--repo",
+                                  str(self.repo), "--work", str(self.work), "--evidence", str(self.evidence),
+                                  "--tools", str(self.root)], env=env, capture_output=True, check=False, timeout=30)
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        self.assertEqual(output.read_text(), "go=false\ncargo=false\nworkflows=false\n")
+        self.assertEqual(json.loads((self.evidence / "inspect.json").read_text())[0]["status"], "passed")
+
     def test_cli_inspection_failure_is_nonzero_with_evidence(self):
         self.put("vendor/file")
         self.commit()
         process = subprocess.run([sys.executable, "-I", str(ROOT / "gate.py"), "inspect", "--repo",
                                   str(self.repo), "--work", str(self.work), "--evidence", str(self.evidence),
-                                  "--tools", str(self.root)], capture_output=True, timeout=30)
+                                  "--tools", str(self.root)], capture_output=True, timeout=30, check=False)
         self.assertEqual(process.returncode, 1)
         self.assertEqual(json.loads((self.evidence / "inspect.json").read_text())[0]["status"], "failed")
 

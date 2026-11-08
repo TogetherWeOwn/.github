@@ -42,7 +42,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: TogetherWeOwn/.github
-          ref: ae3678bc48c622808d452f6418998f154da3ebfa
+          ref: a3c24dfba42f2a8092889541bb256d244e9f67c2
           path: attestation-policy
           persist-credentials: false
           sparse-checkout: .github/scripts

@@ -24,9 +24,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 CENTRAL_REPOSITORY = "TogetherWeOwn/.github"
-REVIEWED_SHA = "fcfe691790ac925e8c4cf5e191a5004d4d991392"
+REVIEWED_SHA = "a3c24dfba42f2a8092889541bb256d244e9f67c2"
 SCRIPT = ".github/scripts/pr_size.py"
-SCRIPT_SHA256 = "e0170a1700c312318de84aadd88e17de7ba13b4a024e1b8fa563335c1c180c61"
+SCRIPT_SHA256 = "879c52b4a59619e30ff0bc7bd1de4d99a3b7cfa7533f078fb99dbb78ed0da2a7"
 MODES = {"pr-size.yml": "label", "pr-size-weekly.yml": "weekly"}
 
 
@@ -40,9 +40,9 @@ def block(text, indent, key):
     end = start
     while end < len(lines):
         line = lines[end]
-        if line.strip() and not line.lstrip().startswith("#"):
-            if len(line) - len(line.lstrip()) <= indent:
-                break
+        if (line.strip() and not line.lstrip().startswith("#")
+                and len(line) - len(line.lstrip()) <= indent):
+            break
         end += 1
     return "\n".join(lines[start:end])
 

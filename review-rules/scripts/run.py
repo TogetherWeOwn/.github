@@ -13,12 +13,13 @@ import argparse
 import html
 import importlib.util
 import json
+import logging
 import os
-from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import tempfile
 import uuid
+from pathlib import Path, PurePosixPath
 
 # Match the shipped pack languages; YAML-only changes in a Rust-only caller are
 # not a zero-work scanner failure. Deterministic checks still inspect all paths.
@@ -30,6 +31,7 @@ EXTENSIONS = {
     'security': {'.rs', '.py', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.svelte', '.yml', '.yaml'},
 }
 
+LOGGER = logging.getLogger(__name__)
 RULES = Path(__file__).resolve().parents[1]
 IMAGE = 'semgrep/semgrep@sha256:fca58525689355641019c05ab49dcc5bc3a1eb7e044f35014ee39594b5aa4fc1'
 PACKS = ('rust', 'ts', 'python-shell-ci', 'php', 'security')
@@ -151,8 +153,8 @@ def svelte_scripts(text: str) -> str:
     # the first close, and an open inside a block body (say in a string)
     # is still an error -- the close tag's `>` always made the old
     # `[^>]*>` count it, so the counts differed.
-    start_re = re.compile(r'<script\b', re.I)
-    close_re = re.compile(r'</script\s*>', re.I)
+    start_re = re.compile(r'<script\b', re.IGNORECASE)
+    close_re = re.compile(r'</script\s*>', re.IGNORECASE)
     out = ['\n' if c == '\n' else ' ' for c in text]
     pos = 0
     while True:
@@ -200,7 +202,7 @@ def docker_scan(root: Path, packs: set[str]) -> dict:
     # or echo it: publish only rule-authored messages and sanitized locations.
     data = json.loads(result.stdout)
     if not isinstance(data, dict) or not isinstance(data.get('results'), list):
-        raise ValueError('invalid Semgrep report')
+        raise TypeError('invalid Semgrep report')
     return data
 
 
@@ -367,6 +369,7 @@ def main(argv=None) -> int:
             report['errors'].extend(errors)
             report['stats']['scanned_targets'] = count
     except Exception as exc:
+        LOGGER.exception('Review engine incomplete; details omitted.', exc_info=False)
         # Shadow must remain green even on absent Docker, malformed events,
         # missing refs, invalid pack names, scanner failures or timeouts.
         report['errors'].append(f'review engine incomplete: {type(exc).__name__}')

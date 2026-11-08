@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 HEAVY_DEFAULT = 10
-EXEMPT = re.compile(r"ci-policy:\s*non-required\b", re.I)
+EXEMPT = re.compile(r"ci-policy:\s*non-required\b", re.IGNORECASE)
 GATED = re.compile(
     r"needs\.[a-zA-Z0-9_-]+\.outputs|github\.event|failure\(\)|always\(\)|cancelled\(\)"
 )

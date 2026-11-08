@@ -6,7 +6,6 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path, PurePosixPath
 import re
 import selectors
 import signal
@@ -14,6 +13,7 @@ import subprocess
 import tarfile
 import time
 import urllib.request
+from pathlib import Path, PurePosixPath
 
 MAX_FILES = 20000
 MAX_BYTES = 256 * 1024 * 1024
@@ -444,8 +444,8 @@ def main():
             write_json(evidence / "changed-paths.json", changed)
             if os.environ.get("GITHUB_OUTPUT"):
                 with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                    for key in ("full_run", "docs_only"):
-                        output.write(f"{key}={str(changed[key]).lower()}\n")
+                    output.writelines(f"{key}={str(changed[key]).lower()}\n"
+                                      for key in ("full_run", "docs_only"))
             results.append({"scanner": "changes", "status": "passed", **changed})
         elif args.mode == "osv-evidence":
             results.append(osv_evidence(work))
@@ -455,8 +455,8 @@ def main():
             write_json(evidence / "inventory.json", found)
             if args.mode == "inspect" and os.environ.get("GITHUB_OUTPUT"):
                 with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                    for key, paths in found.items():
-                        output.write(f"{key}={'true' if paths else 'false'}\n")
+                    output.writelines(f"{key}={'true' if paths else 'false'}\n"
+                                      for key, paths in found.items())
             if args.mode == "inspect":
                 trees = validate_vendor(args.repo, entries)
                 results.append({"scanner": "vendored-metadata", "status": "passed", "trees": trees})

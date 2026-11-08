@@ -637,6 +637,23 @@ class GitTests(unittest.TestCase):
             self.assertEqual(expected, code)
             self.assertEqual('incomplete', json.loads((output / 'review-rules.json').read_text())['status'])
 
+    def test_unexpected_error_logs_no_exception_details_in_either_mode(self):
+        for mode, expected in [('warn', 0), ('enforce', 1)]:
+            output = self.root / ('safe-error-' + mode)
+            with patch.object(engine, 'Git', side_effect=RuntimeError('private-token-and-source')), \
+                    contextlib.redirect_stdout(io.StringIO()) as stdout, self.assertLogs(engine.LOGGER, level='ERROR') as logs:
+                code = engine.main(['--repo', str(self.root), '--base', self.base,
+                                    '--mode', mode, '--output', str(output)])
+            self.assertEqual(code, expected)
+            report = json.loads((output / 'review-rules.json').read_text())
+            self.assertEqual(report['status'], 'incomplete')
+            self.assertEqual(report['errors'], ['review engine incomplete: RuntimeError'])
+            self.assertEqual(logs.output, [f'ERROR:{engine.LOGGER.name}:Review engine incomplete; details omitted.'])
+            evidence = stdout.getvalue() + '\n'.join(logs.output)
+            evidence += (output / 'review-rules.json').read_text() + (output / 'review-rules.md').read_text()
+            self.assertNotIn('private-token-and-source', evidence)
+            self.assertNotIn('Traceback', evidence)
+
     def test_only_changed_files_are_staged_and_pr_ignores_are_ignored(self):
         self.write('untouched.rs', 'fn untouched() {}')
         self.commit('old source')
@@ -721,6 +738,13 @@ class ReceiptTests(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(0, engine.main(['--repo', temp, '--base', 'bad', '--output', temp]))
             self.assertEqual(1, engine.main(['--repo', temp, '--base', 'bad', '--output', temp, '--mode', 'enforce']))
+
+    def test_invalid_scanner_report_types_are_rejected_without_source_text(self):
+        for report in ([], None, {}, {'results': 'private-source'}):
+            result = subprocess.CompletedProcess([], 0, stdout=json.dumps(report))
+            with self.subTest(report=report), patch.object(engine.subprocess, 'run', return_value=result), \
+                    self.assertRaisesRegex(TypeError, '^invalid Semgrep report$'):
+                engine.docker_scan(ROOT / 'tests/fixtures', {'rust'})
 
     def test_scanner_timeout_cleans_only_own_container(self):
         calls = []

@@ -4,10 +4,10 @@
 Install the hash-pinned requirements-pincheck.txt before running with python -I.
 """
 
-from pathlib import Path
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -25,7 +25,7 @@ class UniqueSafeLoader(yaml.SafeLoader):
         keys = set()
         for key_node, _ in node.value:
             if not isinstance(key_node, yaml.ScalarNode):
-                raise ValueError("workflow mapping keys must be scalars")
+                raise TypeError("workflow mapping keys must be scalars")
             key = self.construct_object(key_node, deep=deep)
             if key in keys:
                 raise ValueError("duplicate workflow mapping key")
@@ -36,20 +36,20 @@ class UniqueSafeLoader(yaml.SafeLoader):
 def load_workflow(text):
     workflow = yaml.load(text, Loader=UniqueSafeLoader)
     if not isinstance(workflow, dict):
-        raise ValueError("workflow must be a mapping")
+        raise TypeError("workflow must be a mapping")
     return workflow
 
 
 def git(*args):
     return subprocess.run(["git", "-C", str(ROOT), *args],
-                          capture_output=True, timeout=30)
+                          capture_output=True, timeout=30, check=False)
 
 
 def check(caller, current):
     error = f"expected one active changes.yml uses: with a 40-character immutable SHA; {REPIN}"
     try:
         workflow = load_workflow((ROOT / caller).read_text(encoding="utf-8"))
-    except (yaml.YAMLError, ValueError) as exc:
+    except (yaml.YAMLError, TypeError, ValueError) as exc:
         # Parser exceptions can include source text; keep diagnostics structural.
         raise ValueError(f"{error}; invalid or duplicate workflow YAML") from exc
     jobs = workflow.get("jobs")

@@ -6,16 +6,16 @@ from requirements-pincheck.txt before running this suite. CI retains these wheel
 from its parser bootstrap; all test fixtures install offline from that directory.
 """
 
-from contextlib import redirect_stdout
 import importlib.util
 import io
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
 from unittest import mock
 
 import yaml
@@ -86,7 +86,7 @@ class ChangesPinTests(unittest.TestCase):
 
     def git(self, *args):
         result = subprocess.run(["git", *args], cwd=self.repo, env=self.env,
-                                text=True, capture_output=True, timeout=10)
+                                text=True, capture_output=True, timeout=10, check=False)
         self.assertEqual(result.returncode, 0, f"git {args}: {result.stderr}")
         return result.stdout.strip()
 
@@ -110,7 +110,7 @@ class ChangesPinTests(unittest.TestCase):
         # Unspecified Linux run steps use bash -e, without nounset/pipefail.
         return subprocess.run(["bash", "-e", "-c", pincheck_commands()],
                               cwd=self.repo, env=self.env,
-                              text=True, capture_output=True, timeout=20)
+                              text=True, capture_output=True, timeout=20, check=False)
 
     def assert_rejected(self, caller, reason):
         result = self.run_pincheck()
@@ -200,7 +200,7 @@ class ChangesPinTests(unittest.TestCase):
                  str(self.remote), str(fresh))
         self.repo = fresh
         absent = subprocess.run(["git", "cat-file", "-e", source], cwd=self.repo,
-                                env=self.env, capture_output=True, timeout=10)
+                                env=self.env, capture_output=True, timeout=10, check=False)
         self.assertNotEqual(absent.returncode, 0)
         for caller in (CI, TEMPLATE):
             self.repin(caller, source)
@@ -309,6 +309,19 @@ class ChangesPinTests(unittest.TestCase):
             self.assert_rejected(caller, "invalid or duplicate workflow YAML")
             self.write(caller, original)
 
+    def test_invalid_workflow_types_are_reported_without_source_text(self):
+        for caller in (CI, TEMPLATE):
+            original = (self.repo / caller).read_text(encoding="utf-8")
+            for text in ("null\n", "[]\n", "? [private, mapping-key]\n: value\n"):
+                with self.subTest(caller=caller, text=text):
+                    self.write(caller, text)
+                    result = self.run_pincheck()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("invalid or duplicate workflow YAML", result.stdout)
+                    self.assertNotIn("private", result.stdout + result.stderr)
+                    self.assertNotIn("Traceback", result.stdout + result.stderr)
+            self.write(caller, original)
+
     def test_missing_head_source_reports_head_read_failure(self):
         (self.repo / SOURCE).unlink()
         self.commit()
@@ -329,16 +342,15 @@ class ChangesPinTests(unittest.TestCase):
         real_run = subprocess.run
         for stage in ("show", "cat-file"):
             with self.subTest(stage=stage):
-                def run(command, **kwargs):
+                def run(command, stage=stage, **kwargs):
                     self.assertEqual(kwargs.get("timeout"), 30)
                     if command[3] == stage:
                         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
                     return real_run(command, env=self.env, **kwargs)
 
                 output = io.StringIO()
-                with mock.patch.object(checker.subprocess, "run", side_effect=run):
-                    with redirect_stdout(output):
-                        self.assertEqual(checker.main(), 1)
+                with mock.patch.object(checker.subprocess, "run", side_effect=run), redirect_stdout(output):
+                    self.assertEqual(checker.main(), 1)
                 self.assertIn("timed out after 30 seconds", output.getvalue())
                 if stage == "cat-file":
                     self.assertIn(CI, output.getvalue())
@@ -354,9 +366,8 @@ class ChangesPinTests(unittest.TestCase):
             return real_run(command, env=self.env, **kwargs)
 
         output = io.StringIO()
-        with mock.patch.object(checker.subprocess, "run", side_effect=run):
-            with redirect_stdout(output):
-                self.assertEqual(checker.main(), 1)
+        with mock.patch.object(checker.subprocess, "run", side_effect=run), redirect_stdout(output):
+            self.assertEqual(checker.main(), 1)
         self.assertIn(f"cannot read HEAD:{SOURCE}", output.getvalue())
 
     def test_git_os_errors_are_reported_for_head_and_caller(self):
@@ -364,15 +375,14 @@ class ChangesPinTests(unittest.TestCase):
         real_run = subprocess.run
         for stage in ("show", "cat-file"):
             with self.subTest(stage=stage):
-                def run(command, **kwargs):
+                def run(command, stage=stage, **kwargs):
                     if command[3] == stage:
                         raise OSError("injected Git execution failure")
                     return real_run(command, env=self.env, **kwargs)
 
                 output = io.StringIO()
-                with mock.patch.object(checker.subprocess, "run", side_effect=run):
-                    with redirect_stdout(output):
-                        self.assertEqual(checker.main(), 1)
+                with mock.patch.object(checker.subprocess, "run", side_effect=run), redirect_stdout(output):
+                    self.assertEqual(checker.main(), 1)
                 self.assertIn("injected Git execution failure", output.getvalue())
                 if stage == "cat-file":
                     self.assertIn(CI, output.getvalue())
@@ -461,7 +471,7 @@ class ChangesPinTests(unittest.TestCase):
                                                f"  {job}:\n    needs: [test-web]\n"))
                 result = subprocess.run([sys.executable, "-BI", ".github/scripts/test_changes_pins.py",
                                          f"ChangesPinTests.{contract}"], cwd=self.repo, env=self.env,
-                                        text=True, capture_output=True, timeout=20)
+                                        text=True, capture_output=True, timeout=20, check=False)
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("'needs' unexpectedly found", result.stderr)
         self.write(CI, original)
@@ -477,7 +487,7 @@ class ChangesPinTests(unittest.TestCase):
                        check=True, capture_output=True, timeout=20)
         env = dict(self.env, PATH=os.pathsep.join([str(clean / "bin"), os.defpath]))
         probe = subprocess.run(["python3", "-I", "-c", "import yaml"], env=env,
-                               text=True, capture_output=True, timeout=10)
+                               text=True, capture_output=True, timeout=10, check=False)
         self.assertNotEqual(probe.returncode, 0)
         self.assertIn("No module named 'yaml'", probe.stderr)
         runner = self.root / f"runner-{job}"
@@ -492,13 +502,13 @@ class ChangesPinTests(unittest.TestCase):
         self.write(".github/scripts/requirements-pincheck.txt",
                    (ROOT / ".github/scripts/requirements-pincheck.txt").read_text(encoding="utf-8"))
         result = subprocess.run(["bash", "-e", "-c", install], cwd=self.repo, env=env,
-                                text=True, capture_output=True, timeout=60)
+                                text=True, capture_output=True, timeout=60, check=False)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         # A new Actions step prepends GITHUB_PATH entries to its PATH.
         env["PATH"] = os.pathsep.join([*reversed(github_path.read_text().splitlines()), env["PATH"]])
         probe = subprocess.run(["python3", "-I", "-c",
                                 "import sys, yaml; print(sys.prefix); print(yaml.__version__)"],
-                               env=env, text=True, capture_output=True, timeout=10)
+                               env=env, text=True, capture_output=True, timeout=10, check=False)
         self.assertEqual(probe.returncode, 0, probe.stdout + probe.stderr)
         self.assertEqual(probe.stdout.splitlines(), [str(runner / "pincheck-python"), "6.0.3"])
         command = next(step["run"] for step in steps
@@ -511,7 +521,7 @@ class ChangesPinTests(unittest.TestCase):
                            if step.get("run") == "python3 -I .github/scripts/test_changes_pins.py")
             command += " ChangesPinTests.test_equal_content_pins_pass"
         result = subprocess.run(["bash", "-e", "-c", command], cwd=self.repo, env=env,
-                                text=True, capture_output=True, timeout=30)
+                                text=True, capture_output=True, timeout=30, check=False)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_bootstrap_activates_parser_for_both_real_consumers(self):
@@ -526,9 +536,8 @@ class ChangesPinTests(unittest.TestCase):
                              'echo "$RUNNER_TEMP/pincheck-python"')
         self.assertNotEqual(text, wrong)
         for job in ("pincheck", "gate-selftest"):
-            with self.subTest(job=job):
-                with self.assertRaisesRegex(AssertionError, "No module named 'yaml'"):
-                    self.assert_bootstrap_handoff(wrong, job)
+            with self.subTest(job=job), self.assertRaisesRegex(AssertionError, "No module named 'yaml'"):
+                self.assert_bootstrap_handoff(wrong, job)
 
     def test_python_314_wheel_is_hash_allowlisted(self):
         requirements = (ROOT / ".github/scripts/requirements-pincheck.txt").read_text(encoding="utf-8")
