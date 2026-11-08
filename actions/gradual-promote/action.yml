@@ -61,7 +61,7 @@ inputs:
     required: false
     default: "10"
   error-rate-soak-seconds:
-    description: Wait after the smoke gate before the first error-rate query
+    description: Aggregation allowance in the maximum query budget (first query is immediate after smoke exclusion when retries are available; a single attempt retains the allowance before its only query)
     required: false
     default: "60"
 
