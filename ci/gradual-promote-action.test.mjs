@@ -16,7 +16,9 @@
 //
 // Run: node --test ci/gradual-promote-action.test.mjs
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { runPrePromotionCheck, verifierConfig } from "../actions/gradual-promote/pre-promotion-check.mjs";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -275,7 +277,8 @@ function manifestHarness(t, pathName) {
   mkdirSync(actionPath);
   symlinkSync(process.execPath, join(tools, "node"));
   symlinkSync("/usr/bin/timeout", join(tools, "timeout"));
-  for (const name of ["gradual-promote.mjs", "error-rate-gate.mjs"]) {
+  symlinkSync("/usr/bin/git", join(tools, "git"));
+  for (const name of ["gradual-promote.mjs", "error-rate-gate.mjs", "pre-promotion-check.mjs"]) {
     copyFileSync(new URL(`../actions/gradual-promote/${name}`, import.meta.url), join(actionPath, name));
   }
   writeFileSync(join(tools, "npx"), `#!${process.execPath}
@@ -300,6 +303,9 @@ else if (args[1] !== "rollback" && !(args[1] === "versions" && args[2] === "depl
     "inputs.account-id": "a".repeat(32),
     "steps.rollback-target.outputs.target": PREVIOUS,
     "steps.promoted-version.outputs.id": PROMOTED,
+    "inputs.pre-promotion-verifier": "",
+    "inputs.require-pre-promotion-verifier": "false",
+    "inputs.pre-promotion-timeout-seconds": "120",
     "inputs.error-rate-threshold": "0.05",
     "inputs.error-rate-min-requests": "20",
     "inputs.error-rate-window-minutes": "10",
@@ -330,12 +336,15 @@ else if (args[1] !== "rollback" && !(args[1] === "versions" && args[2] === "depl
       env: {
         PATH: tools,
         GITHUB_OUTPUT: output,
+        GITHUB_WORKSPACE: root,
+        ...Object.fromEntries([...step.matchAll(/^        ([A-Z_]+): "([^"\n]*)"$/gm)].map(([, key, value]) => [key, value])),
         NPX_LOG: log,
         DEPLOYMENTS: JSON.stringify([{ created_on: "2026-01-01", versions: [{ version_id: PREVIOUS, percentage: 100 }] }]),
         VERSIONS: JSON.stringify([{ id: PROMOTED, annotations: { "workers/tag": "release-1" } }]),
         ERROR_RATE_FIXTURE: fixture,
         ...env,
         ...overrides,
+        PATH: tools, // Never let verifier fixtures escape the mocked Wrangler.
       },
       encoding: "utf8",
       timeout: 10_000,
@@ -347,7 +356,7 @@ else if (args[1] !== "rollback" && !(args[1] === "versions" && args[2] === "depl
       calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)),
     };
   }
-  return { run, steps };
+  return { run, steps, root };
 }
 
 for (const pathName of ["shared action with spaces", "shared action ü \"quoted\" 'single' $literal [one]"]) {
@@ -408,4 +417,144 @@ test("manifest script failures remain failures and rollback records only success
     assert.notEqual(missingTarget.status, 0);
     assert.deepEqual(missingTarget.calls, []);
   }
+});
+
+function checkedInVerifier(root, source = "process.exit(0);") {
+  mkdirSync(join(root, "checks"), { recursive: true });
+  writeFileSync(join(root, "checks", "recovery.mjs"), source);
+  execFileSync("/usr/bin/git", ["init", "-q", root]);
+  execFileSync("/usr/bin/git", ["-C", root, "add", "checks/recovery.mjs"]);
+}
+
+function verifierEnv(root, overrides = {}) {
+  return { PATH: process.env.PATH, GITHUB_WORKSPACE: root,
+    PRE_PROMOTION_VERIFIER: "checks/recovery.mjs", REQUIRE_PRE_PROMOTION_VERIFIER: "true",
+    PRE_PROMOTION_TIMEOUT_SECONDS: "1", CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
+    WORKER_NAME: "fixture-worker", VERSION_TAG: "release-1", NEW_VERSION: PROMOTED,
+    PREV_VERSION: PREVIOUS, PROMOTION_PERCENTAGE: "5", ...overrides };
+}
+
+test("verifier rejects missing, unsafe, untracked and malformed configuration", (t) => {
+  const { root } = manifestHarness(t, "action");
+  checkedInVerifier(root);
+  assert.equal(verifierConfig(verifierEnv(root)).timeoutMs, 1000);
+  assert.equal(verifierConfig({}), null, "unchanged callers have no callback");
+  for (const path of ["", "/tmp/recovery.mjs", "../recovery.mjs", "checks/../checks/recovery.mjs",
+    "checks//recovery.mjs", "checks/./recovery.mjs", "checks/recovery.mjs;true", "checks/$(id).mjs",
+    "checks/recovery.js", "checks/missing.mjs", ".git/config.mjs", "checks/ü.mjs"]) {
+    assert.throws(() => verifierConfig(verifierEnv(root, { PRE_PROMOTION_VERIFIER: path })), undefined, path);
+  }
+  writeFileSync(join(root, "checks", "untracked.mjs"), "process.exit(0)");
+  symlinkSync(join(root, "checks", "recovery.mjs"), join(root, "checks", "link.mjs"));
+  symlinkSync(join(root, "checks"), join(root, "linked"));
+  for (const path of ["checks/untracked.mjs", "checks/link.mjs", "linked/recovery.mjs"]) {
+    assert.throws(() => verifierConfig(verifierEnv(root, { PRE_PROMOTION_VERIFIER: path })));
+  }
+  for (const timeout of ["", "0", "301", "-1", "1.5", "1e2", " 1", "1;true"]) {
+    assert.throws(() => verifierConfig(verifierEnv(root, { PRE_PROMOTION_TIMEOUT_SECONDS: timeout })));
+  }
+  for (const overrides of [{ REQUIRE_PRE_PROMOTION_VERIFIER: "yes" }, { NEW_VERSION: "unknown" },
+    { PREV_VERSION: "unknown" }, { VERSION_TAG: "bad tag" }, { WORKER_NAME: "--bad" },
+    { PROMOTION_PERCENTAGE: "05" }, { PROMOTION_PERCENTAGE: "10" }, { GITHUB_WORKSPACE: "." }]) {
+    assert.throws(() => verifierConfig(verifierEnv(root, overrides)));
+  }
+});
+
+test("injected verifier process receives exact argv, environment and failure status without a shell", async (t) => {
+  const { root } = manifestHarness(t, "action");
+  checkedInVerifier(root);
+  for (const pct of [5, 50, 100]) {
+    const env = verifierEnv(root, { PROMOTION_PERCENTAGE: String(pct), RECOVERY_CREDENTIAL: "not-logged" });
+    await runPrePromotionCheck(env, (exe, args, options) => {
+      assert.equal(exe, process.execPath);
+      assert.deepEqual(args, ["--", join(root, "checks/recovery.mjs"),
+        "--candidate-version-id", PROMOTED, "--candidate-tag", "release-1",
+        "--worker-name", "fixture-worker", "--account-id", "a".repeat(32),
+        "--environment", "production", "--percentage", String(pct), "--previous-version-id", PREVIOUS]);
+      assert.equal(options.shell, false);
+      assert.equal(options.stdio, "ignore");
+      assert.equal(options.detached, true);
+      assert.equal(options.env.RECOVERY_CREDENTIAL, "not-logged");
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("close", 0, null));
+      return child;
+    });
+  }
+  for (const event of ["nonzero", "signal", "error", "throw"]) {
+    await assert.rejects(runPrePromotionCheck(verifierEnv(root), () => {
+      if (event === "throw") throw new Error("private detail");
+      const child = new EventEmitter();
+      queueMicrotask(() => {
+        if (event === "error") child.emit("error", new Error("private detail"));
+        else child.emit("close", event === "nonzero" ? 7 : null, event === "signal" ? "SIGTERM" : null);
+      });
+      return child;
+    }), /pre-promotion verifier/);
+  }
+});
+
+test("manifest executes verification immediately before every mutation and suppresses secret output", (t) => {
+  const { root, run, steps } = manifestHarness(t, "shared action $literal");
+  checkedInVerifier(root, `import { appendFileSync } from "node:fs";
+console.log("private-verifier-output"); console.error("private-verifier-error");
+appendFileSync(process.env.NPX_LOG, JSON.stringify(["verify", ...process.argv.slice(2)]) + "\\n");`);
+  for (const pct of [5, 50, 100]) {
+    const block = steps.find((s) => s.includes(`      id: deploy-${pct}\n`));
+    assert.match(block, /node "\$ACTION_PATH\/pre-promotion-check.mjs"\n        npx wrangler versions deploy/);
+    assert.ok(!block.includes("continue-on-error"));
+    const result = run(`deploy-${pct}`, verifierEnv(root, { PROMOTION_PERCENTAGE: String(pct) }));
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.calls[0][0], "verify");
+    assert.ok(result.calls[0].includes(PROMOTED));
+    assert.ok(result.calls[0].includes(PREVIOUS));
+    assert.deepEqual(result.calls[0].slice(-4), ["--percentage", String(pct), "--previous-version-id", PREVIOUS]);
+    assert.deepEqual(result.calls[1].slice(0, 3), ["wrangler", "versions", "deploy"]);
+    assert.equal(result.calls.length, 2);
+    assert.doesNotMatch(result.stdout + result.stderr, /private-verifier/);
+  }
+});
+
+for (const mode of ["missing", "nonzero", "timeout"]) {
+  for (const failedStage of [5, 50, 100]) {
+    test(`verifier ${mode} at ${failedStage} stops promotion and retains recorded rollback`, (t) => {
+      const { root, run, steps } = manifestHarness(t, "action");
+      checkedInVerifier(root, `const pct = process.argv[process.argv.indexOf("--percentage") + 1];
+if (pct === "${failedStage}") {
+  ${mode === "timeout" ? "setInterval(() => {}, 100);" : "process.exit(9);"}
+}`);
+      const promoted = [];
+      for (const pct of [5, 50, 100]) {
+        const env = verifierEnv(root, { PROMOTION_PERCENTAGE: String(pct) });
+        if (mode === "missing" && pct === failedStage) env.PRE_PROMOTION_VERIFIER = "checks/missing.mjs";
+        const result = run(`deploy-${pct}`, env);
+        if (result.status !== 0) {
+          assert.equal(pct, failedStage);
+          assert.deepEqual(result.calls, [], "refusal must precede Wrangler");
+          const rollback = run(`rollback-${pct}`);
+          assert.equal(rollback.output, "restored=true\n");
+          assert.equal(rollback.status, 1, "restore must not erase failure");
+          assert.deepEqual(rollback.calls, [["wrangler", "rollback", PREVIOUS, "--name", "fixture-worker", "--yes"]]);
+          // Native success() skips subsequent deploys after this failed step.
+          const block = steps.find((s) => s.includes(`      id: deploy-${pct}\n`));
+          assert.ok(!block.includes("      if:"), "default success() semantics remain intact");
+          break;
+        }
+        promoted.push(pct);
+      }
+      assert.deepEqual(promoted, [5, 50, 100].filter((pct) => pct < failedStage));
+    });
+  }
+}
+
+test("cancellation terminates verifier group and refuses the pending promotion", async (t) => {
+  const { root } = manifestHarness(t, "action");
+  checkedInVerifier(root, `import { writeFileSync } from "node:fs";
+writeFileSync(process.env.READY_FILE, "ready"); setInterval(() => {}, 100);`);
+  const ready = join(root, "ready");
+  // A test-only injected spawn signals the helper after its child starts.
+  await assert.rejects(runPrePromotionCheck(verifierEnv(root, { READY_FILE: ready }), (...args) => {
+    const child = spawn(...args);
+    child.once("spawn", () => process.emit("SIGTERM"));
+    return child;
+  }), /cancelled/);
 });
