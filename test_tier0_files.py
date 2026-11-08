@@ -228,10 +228,10 @@ class FileExecutionContract(unittest.TestCase):
             '# ci-policy: non-required -- \njobs: {}\n',
             'name: "ci-policy: non-required -- not a comment"\njobs: {}\n',
             'name: "multiline value\n# ci-policy: non-required -- still a value\n"\njobs: {}\n',
-            'jobs:\n  test:\n    # ci-policy: non-required -- nested comment\n'
-            '    runs-on: ubuntu-latest\n    steps: []\n',
-            'jobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n'
-            '      - run: |\n          # ci-policy: non-required -- shell comment\n',
+            ('jobs:\n  test:\n    # ci-policy: non-required -- nested comment\n'
+             '    runs-on: ubuntu-latest\n    steps: []\n'),
+            ('jobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n'
+             '      - run: |\n          # ci-policy: non-required -- shell comment\n'),
         )
         for text in decoys:
             with self.subTest(text=text):
