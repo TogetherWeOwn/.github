@@ -145,13 +145,16 @@ export async function runErrorRateGate(config, deps = {}) {
       });
       const payload =
         config.fixturePayload ?? (await fetchJson(body, Math.min(30_000, remainingMs)));
-      if (monotonicNow() >= deadlineMs) return expired(attempt);
       const sums = parseErrorRateResponse(payload, config.versionId);
       const { verdict, rate } = evaluateErrorRate({
         ...sums,
         threshold: config.threshold,
         minRequests: config.minRequests,
       });
+      // A completed call can prove a candidate-bound breach even at expiry.
+      // Retain that rollback evidence, but never admit a late success or give
+      // a late low sample the procedural exception. No further call is allowed.
+      if (verdict !== "fail" && monotonicNow() >= deadlineMs) return expired(attempt);
       last = { ...sums, rate, verdict };
       log(formatLine({ ...last, attempt, attempts: config.attempts }));
       if (verdict === "fail") return { code: 1, attempts: attempt, ...last };
