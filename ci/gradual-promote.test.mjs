@@ -593,10 +593,10 @@ test("an expired original budget cannot accept a late healthy result or renew re
   const result = await runErrorRateGate(gateConfig({ attempts: 1, soakSeconds: 60 }), {
     now: () => new Date(time),
     monotonicNow: () => time,
-    sleep: async () => assert.fail("no retry or initial delay"),
+    sleep: async (seconds) => { time += seconds * 1000; },
     fetchJson: async () => {
       queries += 1;
-      time += 90_000; // original 60s allowance + one bounded 30s call
+      time += 30_000; // after the 60s allowance, the original 90s deadline is fixed
       return envelope({ requests: 100, errors: 0 });
     },
     log: (line) => logs.push(line),
@@ -728,6 +728,85 @@ test("low samples retain the original final observation opportunity without dela
   assert.equal(result.verdict, "fail");
 });
 
+test("a single attempt observes errors arriving during the original aggregation allowance", async () => {
+  let elapsed = 0;
+  const queries = [];
+  const result = await runErrorRateGate(gateConfig({ attempts: 1, soakSeconds: 60 }), {
+    now: () => new Date(Date.parse(UNTIL) + elapsed),
+    monotonicNow: () => elapsed,
+    sleep: async (seconds) => { elapsed += seconds * 1000; },
+    fetchJson: async () => {
+      queries.push(elapsed);
+      return envelope(elapsed < 60_000
+        ? { requests: 2, errors: 2 }
+        : { requests: 30, errors: 30 });
+    },
+    log: () => {},
+  });
+  assert.equal(result.code, 1, "do not pass the early low sample without observing later errors");
+  assert.equal(result.verdict, "fail");
+  assert.equal(result.attempts, 1);
+  assert.deepEqual(queries, [60_000], "retain the sole query, not an extra retry");
+});
+
+test("single-attempt aggregation retains smoke exclusion and low-sample and identity criteria", async () => {
+  for (const [payload, verdict, code] of [
+    [envelope({ requests: 2, errors: 2 }), "insufficient", 0],
+    [envelope({ requests: 20, errors: 1 }), "pass", 0],
+    [envelope({ requests: 20, errors: 2 }), "fail", 1],
+    [envelope({ requests: 20, errors: 0 }, PREV), "error", 1],
+  ]) {
+    let elapsed = 0;
+    let queries = 0;
+    const boundary = new Date(Date.parse(UNTIL) + 1000).toISOString();
+    const result = await runErrorRateGate(gateConfig({
+      attempts: 1, soakSeconds: 60, windowStartIso: boundary,
+    }), {
+      now: () => new Date(Date.parse(UNTIL) + elapsed),
+      monotonicNow: () => elapsed,
+      sleep: async (seconds) => { elapsed += seconds * 1000; },
+      fetchJson: async (body, timeoutMs) => {
+        queries += 1;
+        assert.equal(elapsed, 60_000, "the boundary wait must not renew the allowance");
+        assert.equal(body.variables.since, boundary);
+        assert.equal(body.variables.until, new Date(Date.parse(UNTIL) + 60_000).toISOString());
+        assert.equal(timeoutMs, 30_000);
+        return payload;
+      },
+      log: () => {},
+    });
+    assert.equal(queries, 1);
+    assert.equal(result.verdict, verdict);
+    assert.equal(result.code, code);
+  }
+});
+
+test("single-attempt aggregation rechecks early wakes and never queries after budget expiry", async () => {
+  for (const oversleep of [0, 30_000]) {
+    let elapsed = 0;
+    let waits = 0;
+    let queries = 0;
+    const result = await runErrorRateGate(gateConfig({ attempts: 1, soakSeconds: 60 }), {
+      now: () => new Date(Date.parse(UNTIL) + elapsed),
+      monotonicNow: () => elapsed,
+      sleep: async (seconds) => {
+        elapsed += seconds * 1000 + (waits++ === 0 ? -1 : oversleep);
+      },
+      fetchJson: async () => {
+        queries += 1;
+        assert.equal(elapsed, 60_000);
+        return envelope({ requests: 20, errors: 0 });
+      },
+      log: () => {},
+    });
+    assert.equal(waits, 2);
+    assert.equal(queries, oversleep ? 0 : 1);
+    assert.equal(result.attempts, queries);
+    assert.equal(result.code, oversleep ? 1 : 0);
+    assert.equal(result.verdict, oversleep ? "insufficient" : "pass");
+  }
+});
+
 test("elapsed budget is monotonic when the analytics wall clock moves", async () => {
   for (const correction of [-300_000, 300_000]) {
     let elapsed = 0;
@@ -736,11 +815,15 @@ test("elapsed budget is monotonic when the analytics wall clock moves", async ()
       now: () => new Date(wall),
       monotonicNow: () => elapsed,
       fetchJson: async () => {
-        elapsed = correction < 0 ? 90_000 : 1_000;
-        wall += elapsed + correction;
+        const queryMs = correction < 0 ? 30_000 : 1_000;
+        elapsed += queryMs;
+        wall += queryMs + correction;
         return envelope({ requests: 100, errors: 0 });
       },
-      sleep: async () => assert.fail("no wait before a complete first sample"),
+      sleep: async (seconds) => {
+        elapsed += seconds * 1000;
+        wall += seconds * 1000;
+      },
       log: () => {},
     });
     assert.equal(result.code, correction < 0 ? 1 : 0);

@@ -61,7 +61,7 @@ inputs:
     required: false
     default: "10"
   error-rate-soak-seconds:
-    description: Initial aggregation allowance in the maximum query budget, not a minimum wait (first query is immediate after the post-smoke exclusion boundary)
+    description: Aggregation allowance in the maximum query budget (first query is immediate after smoke exclusion when retries are available; a single attempt retains the allowance before its only query)
     required: false
     default: "60"
 

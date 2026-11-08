@@ -64,12 +64,14 @@ export async function runErrorRateGate(config, deps = {}) {
     deps.fetchJson ?? ((body, timeoutMs) => defaultFetchJson(body, config.apiToken, timeoutMs));
   const log = deps.log ?? ((line) => console.log(line));
   // Adapted from two-web-next PR #2093 at f8c9803cb2c1. The former initial
-  // delay is an allowance, never a minimum wait. Keep the original scheduled
-  // + API budget and attempt cap; an immediate query does not buy an extra
-  // call, retry or a renewed deadline.
+  // delay is an allowance for multi-attempt gates. A single attempt retains
+  // its original observation time because it cannot retry an early low sample.
+  // Keep the original scheduled + API budget and attempt cap; an immediate
+  // query does not buy an extra call, retry or a renewed deadline.
   const monotonicNow = deps.monotonicNow ?? (() => performance.now());
+  const startedMs = monotonicNow();
   const deadlineMs =
-    monotonicNow() +
+    startedMs +
     (config.soakSeconds + (config.attempts - 1) * config.retrySeconds) * 1000 +
     config.attempts * 30_000;
   const expired = (attempts, lastVerdict) => {
@@ -109,6 +111,17 @@ export async function runErrorRateGate(config, deps = {}) {
       await sleep(waitMs / 1000);
       // Timers may resume early; opening the window must not spend an attempt.
       waitMs = boundaryMs - now().getTime();
+    }
+  }
+
+  if (config.attempts === 1) {
+    const observationMs = startedMs + config.soakSeconds * 1000;
+    let waitMs = observationMs - monotonicNow();
+    while (waitMs > 0) {
+      const remainingMs = deadlineMs - monotonicNow();
+      if (remainingMs <= 0) return expired(0);
+      await sleep(Math.min(waitMs, remainingMs) / 1000);
+      waitMs = observationMs - monotonicNow();
     }
   }
 
