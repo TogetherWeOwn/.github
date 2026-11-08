@@ -3,10 +3,10 @@
 import { execFileSync, spawn } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { assertErrorRateIdentifiers, assertRollbackVersionId, assertVersionTag, GRADUAL_STEPS } from "./gradual-promote.mjs";
 
-export function verifierConfig(env) {
+export function verifierConfig(env, platform = process.platform) {
   const required = env.REQUIRE_PRE_PROMOTION_VERIFIER ?? "false";
   if (!["true", "false"].includes(required)) throw new Error("invalid verifier requirement");
   const timeout = env.PRE_PROMOTION_TIMEOUT_SECONDS ?? "120";
@@ -15,6 +15,7 @@ export function verifierConfig(env) {
   }
   const path = env.PRE_PROMOTION_VERIFIER ?? "";
   if (!path && required === "false") return null;
+  if (platform === "win32") throw new Error("configured verification requires POSIX process groups");
   // No absolute paths, traversal, empty components, option/pathspec syntax,
   // shell metacharacters or non-module executables. Check every component.
   const parts = path.split("/");
@@ -39,9 +40,14 @@ export function verifierConfig(env) {
     // Git's index proves the entry is checked in. Ignore ambient GIT_* overrides
     // so a caller's unrelated worktree settings cannot select another index.
     const gitEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("GIT_")));
-    execFileSync("git", ["-C", workspace, "ls-files", "--error-unmatch", "--", path], {
-      env: gitEnv, stdio: "ignore", timeout: 5000,
-    });
+    const indexed = execFileSync("git", ["-C", workspace, "ls-files", "--stage", "-z", "--error-unmatch", "--", path], {
+      env: gitEnv, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8", timeout: 5000,
+    }).split("\0");
+    // A pathspec also matches descendants; exit zero alone is insufficient.
+    const entry = indexed[0]?.match(/^(100644|100755) [0-9a-f]+ 0\t(.+)$/);
+    if (indexed.length !== 2 || indexed[1] !== "" || !entry || entry[2] !== path) {
+      throw new Error("not an exact tracked regular-file entry");
+    }
   } catch {
     throw new Error("verifier is unavailable, unsafe or not checked in");
   }
@@ -61,10 +67,11 @@ export function verifierConfig(env) {
   };
 }
 
-export async function runPrePromotionCheck(env, spawnImpl = spawn) {
+export async function runPrePromotionCheck(env, spawnImpl = spawn, monotonicNow = () => performance.now()) {
   const config = verifierConfig(env);
   if (!config) return;
   await new Promise((resolve, reject) => {
+    const deadline = monotonicNow() + config.timeoutMs;
     let child;
     try {
       child = spawnImpl(process.execPath, ["--", config.file, ...config.args], {
@@ -74,20 +81,21 @@ export async function runPrePromotionCheck(env, spawnImpl = spawn) {
       reject(new Error("pre-promotion verifier could not start"));
       return;
     }
-    let failed = false;
+    let failureReason;
     const kill = () => {
       if (child.pid) {
         try { process.kill(-child.pid, "SIGKILL"); } catch { /* group already exited */ }
       }
     };
-    const abort = () => { failed = true; kill(); };
-    const timer = setTimeout(abort, config.timeoutMs);
-    process.once("SIGTERM", abort);
-    process.once("SIGINT", abort);
+    const abort = (reason) => { failureReason ??= reason; kill(); };
+    const cancel = () => abort("was cancelled");
+    const timer = setTimeout(() => abort("timed out"), Math.max(0, deadline - monotonicNow()));
+    process.once("SIGTERM", cancel);
+    process.once("SIGINT", cancel);
     const cleanup = () => {
       clearTimeout(timer);
-      process.removeListener("SIGTERM", abort);
-      process.removeListener("SIGINT", abort);
+      process.removeListener("SIGTERM", cancel);
+      process.removeListener("SIGINT", cancel);
       kill(); // A verifier must not leave background descendants behind.
     };
     child.once("error", () => {
@@ -96,13 +104,23 @@ export async function runPrePromotionCheck(env, spawnImpl = spawn) {
     });
     child.once("close", (code, signal) => {
       cleanup();
-      if (failed || signal || code !== 0) reject(new Error("pre-promotion verifier failed, timed out or was cancelled"));
+      if (!failureReason && monotonicNow() >= deadline) failureReason = "timed out";
+      if (failureReason || signal || code !== 0) reject(new Error(`pre-promotion verifier ${failureReason ?? "failed"}`));
       else resolve();
     });
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   runPrePromotionCheck(process.env).catch(() => {
     // Neither module output nor exception details may disclose recovery secrets.
     console.error("::error::pre-promotion verification refused; no promotion permitted");

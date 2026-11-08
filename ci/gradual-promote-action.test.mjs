@@ -546,15 +546,56 @@ if (pct === "${failedStage}") {
   }
 }
 
-test("cancellation terminates verifier group and refuses the pending promotion", async (t) => {
+test("cancellation terminates verifier group rather than passing on ordinary timeout", async (t) => {
   const { root } = manifestHarness(t, "action");
-  checkedInVerifier(root, `import { writeFileSync } from "node:fs";
-writeFileSync(process.env.READY_FILE, "ready"); setInterval(() => {}, 100);`);
-  const ready = join(root, "ready");
-  // A test-only injected spawn signals the helper after its child starts.
-  await assert.rejects(runPrePromotionCheck(verifierEnv(root, { READY_FILE: ready }), (...args) => {
+  checkedInVerifier(root, "setInterval(() => {}, 100);");
+  let exitSignal;
+  await assert.rejects(runPrePromotionCheck(verifierEnv(root), (...args) => {
     const child = spawn(...args);
+    child.once("exit", (_code, signal) => { exitSignal = signal; });
     child.once("spawn", () => process.emit("SIGTERM"));
     return child;
-  }), /cancelled/);
+  }), /verifier was cancelled$/);
+  assert.equal(exitSignal, "SIGKILL", "cancellation must actually terminate the verifier");
+});
+
+test("verifier tracking requires an exact regular-file index entry, not a descendant match", (t) => {
+  const { root } = manifestHarness(t, "action");
+  checkedInVerifier(root);
+  const path = join(root, "checks", "recovery.mjs");
+  rmSync(path);
+  mkdirSync(path);
+  writeFileSync(join(path, "policy.json"), "{}");
+  execFileSync("/usr/bin/git", ["-C", root, "add", "-A", "checks"]);
+  rmSync(path, { recursive: true });
+  writeFileSync(path, "process.exit(0)");
+  assert.throws(() => verifierConfig(verifierEnv(root)), /not checked in/);
+});
+
+test("a successful close after the monotonic deadline fails even before the timer callback", async (t) => {
+  const { root } = manifestHarness(t, "action");
+  checkedInVerifier(root);
+  let now = 0;
+  await assert.rejects(runPrePromotionCheck(verifierEnv(root), () => {
+    const child = new EventEmitter();
+    queueMicrotask(() => { now = 1001; child.emit("close", 0, null); });
+    return child;
+  }, () => now), /timed out/);
+});
+
+test("configured verification refuses unsupported Windows group termination before traffic changes", () => {
+  assert.throws(() => verifierConfig({ PRE_PROMOTION_VERIFIER: "checks/recovery.mjs" }, "win32"), /POSIX/);
+  assert.equal(verifierConfig({}, "win32"), null, "non-opted-in callers remain unchanged");
+});
+
+test("symlinked action CLI still validates and refuses a missing required verifier", (t) => {
+  const { root } = manifestHarness(t, "action");
+  const linked = join(root, "linked-action");
+  symlinkSync(join(root, "action"), linked);
+  const result = spawnSync(process.execPath, [join(linked, "pre-promotion-check.mjs")], {
+    env: verifierEnv(root), encoding: "utf8", timeout: 5000,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /no promotion permitted/);
 });

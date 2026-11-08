@@ -16,7 +16,10 @@ The default is false with an empty path, preserving non-opted-in callers. A
 nonempty path runs even when the requirement flag is false. Invalid boolean or
 timeout configuration fails closed, not as an opt-out. The timeout is an integer
 from 1 to 300 seconds per invocation (default 120), plus at most five seconds
-for the local Git tracking check.
+for the local Git tracking check. Success is checked against a monotonic deadline,
+not merely a timer callback. Configured verification requires a POSIX runner
+(Linux/macOS process groups); Windows refuses before the first mutation rather
+than attempting unsupported group termination. Non-opted-in callers are unchanged.
 
 ## Module contract
 
