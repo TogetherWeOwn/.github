@@ -1,0 +1,7 @@
+{
+  "name": "gradual-promote-format-regression",
+  "private": true,
+  "devDependencies": {
+    "@biomejs/biome": "2.6.2"
+  }
+}

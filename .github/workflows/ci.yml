@@ -347,8 +347,19 @@ jobs:
           ref: d09b4bee57ad7effdaa79d0765574c3a60e8068e
           path: two-web-next
           persist-credentials: false
-      - name: Run gradual promotion self-tests
-        run: node --test ci/gradual-promote.test.mjs ci/gradual-promote-gate-acceptance.test.mjs ci/gradual-promote-action.test.mjs
+      # Match immutable consumers without adding dependencies to the action.
+      # npm 11.19 supports the native three-day age and script-refusal controls.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.21.0'
+      - name: Install the locked consumer formatter (no lifecycle scripts)
+        working-directory: ci/formatting
+        run: |
+          test "$(npm config get ignore-scripts)" = true
+          test "$(npm config get min-release-age)" = 3
+          npm ci --ignore-scripts --min-release-age=3 --no-audit --no-fund
+      - name: Run gradual promotion self-tests and producer formatting regression
+        run: node --test ci/gradual-promote.test.mjs ci/gradual-promote-gate-acceptance.test.mjs ci/gradual-promote-action.test.mjs ci/gradual-promote-format.test.mjs
         env:
           TWO_WEB_NEXT_ROOT: two-web-next
 
