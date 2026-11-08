@@ -552,7 +552,7 @@ test("low samples use only the existing bounded retries and never become a rate 
   assert.equal(result.verdict, "insufficient");
   assert.equal(result.code, 0, "existing procedural low-sample classification is unchanged");
   assert.equal(result.attempts, 3);
-  assert.deepEqual(sleeps, [60, 60], "no blind first sleep or extra query");
+  assert.deepEqual(sleeps, [120, 60], "defer the allowance to retries, not the first query");
   assert.match(logs.join("\n"), /::warning::.*insufficient, not a measured rate pass/);
 });
 
@@ -562,6 +562,7 @@ test("immediate query preserves the one-second inclusive smoke exclusion boundar
   const boundary = new Date(time + 1000).toISOString();
   const result = await runErrorRateGate(gateConfig({ windowStartIso: boundary, soakSeconds: 60 }), {
     now: () => new Date(time),
+    monotonicNow: () => time,
     sleep: async (seconds) => {
       sleeps.push(seconds);
       time += seconds * 1000;
@@ -591,6 +592,7 @@ test("an expired original budget cannot accept a late healthy result or renew re
   const logs = [];
   const result = await runErrorRateGate(gateConfig({ attempts: 1, soakSeconds: 60 }), {
     now: () => new Date(time),
+    monotonicNow: () => time,
     sleep: async () => assert.fail("no retry or initial delay"),
     fetchJson: async () => {
       queries += 1;
@@ -612,6 +614,7 @@ test("retry spacing is clipped at the original budget and starts no call after e
   const sleeps = [];
   const result = await runErrorRateGate(gateConfig({ attempts: 2, retrySeconds: 60 }), {
     now: () => new Date(time),
+    monotonicNow: () => time,
     sleep: async (seconds) => {
       sleeps.push(seconds);
       time += seconds * 1000;
@@ -635,6 +638,7 @@ test("remaining query timeout is clipped without renewing the deadline", async (
   const timeouts = [];
   const result = await runErrorRateGate(gateConfig({ attempts: 2 }), {
     now: () => new Date(time),
+    monotonicNow: () => time,
     sleep: async () => assert.fail("no retry delay configured"),
     fetchJson: async (_body, timeoutMs) => {
       timeouts.push(timeoutMs);
@@ -654,6 +658,7 @@ test("exhausted analytics timeouts remain fail-closed", async () => {
   let queries = 0;
   const result = await runErrorRateGate(gateConfig({ retrySeconds: 60 }), {
     now: () => new Date(time),
+    monotonicNow: () => time,
     sleep: async (seconds) => {
       time += seconds * 1000;
     },
@@ -689,6 +694,7 @@ test("an analytics error after a valid low sample cannot inherit the low-sample 
   let queries = 0;
   const result = await runErrorRateGate(gateConfig({ attempts: 2 }), {
     now: () => new Date(time),
+    monotonicNow: () => time,
     sleep: async () => assert.fail("no retry delay configured"),
     fetchJson: async () => {
       queries += 1;
@@ -702,6 +708,69 @@ test("an analytics error after a valid low sample cannot inherit the low-sample 
   assert.equal(result.verdict, "insufficient");
   assert.equal(result.attempts, 2);
   assert.equal(queries, 2);
+});
+
+test("low samples retain the original final observation opportunity without delaying a complete sample", async () => {
+  let elapsed = 0;
+  const queries = [];
+  const result = await runErrorRateGate(gateConfig({ soakSeconds: 60, retrySeconds: 60 }), {
+    now: () => new Date(Date.parse(UNTIL) + elapsed),
+    monotonicNow: () => elapsed,
+    sleep: async (seconds) => { elapsed += seconds * 1000; },
+    fetchJson: async () => {
+      queries.push(elapsed);
+      return envelope(elapsed >= 150_000 ? { requests: 100, errors: 20 } : null);
+    },
+    log: () => {},
+  });
+  assert.deepEqual(queries, [0, 120_000, 180_000]);
+  assert.equal(result.code, 1);
+  assert.equal(result.verdict, "fail");
+});
+
+test("elapsed budget is monotonic when the analytics wall clock moves", async () => {
+  for (const correction of [-300_000, 300_000]) {
+    let elapsed = 0;
+    let wall = Date.parse(UNTIL);
+    const result = await runErrorRateGate(gateConfig({ attempts: 1, soakSeconds: 60 }), {
+      now: () => new Date(wall),
+      monotonicNow: () => elapsed,
+      fetchJson: async () => {
+        elapsed = correction < 0 ? 90_000 : 1_000;
+        wall += elapsed + correction;
+        return envelope({ requests: 100, errors: 0 });
+      },
+      sleep: async () => assert.fail("no wait before a complete first sample"),
+      log: () => {},
+    });
+    assert.equal(result.code, correction < 0 ? 1 : 0);
+    assert.equal(result.verdict, correction < 0 ? "insufficient" : "pass");
+  }
+});
+
+test("boundary wait rechecks early timer wakes without consuming the single query", async () => {
+  let elapsed = 0;
+  let waits = 0;
+  let queries = 0;
+  const boundary = Date.parse(UNTIL) + 1000;
+  const result = await runErrorRateGate(gateConfig({
+    attempts: 1, windowStartIso: new Date(boundary).toISOString(),
+  }), {
+    now: () => new Date(Date.parse(UNTIL) + elapsed),
+    monotonicNow: () => elapsed,
+    sleep: async (seconds) => {
+      elapsed += seconds * 1000 - (waits++ === 0 ? 1 : 0);
+    },
+    fetchJson: async (body) => {
+      queries += 1;
+      assert.ok(Date.parse(body.variables.until) > boundary);
+      return envelope({ requests: 20, errors: 0 });
+    },
+    log: () => {},
+  });
+  assert.equal(waits, 2);
+  assert.equal(queries, 1);
+  assert.equal(result.verdict, "pass");
 });
 
 test("gate config rejects static misconfiguration before any soak", () => {

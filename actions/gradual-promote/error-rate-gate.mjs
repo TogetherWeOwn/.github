@@ -67,9 +67,9 @@ export async function runErrorRateGate(config, deps = {}) {
   // delay is an allowance, never a minimum wait. Keep the original scheduled
   // + API budget and attempt cap; an immediate query does not buy an extra
   // call, retry or a renewed deadline.
-  const startedMs = now().getTime();
+  const monotonicNow = deps.monotonicNow ?? (() => performance.now());
   const deadlineMs =
-    startedMs +
+    monotonicNow() +
     (config.soakSeconds + (config.attempts - 1) * config.retrySeconds) * 1000 +
     config.attempts * 30_000;
   const expired = (attempts, lastVerdict) => {
@@ -102,17 +102,20 @@ export async function runErrorRateGate(config, deps = {}) {
   // analytics bucket. Wait only for that boundary, not a blind aggregation soak.
   if (config.windowStartIso !== undefined && config.windowStartIso !== "") {
     const boundaryMs = parseWindowStartIso(config.windowStartIso) + 1;
-    const waitMs = boundaryMs - now().getTime();
-    if (waitMs > 0) {
-      if (boundaryMs >= deadlineMs) return expired(0);
+    let waitMs = boundaryMs - now().getTime();
+    while (waitMs > 0) {
+      const remainingMs = deadlineMs - monotonicNow();
+      if (waitMs >= remainingMs) return expired(0);
       await sleep(waitMs / 1000);
+      // Timers may resume early; opening the window must not spend an attempt.
+      waitMs = boundaryMs - now().getTime();
     }
   }
 
   let last = { requests: 0, errors: 0, rate: 0, verdict: "error" };
   for (let attempt = 1; attempt <= config.attempts; attempt += 1) {
     const until = now();
-    const remainingMs = deadlineMs - until.getTime();
+    const remainingMs = Math.floor(deadlineMs - monotonicNow());
     if (remainingMs <= 0) return expired(attempt - 1, last.verdict);
     try {
       const since = errorRateWindowSince({
@@ -129,7 +132,7 @@ export async function runErrorRateGate(config, deps = {}) {
       });
       const payload =
         config.fixturePayload ?? (await fetchJson(body, Math.min(30_000, remainingMs)));
-      if (now().getTime() >= deadlineMs) return expired(attempt);
+      if (monotonicNow() >= deadlineMs) return expired(attempt);
       const sums = parseErrorRateResponse(payload, config.versionId);
       const { verdict, rate } = evaluateErrorRate({
         ...sums,
@@ -149,14 +152,17 @@ export async function runErrorRateGate(config, deps = {}) {
           `detail=${error instanceof Error ? error.message : "unknown"}`,
       );
     }
-    if (attempt < config.attempts && config.retrySeconds > 0) {
-      const remainingMs = deadlineMs - now().getTime();
+    if (attempt < config.attempts) {
+      const remainingMs = deadlineMs - monotonicNow();
       if (remainingMs <= 0) return expired(attempt, last.verdict);
-      await sleep(Math.min(config.retrySeconds, remainingMs / 1000));
+      // Defer the removed initial allowance to the first retry, so early low
+      // samples do not shorten the original final observation opportunity.
+      const retrySeconds = config.retrySeconds + (attempt === 1 ? config.soakSeconds : 0);
+      if (retrySeconds > 0) await sleep(Math.min(retrySeconds, remainingMs / 1000));
     }
   }
 
-  if (now().getTime() >= deadlineMs) return expired(config.attempts, last.verdict);
+  if (monotonicNow() >= deadlineMs) return expired(config.attempts, last.verdict);
   if (last.verdict === "insufficient") {
     log(
       "::warning::error-rate evidence is insufficient, not a measured rate pass; " +
