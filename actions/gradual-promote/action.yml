@@ -44,6 +44,18 @@ inputs:
     description: Pass --allow-indexable to the smoke checker (production apex)
     required: false
     default: "true"
+  pre-promotion-verifier:
+    description: Checked-in repository-relative .mjs verifier run before EVERY promotion; empty preserves existing behavior unless required
+    required: false
+    default: ""
+  require-pre-promotion-verifier:
+    description: Fail closed if no pre-promotion verifier is configured (recovery-dependent callers must set true)
+    required: false
+    default: "false"
+  pre-promotion-timeout-seconds:
+    description: Per-invocation verifier deadline, integer 1-300 seconds; failure or unknown evidence must exit nonzero
+    required: false
+    default: "120"
   error-rate-gate:
     description: Judge the new version's live invocation error rate at every stage (needs an api-token that can read account analytics)
     required: false
@@ -111,6 +123,7 @@ runs:
       run: |
         set -euo pipefail
         mapfile -t SPEC < <(node "$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 5 "$PREV_VERSION")
+        node "$ACTION_PATH/pre-promotion-check.mjs"
         npx wrangler versions deploy --env production --name "$WORKER_NAME" \
           "${SPEC[0]}" --version-tag "${SPEC[1]}" --yes
       env:
@@ -118,6 +131,11 @@ runs:
         WORKER_NAME: ${{ inputs.worker-name }}
         VERSION_TAG: ${{ inputs.version-tag }}
         PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
+        NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
+        PRE_PROMOTION_VERIFIER: ${{ inputs.pre-promotion-verifier }}
+        REQUIRE_PRE_PROMOTION_VERIFIER: ${{ inputs.require-pre-promotion-verifier }}
+        PRE_PROMOTION_TIMEOUT_SECONDS: ${{ inputs.pre-promotion-timeout-seconds }}
+        PROMOTION_PERCENTAGE: "5"
         CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
         CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
 
@@ -202,6 +220,7 @@ runs:
       run: |
         set -euo pipefail
         mapfile -t SPEC < <(node "$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 50 "$PREV_VERSION")
+        node "$ACTION_PATH/pre-promotion-check.mjs"
         npx wrangler versions deploy --env production --name "$WORKER_NAME" \
           "${SPEC[0]}" --version-tag "${SPEC[1]}" --yes
       env:
@@ -209,6 +228,11 @@ runs:
         WORKER_NAME: ${{ inputs.worker-name }}
         VERSION_TAG: ${{ inputs.version-tag }}
         PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
+        NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
+        PRE_PROMOTION_VERIFIER: ${{ inputs.pre-promotion-verifier }}
+        REQUIRE_PRE_PROMOTION_VERIFIER: ${{ inputs.require-pre-promotion-verifier }}
+        PRE_PROMOTION_TIMEOUT_SECONDS: ${{ inputs.pre-promotion-timeout-seconds }}
+        PROMOTION_PERCENTAGE: "50"
         CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
         CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
 
@@ -285,6 +309,7 @@ runs:
       run: |
         set -euo pipefail
         mapfile -t SPEC < <(node "$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION")
+        node "$ACTION_PATH/pre-promotion-check.mjs"
         npx wrangler versions deploy --env production --name "$WORKER_NAME" \
           --version-tag "${SPEC[1]}" --yes
       env:
@@ -292,6 +317,11 @@ runs:
         WORKER_NAME: ${{ inputs.worker-name }}
         VERSION_TAG: ${{ inputs.version-tag }}
         PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
+        NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
+        PRE_PROMOTION_VERIFIER: ${{ inputs.pre-promotion-verifier }}
+        REQUIRE_PRE_PROMOTION_VERIFIER: ${{ inputs.require-pre-promotion-verifier }}
+        PRE_PROMOTION_TIMEOUT_SECONDS: ${{ inputs.pre-promotion-timeout-seconds }}
+        PROMOTION_PERCENTAGE: "100"
         CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
         CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
 
