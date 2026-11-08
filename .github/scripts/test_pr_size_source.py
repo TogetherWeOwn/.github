@@ -24,9 +24,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 CENTRAL_REPOSITORY = "TogetherWeOwn/.github"
-REVIEWED_SHA = "fcfe691790ac925e8c4cf5e191a5004d4d991392"
+REVIEWED_SHA = "fd1eda3ad0db86c4db8dbacf2e72e4b87c1d514f"
 SCRIPT = ".github/scripts/pr_size.py"
-SCRIPT_SHA256 = "e0170a1700c312318de84aadd88e17de7ba13b4a024e1b8fa563335c1c180c61"
+SCRIPT_SHA256 = "37b4b44a55e7f37cfb6a69c89c9007857fcae8fb48f0f80bc65964cb38a52f43"
 MODES = {"pr-size.yml": "label", "pr-size-weekly.yml": "weekly"}
 
 
