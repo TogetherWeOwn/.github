@@ -1,12 +1,50 @@
 // Run a trusted caller-owned module, never a shell expression. This is a
 // freshness boundary, not a sandbox or an implementation of recovery policy.
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertErrorRateIdentifiers, assertRollbackVersionId, assertVersionTag, GRADUAL_STEPS } from "./gradual-promote.mjs";
 
-export function verifierConfig(env, platform = process.platform) {
+async function trackedEntry(workspace, path, env) {
+  return new Promise((resolve, reject) => {
+    const deadline = performance.now() + 5000;
+    const child = spawn("git", ["-C", workspace, "ls-files", "--stage", "-z", "--error-unmatch", "--", path], {
+      env, shell: false, detached: true, stdio: ["ignore", "pipe", "ignore"],
+    });
+    let settled = false;
+    let output = "";
+    let size = 0;
+    const finish = (success) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      process.removeListener("SIGTERM", cancel);
+      process.removeListener("SIGINT", cancel);
+      // Hard-kill the entire metadata group, including descendants retaining pipes.
+      if (child.pid) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch { /* group already exited */ }
+      }
+      child.stdout.destroy();
+      if (success) resolve(output);
+      else reject(new Error("metadata lookup refused"));
+    };
+    const cancel = () => finish(false);
+    const timer = setTimeout(cancel, Math.max(0, deadline - performance.now()));
+    process.once("SIGTERM", cancel);
+    process.once("SIGINT", cancel);
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      size += Buffer.byteLength(chunk);
+      if (size > 1024 * 1024) finish(false);
+      else output += chunk;
+    });
+    child.once("error", cancel);
+    child.once("close", (code, signal) => finish(code === 0 && !signal && performance.now() < deadline));
+  });
+}
+
+export async function verifierConfig(env, platform = process.platform) {
   const required = env.REQUIRE_PRE_PROMOTION_VERIFIER ?? "false";
   if (!["true", "false"].includes(required)) throw new Error("invalid verifier requirement");
   const timeout = env.PRE_PROMOTION_TIMEOUT_SECONDS ?? "120";
@@ -40,9 +78,7 @@ export function verifierConfig(env, platform = process.platform) {
     // Git's index proves the entry is checked in. Ignore ambient GIT_* overrides
     // so a caller's unrelated worktree settings cannot select another index.
     const gitEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("GIT_")));
-    const indexed = execFileSync("git", ["-C", workspace, "ls-files", "--stage", "-z", "--error-unmatch", "--", path], {
-      env: gitEnv, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8", timeout: 5000,
-    }).split("\0");
+    const indexed = (await trackedEntry(workspace, path, gitEnv)).split("\0");
     // A pathspec also matches descendants; exit zero alone is insufficient.
     const entry = indexed[0]?.match(/^(100644|100755) [0-9a-f]+ 0\t(.+)$/);
     if (indexed.length !== 2 || indexed[1] !== "" || !entry || entry[2] !== path) {
@@ -68,7 +104,7 @@ export function verifierConfig(env, platform = process.platform) {
 }
 
 export async function runPrePromotionCheck(env, spawnImpl = spawn, monotonicNow = () => performance.now()) {
-  const config = verifierConfig(env);
+  const config = await verifierConfig(env);
   if (!config) return;
   await new Promise((resolve, reject) => {
     const deadline = monotonicNow() + config.timeoutMs;
