@@ -22,7 +22,7 @@ concurrency:
 jobs:
   observation:
     if: always()
-    uses: TogetherWeOwn/.github/.github/workflows/pr-attestation.yml@21c15311cb10b606b04e85d9c1c96e124c404257
+    uses: TogetherWeOwn/.github/.github/workflows/pr-attestation.yml@f9e1178affd2d2908b1079562cdf6476f0c8fdef
     with:
       runs-on-json: '["ubuntu-latest"]'
 
