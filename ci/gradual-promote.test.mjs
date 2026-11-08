@@ -678,7 +678,10 @@ test("late invalid evidence and query errors cannot manufacture a candidate brea
       envelope({ requests: 100, errors: 40 }, PREV),
       {},
       envelope({ requests: 100, errors: 101 }),
-      { data: null, errors: [{ message: "GraphQL failure" }] },
+      {
+        ...envelope({ requests: 100, errors: 40 }),
+        errors: [{ message: "GraphQL failure" }],
+      },
       new Error("bounded query timeout"),
     ]) {
       let elapsed = 0;
