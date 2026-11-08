@@ -41,8 +41,8 @@ class SyncLabelsTest(unittest.TestCase):
         env = dict(os.environ, GH=str(fake), FAKE_GH_LOG=str(log))
         result = subprocess.run(
             ["bash", str(SCRIPT), *args],
-            capture_output=True, text=True, env=env, timeout=60,
-        , check=False)
+            capture_output=True, text=True, env=env, timeout=60, check=False,
+        )
         return result, log.read_text().splitlines()
 
     def test_creates_missing_updates_existing_never_deletes(self):

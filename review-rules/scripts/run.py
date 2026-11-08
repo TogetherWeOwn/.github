@@ -31,6 +31,7 @@ EXTENSIONS = {
     'security': {'.rs', '.py', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.svelte', '.yml', '.yaml'},
 }
 
+LOGGER = logging.getLogger(__name__)
 RULES = Path(__file__).resolve().parents[1]
 IMAGE = 'semgrep/semgrep@sha256:fca58525689355641019c05ab49dcc5bc3a1eb7e044f35014ee39594b5aa4fc1'
 PACKS = ('rust', 'ts', 'python-shell-ci', 'php', 'security')
@@ -368,7 +369,7 @@ def main(argv=None) -> int:
             report['errors'].extend(errors)
             report['stats']['scanned_targets'] = count
     except Exception as exc:
-        logging.exception('Review engine incomplete; details omitted.', exc_info=False)
+        LOGGER.exception('Review engine incomplete; details omitted.', exc_info=False)
         # Shadow must remain green even on absent Docker, malformed events,
         # missing refs, invalid pack names, scanner failures or timeouts.
         report['errors'].append(f'review engine incomplete: {type(exc).__name__}')

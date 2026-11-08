@@ -455,8 +455,8 @@ def main():
             write_json(evidence / "inventory.json", found)
             if args.mode == "inspect" and os.environ.get("GITHUB_OUTPUT"):
                 with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                    for key, paths in found.items():
-                        output.write(f"{key}={'true' if paths else 'false'}\n")
+                    output.writelines(f"{key}={'true' if paths else 'false'}\n"
+                                      for key, paths in found.items())
             if args.mode == "inspect":
                 trees = validate_vendor(args.repo, entries)
                 results.append({"scanner": "vendored-metadata", "status": "passed", "trees": trees})

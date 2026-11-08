@@ -641,14 +641,14 @@ class GitTests(unittest.TestCase):
         for mode, expected in [('warn', 0), ('enforce', 1)]:
             output = self.root / ('safe-error-' + mode)
             with patch.object(engine, 'Git', side_effect=RuntimeError('private-token-and-source')), \
-                    contextlib.redirect_stdout(io.StringIO()) as stdout, self.assertLogs(level='ERROR') as logs:
+                    contextlib.redirect_stdout(io.StringIO()) as stdout, self.assertLogs(engine.LOGGER, level='ERROR') as logs:
                 code = engine.main(['--repo', str(self.root), '--base', self.base,
                                     '--mode', mode, '--output', str(output)])
             self.assertEqual(code, expected)
             report = json.loads((output / 'review-rules.json').read_text())
             self.assertEqual(report['status'], 'incomplete')
             self.assertEqual(report['errors'], ['review engine incomplete: RuntimeError'])
-            self.assertEqual(logs.output, ['ERROR:root:Review engine incomplete; details omitted.'])
+            self.assertEqual(logs.output, [f'ERROR:{engine.LOGGER.name}:Review engine incomplete; details omitted.'])
             evidence = stdout.getvalue() + '\n'.join(logs.output)
             evidence += (output / 'review-rules.json').read_text() + (output / 'review-rules.md').read_text()
             self.assertNotIn('private-token-and-source', evidence)

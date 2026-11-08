@@ -43,8 +43,10 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
+# Caller-selected runners may still provide Python 3.10, before datetime.UTC.
+UTC = timezone(timedelta(0))
 MARKER = "<!-- pr-size-advisory -->"
 DEFAULT_THRESHOLD = 400
 

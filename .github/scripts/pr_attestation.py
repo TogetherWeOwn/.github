@@ -18,6 +18,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+LOGGER = logging.getLogger(__name__)
 SCHEMA_VERSION = 1
 # Central path floor: match real module names as well as directory layouts.
 # Word boundaries (snake/kebab/dot/CamelCase) avoid substrings such as authors,
@@ -480,7 +481,7 @@ def main():
         api = GitHub(os.environ.get("GH_TOKEN"), os.environ.get("GITHUB_REPOSITORY"))
         report = evaluate(api, os.environ.get("GITHUB_EVENT_NAME"), event)
     except Exception as exc:
-        logging.exception("PR attestation observation failed; details omitted.", exc_info=False)
+        LOGGER.exception("PR attestation observation failed; details omitted.", exc_info=False)
         # The exception text from an unknown error could contain untrusted body
         # data or credentials. Only our fixed ObservationError codes are safe.
         code = str(exc) if isinstance(exc, ObservationError) else "observation_runtime_error"

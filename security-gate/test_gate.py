@@ -395,6 +395,18 @@ class RepoCase(unittest.TestCase):
         with self.assertRaisesRegex(gate.GateError, "incomplete OSV new package"):
             gate.osv_evidence(self.work)
 
+    def test_cli_inspection_outputs_preserve_all_boolean_lines(self):
+        self.put("README.md")
+        self.commit()
+        output = self.root / "outputs"
+        env = dict(os.environ, GITHUB_OUTPUT=str(output))
+        process = subprocess.run([sys.executable, "-I", str(ROOT / "gate.py"), "inspect", "--repo",
+                                  str(self.repo), "--work", str(self.work), "--evidence", str(self.evidence),
+                                  "--tools", str(self.root)], env=env, capture_output=True, check=False, timeout=30)
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+        self.assertEqual(output.read_text(), "go=false\ncargo=false\nworkflows=false\n")
+        self.assertEqual(json.loads((self.evidence / "inspect.json").read_text())[0]["status"], "passed")
+
     def test_cli_inspection_failure_is_nonzero_with_evidence(self):
         self.put("vendor/file")
         self.commit()

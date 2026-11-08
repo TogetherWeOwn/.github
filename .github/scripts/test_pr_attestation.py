@@ -607,12 +607,12 @@ class CLITests(unittest.TestCase):
                                                "GITHUB_STEP_SUMMARY": str(summary_path)}), \
                     mock.patch.object(a, "GitHub", side_effect=RuntimeError("private-token-and-body")), \
                     mock.patch("sys.stdout", new_callable=io.StringIO) as output, \
-                    self.assertLogs(level="ERROR") as logs:
+                    self.assertLogs(a.LOGGER, level="ERROR") as logs:
                 self.assertEqual(a.main(), 0)
             report = json.loads(output.getvalue().splitlines()[0])
             self.assertEqual(report["verdict"], "error")
             self.assertEqual(report["issues"], ["observation_runtime_error"])
-            self.assertEqual(logs.output, ["ERROR:root:PR attestation observation failed; details omitted."])
+            self.assertEqual(logs.output, [f"ERROR:{a.LOGGER.name}:PR attestation observation failed; details omitted."])
             evidence = output.getvalue() + "\n".join(logs.output) + output_path.read_text() + summary_path.read_text()
             self.assertNotIn("private-token-and-body", evidence)
             self.assertNotIn("Traceback", evidence)

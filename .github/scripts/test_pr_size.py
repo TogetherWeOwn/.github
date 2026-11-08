@@ -9,7 +9,7 @@ import http.client
 import io
 import os
 import unittest
-from datetime import UTC, datetime
+from datetime import datetime, timedelta
 from typing import ClassVar
 from unittest import mock
 
@@ -183,8 +183,20 @@ class Weekly(unittest.TestCase):
         # A date-only `merged:>=YYYY-MM-DD` from a Monday 07:17 run covers
         # 7 days + 7 hours, double-counting early-Monday merges in the next
         # tally. The window must carry the full UTC timestamp.
-        now = datetime(2026, 10, 14, 7, 17, 30, tzinfo=UTC)
+        now = datetime(2026, 10, 14, 7, 17, 30, tzinfo=pr_size.UTC)
         self.assertEqual(pr_size.weekly_since(now), "2026-10-07T07:17:30Z")
+
+    def test_weekly_clock_remains_aware_utc_on_python_310(self):
+        self.assertEqual(pr_size.UTC.utcoffset(None), timedelta(0))
+        api = mock.Mock()
+        api.merged_since.return_value = []
+        now = datetime(2026, 10, 14, 7, 17, 30, tzinfo=pr_size.UTC)
+        with mock.patch.object(pr_size, "datetime") as clock, \
+                mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": ""}):
+            clock.now.return_value = now
+            pr_size.weekly(api, log=lambda *_: None)
+        clock.now.assert_called_once_with(pr_size.UTC)
+        api.merged_since.assert_called_once_with("2026-10-07T07:17:30Z")
 
     def test_report_names_the_total_and_over_threshold(self):
         report = pr_size.weekly_report(
