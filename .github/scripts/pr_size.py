@@ -393,7 +393,43 @@ class GitHubApi:
             page += 1
 
     def pr_files(self, number):
-        return self.paged(f"/repos/{self.repo}/pulls/{number}/files")
+        path = f"/repos/{self.repo}/pulls/{number}"
+
+        def snapshot():
+            pr = self.request("GET", path)
+            if not isinstance(pr, dict):
+                raise ApiError("pull request metadata unavailable")
+            count = pr.get("changed_files")
+            head_info = pr.get("head")
+            base_info = pr.get("base")
+            if not isinstance(head_info, dict) or not isinstance(base_info, dict):
+                raise ApiError("pull request metadata incomplete")
+            head = head_info.get("sha")
+            base = base_info.get("sha")
+            if (type(count) is not int or count < 0
+                    or not isinstance(head, str) or not head
+                    or not isinstance(base, str) or not base):
+                raise ApiError("pull request metadata incomplete")
+            return count, head, base
+
+        before = snapshot()
+        files = self.paged(f"{path}/files")
+        after = snapshot()
+        if before != after or len(files) != before[0]:
+            raise ApiError("pull request file inventory incomplete or changed during measurement")
+        names = set()
+        for entry in files:
+            if not isinstance(entry, dict):
+                raise ApiError("malformed pull request file entry")
+            name = entry.get("filename")
+            if not isinstance(name, str) or not name or name in names:
+                raise ApiError("missing or duplicate pull request filename")
+            names.add(name)
+            for field in ("additions", "deletions"):
+                value = entry.get(field)
+                if type(value) is not int or value < 0:
+                    raise ApiError(f"invalid pull request file {field}")
+        return files
 
     def pr_labels(self, number):
         pr = self.request("GET", f"/repos/{self.repo}/pulls/{number}")
