@@ -107,7 +107,9 @@ class TemplatePermissionContract(unittest.TestCase):
     def test_every_template_caller_grants_what_its_reusable_requests(self):
         top, jobs = parse_workflow(TEMPLATE)
         callers = {
-            name: job for name, job in jobs.items() if job["uses"] and USES_RE.search(job["uses"])
+            name: job
+            for name, job in jobs.items()
+            if job["uses"] and USES_RE.search(job["uses"])
         }
         self.assertTrue(callers, "template has no reusable-workflow caller jobs")
         for name, job in callers.items():
@@ -125,6 +127,17 @@ class TemplatePermissionContract(unittest.TestCase):
                     f"{match.group('file')} requests {level}; GitHub rejects "
                     "this caller at workflow-parse time",
                 )
+
+    def test_template_subscribes_to_edited(self):
+        # `edited` fires on a base-branch change, which changes the diff
+        # size; without it a previously passing gate stays green for an
+        # oversized PR until some other subscribed event occurs.
+        text = TEMPLATE.read_text(encoding="utf-8")
+        pull_request = re.search(
+            r"^  pull_request:\n    types: \[([^\]\n]+)\]$", text, re.MULTILINE
+        )
+        self.assertIsNotNone(pull_request, "template has no pull_request types list")
+        self.assertIn("edited", [event.strip() for event in pull_request[1].split(",")])
 
     def test_weekly_reusable_requests_read_only(self):
         # CI-STANDARD promises the weekly tally runs read-only; that is only
