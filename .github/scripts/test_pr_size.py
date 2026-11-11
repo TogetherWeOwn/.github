@@ -355,7 +355,6 @@ class Gate(unittest.TestCase):
             self.assertEqual(pr_size.main(["pr_size.py", "gate"]), 0)
 
     def test_gate_fails_closed_on_api_error(self):
-        api = pr_size.GitHubApi("test-token", "owner/name")
         dropped = mock.Mock(
             side_effect=http.client.RemoteDisconnected("closed without response")
         )
