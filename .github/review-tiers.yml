@@ -1,0 +1,108 @@
+# Review tiers for this repo: risk-tiered review path map.
+#
+# Classification: a PR's tier is the highest tier of any file it changes.
+# `sensitive` wins on overlap (a path matched by both a lower tier and
+# `sensitive` is sensitive). Any path not matched by any tier below --
+# including every new top-level path until it is classified here --
+# defaults to `sensitive` (see `default_tier`).
+#
+# Content triggers escalate any PR to `sensitive`, regardless of path:
+# new/changed public endpoint or input parsing; auth/authz/session;
+# crypto/keys; secrets/credentials; permission checks; tenant
+# isolation/personal data; SQL/schema/migrations; dependency or lockfile
+# changes; CI/workflow changes; weakened test assertions, deleted
+# tests/snapshots or lowered gates in test files.
+#
+# Review per tier: low -> QA; ordinary -> QA; sensitive/unclassified ->
+# Security -> QA. QA verifies the author's `risk_tier` attestation and may
+# escalate any PR. This file itself is always sensitive.
+#
+# Attestation vocabulary: this map uses low / ordinary / sensitive. The
+# existing PR-template T0/T1/T2 words correspond as low~T2 (docs-only),
+# ordinary~T1 (standard), sensitive~T0 (critical); declaring a higher
+# tier than the map minimum is always acceptable.
+#
+# This repo is the org's CI/standards/policy store, so most of it is
+# sensitive by design: CI workflows, reusable actions, deploy/release
+# templates, security rules and gates, org rulesets, dependency pins,
+# agent/skill/tool-permission files, and the review contract itself. Low
+# and ordinary are deliberately small; when in doubt a path stays
+# unlisted (= sensitive). Do not broaden low/ordinary to look productive:
+# a small correct map beats a big wrong one.
+#
+# Each glob below is a repo-relative path pattern.
+version: 1
+default_tier: sensitive
+tiers:
+  low:
+    # Allowlisted docs copy only: community/docs files with no behavior,
+    # enforcement or trust-boundary effect. Content triggers still apply
+    # (e.g. a "docs" edit that weakens a gate or asserts differently
+    # escalates to sensitive).
+    - README.md
+    - CODE_OF_CONDUCT.md
+    - SUPPORT.md
+  ordinary:
+    # Audited modules only: no untrusted input, sensitive output,
+    # permissions, persistence or trust-boundary effect. Anything that
+    # gains one of those escalates to sensitive via content triggers.
+    - ".github/ISSUE_TEMPLATE/**" # static issue form definitions only
+  sensitive:
+    # Review-policy / CI enforcement itself.
+    - ".github/workflows/**" # CI/workflow changes
+    - ".github/scripts/**" # PR standards/attestation/size enforcement
+    - ".github/pull_request_template.md" # review contract
+    - ".github/review-tiers.yml" # this file: always sensitive
+    # Agent instructions, skills and tool permissions.
+    - "AGENTS.md"
+    - ".claude/**"
+    # Ownership files (listed even where absent so they are sensitive
+    # the moment they exist; unmatched paths are sensitive anyway).
+    - "CODEOWNERS"
+    - ".github/CODEOWNERS"
+    # Reusable CI actions: run under CI credentials and, for
+    # gradual-promote, drive deployment/release promotion.
+    - "actions/**"
+    # CI tests for the deploy/release toolchain (calver, gradual-promote)
+    # and the formatting toolchain plus its dependency lockfiles.
+    - "ci/**"
+    # Quality-gate documentation (the Tier-0 gate lives in tier0/ and
+    # semgrep-rules/ below).
+    - "docs/**"
+    # Security review rules and their test fixtures.
+    - "review-rules/**"
+    # Org ruleset source: governance and required-gate definitions.
+    - "rulesets/**"
+    # Label sync: writes GitHub labels/repos state via API.
+    - "scripts/**"
+    # Public-PR security gate and its tests.
+    - "security-gate/**"
+    # Semgrep security rules.
+    - "semgrep-rules/**"
+    # Tier-0 gate dependency manifests + hash-pinned lockfiles.
+    - "tier0/**"
+    # Deploy/release workflow templates (incl. deploy-production and
+    # deploy-staging) and other shared workflow templates.
+    - "workflow-templates/**"
+    # Tier-0 gate tests and structural shell contract.
+    - "test_tier0_gate.sh"
+    - "test_tier0_files.py"
+    - "test_tier0_tools.py"
+    - "test_tier0_semgrep.py"
+    # Org policy documents: changing these changes the rules.
+    - "STANDARD.md"
+    - "CONTRIBUTING.md"
+    - "TEST-GUARD.md"
+    - "PUBLIC-PR-SECURITY.md"
+    - "SECURITY.md"
+    - "NEW-REPO-CHECKLIST.md"
+    - "PIPELINE-STANDARD.md"
+    - "CI-STANDARD.md"
+    - "LICENSE" # legal text
+    # Dependency manifests + lockfiles, including dev deps and
+    # install/build scripts, anywhere in the tree (present and future).
+    - "**/package.json"
+    - "**/package-lock.json"
+    - "**/requirements*.txt"
+    - "**/requirements*.in"
+    - "**/pyproject.toml"
