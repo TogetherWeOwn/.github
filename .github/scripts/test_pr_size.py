@@ -151,6 +151,55 @@ def big_files():
     return [{"filename": "src/big.ts", "additions": 500, "deletions": 0}]
 
 
+class InventoryValidation(unittest.TestCase):
+    def api(self, count, files, after=None):
+        api = pr_size.GitHubApi("token", "owner/name")
+        metadata = {"changed_files": count, "head": {"sha": "head"},
+                    "base": {"sha": "base"}}
+        snapshots = iter([metadata, after if after is not None else metadata])
+
+        def request(method, path, body=None):
+            if "/files?" in path:
+                page = int(path.rsplit("page=", 1)[1])
+                return files[(page - 1) * 100:page * 100]
+            if path.endswith("/pulls/7"):
+                return next(snapshots)
+            if "/comments?" in path:
+                return []
+            self.fail(f"unexpected request: {method} {path}")
+
+        api.request = request
+        return api
+
+    def run_gate(self, api):
+        with mock.patch.object(pr_size, "GitHubApi", return_value=api), \
+                mock.patch.dict(os.environ, {"REPO": "owner/name", "PR_NUMBER": "7"}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            return pr_size.main(["pr_size.py", "gate"])
+
+    def test_successful_capped_inventory_fails_before_exclusions(self):
+        files = [{"filename": f"fixtures/{i}.json", "additions": 1, "deletions": 0}
+                 for i in range(3000)]
+        self.assertEqual(self.run_gate(self.api(3001, files)), 1)
+
+    def test_complete_excluded_inventory_passes(self):
+        files = [{"filename": f"fixtures/{i}.json", "additions": 1000, "deletions": 0}
+                 for i in range(100)]
+        self.assertEqual(self.run_gate(self.api(100, files)), 0)
+
+    def test_missing_inconsistent_or_invalid_evidence_fails(self):
+        file = {"filename": "src/a.py", "additions": 1, "deletions": 0}
+        for count, files, after in [
+            (None, [file], None),
+            (1, [file], {"changed_files": 1, "head": {"sha": "new"},
+                         "base": {"sha": "base"}}),
+            (2, [file, file], None),
+            (1, [{"filename": "src/a.py", "additions": None, "deletions": 0}], None),
+        ]:
+            with self.subTest(count=count, files=files, after=after):
+                self.assertEqual(self.run_gate(self.api(count, files, after)), 1)
+
+
 class LabelFlow(unittest.TestCase):
     def test_over_threshold_labels_and_comments_once(self):
         api = FakeApi(big_files(), labels=["size/S"])
