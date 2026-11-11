@@ -38,21 +38,22 @@ tiers:
     # Allowlisted docs copy only: community/docs files with no behavior,
     # enforcement or trust-boundary effect. Content triggers still apply
     # (e.g. a "docs" edit that weakens a gate or asserts differently
-    # escalates to sensitive).
-    - README.md
+    # escalates to sensitive). README.md/SUPPORT.md are NOT low: they
+    # carry live pins, copy-paste `uses:` SHAs and security routing.
     - CODE_OF_CONDUCT.md
-    - SUPPORT.md
-  ordinary:
-    # Audited modules only: no untrusted input, sensitive output,
-    # permissions, persistence or trust-boundary effect. Anything that
-    # gains one of those escalates to sensitive via content triggers.
-    - ".github/ISSUE_TEMPLATE/**" # static issue form definitions only
+  ordinary: [] # none: every audited module here is trust-boundary or enforcement
   sensitive:
     # Review-policy / CI enforcement itself.
     - ".github/workflows/**" # CI/workflow changes
     - ".github/scripts/**" # PR standards/attestation/size enforcement
     - ".github/pull_request_template.md" # review contract
     - ".github/review-tiers.yml" # this file: always sensitive
+    # Org-default issue forms + docs carrying security routing, live
+    # pins and copy-paste workflow SHAs (pointers to SECURITY.md / the
+    # pinned reusable workflows; keep them behind Security review).
+    - ".github/ISSUE_TEMPLATE/**"
+    - "README.md"
+    - "SUPPORT.md"
     # Agent instructions, skills and tool permissions.
     - "AGENTS.md"
     - ".claude/**"
