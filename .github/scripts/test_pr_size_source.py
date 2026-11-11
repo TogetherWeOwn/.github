@@ -25,7 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 CENTRAL_REPOSITORY = "TogetherWeOwn/.github"
-REVIEWED_SHA = "ac9ce8d63e0cebd19ede904ac79137190c329964"
+REVIEWED_SHA = "e79d9ecbd94620b0f103edcbe5d705d47a0edceb"
 SCRIPT = ".github/scripts/pr_size.py"
 SCRIPT_SHA256 = "6f1945a60713dabbd4fbf168243077a4d461409be91ce3c09a4e226b98df3e15"
 MODES = {
