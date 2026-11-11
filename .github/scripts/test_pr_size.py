@@ -96,13 +96,14 @@ class FakeApi:
     """Records the calls pr_size makes; serves canned PR state."""
 
     def __init__(self, files, labels=(), marker_comment=None, author="author",
-                 reviews=(), head_sha="head-sha"):
+                 reviews=(), head_sha="head-sha", permissions=None):
         self._files = files
         self.labels = list(labels)
         self.marker_comment = marker_comment
         self.author = author
         self.reviews = list(reviews)
         self.head_sha = head_sha
+        self.permissions = dict(permissions or {})
         self.calls = []
 
     def pr_files(self, number):
@@ -119,6 +120,9 @@ class FakeApi:
 
     def pr_reviews(self, number):
         return list(self.reviews)
+
+    def permission_level(self, username):
+        return self.permissions.get(username, "write")
 
     def ensure_label(self, name):
         self.calls.append(("ensure", name))
@@ -417,6 +421,19 @@ class Gate(unittest.TestCase):
             labels=[pr_size.EXCEPTION_LABEL],
             author="author",
             reviews=[self._approved(author_association="CONTRIBUTOR")],
+        )
+        self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+
+    def test_read_only_member_cannot_unlock_the_exception(self):
+        # author_association is MEMBER for an organization member with
+        # only read access to this repository: association is not
+        # authorization, so their approval must not satisfy the exception.
+        api = FakeApi(
+            self._over(),
+            labels=[pr_size.EXCEPTION_LABEL],
+            author="author",
+            reviews=[self._approved()],
+            permissions={"reviewer": "read"},
         )
         self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
 

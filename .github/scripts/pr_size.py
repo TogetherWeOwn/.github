@@ -410,6 +410,18 @@ class GitHubApi:
     def pr_reviews(self, number):
         return self.paged(f"/repos/{self.repo}/pulls/{number}/reviews")
 
+    def permission_level(self, username):
+        """The user's permission on this repository ('admin', 'write', ...).
+
+        Association alone is not authorization - an organization MEMBER can
+        hold only read access to this repository. Only a reviewer who can
+        write (or administer) the repository may grant the size exception.
+        """
+        data = self.request(
+            "GET", f"/repos/{self.repo}/collaborators/{username}/permission"
+        )
+        return (data.get("permission") or "none") if isinstance(data, dict) else "none"
+
     def ensure_named_label(self, name, colour, description):
         try:
             self.request(
@@ -508,7 +520,7 @@ def weekly(api, log=print):
     return report
 
 
-def approved_by_non_author(reviews, author, head_sha):
+def approved_by_non_author(reviews, author, head_sha, permission_of):
     """Whether some non-author approves the pull request at `head_sha`.
 
     Reviews arrive chronologically. COMMENTED and PENDING reviews do not
@@ -517,9 +529,12 @@ def approved_by_non_author(reviews, author, head_sha):
     DISMISSED do, so only the latest such state per user counts. The
     standing approval must also be on the current head - an approval of
     an older head never unlocks a newly pushed diff - and from a
-    reviewer with approve weight (OWNER, MEMBER or COLLABORATOR), not
-    an unprivileged commenter. An approval by the pull request's own
-    author never qualifies.
+    reviewer with approve weight (OWNER, MEMBER or COLLABORATOR) who can
+    write or administer this repository: association is not
+    authorization, since a read-only organization member reports MEMBER
+    but cannot grant the exception. `permission_of` maps a login to its
+    repository permission; a lookup failure is not authorization. An
+    approval by the pull request's own author never qualifies.
     """
     latest = {}
     for review in reviews:
@@ -527,10 +542,18 @@ def approved_by_non_author(reviews, author, head_sha):
         state = review.get("state", "")
         if login and state in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
             latest[login] = review
+
+    def authorized(login):
+        try:
+            return permission_of(login) in ("admin", "write")
+        except ApiError:
+            return False
+
     return any(
         review.get("state") == "APPROVED"
         and review.get("commit_id") == head_sha
         and review.get("author_association") in ("OWNER", "MEMBER", "COLLABORATOR")
+        and authorized(login)
         for login, review in latest.items()
         if login != author
     )
@@ -612,7 +635,10 @@ def gate_pr(api, number, threshold, extra_globs,
     )
     labels = api.pr_labels(number)
     exception = EXCEPTION_LABEL in labels and approved_by_non_author(
-        api.pr_reviews(number), api.pr_author(number), api.pr_head_sha(number)
+        api.pr_reviews(number),
+        api.pr_author(number),
+        api.pr_head_sha(number),
+        api.permission_level,
     )
     if exception:
         log(f"PR #{number}: {EXCEPTION_LABEL} approved by a non-author; gate passes")

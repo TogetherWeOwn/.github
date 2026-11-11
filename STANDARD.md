@@ -549,12 +549,16 @@ exclusion - only the script's exclusions, per repo config, count.
   shrink its counted diff.
 - **Exception**: for a genuinely atomic change below the hard stop,
   label the pull request `size-exception` and get an APPROVED review
-  **from someone other than the author** - the gate then passes, but
-  Devin must still be satisfied via review slices for the over-limit
-  diff. The gate script ensures the label exists so authors can apply
-  it themselves. The gate re-evaluates when the label is applied or a
-  review is submitted, so granting the exception needs no manual
-  re-run. At or above the hard stop there is no exception: split
+  **from someone other than the author who can write or administer this
+  repository** (association is not authorization - a read-only
+  organization member cannot grant the exception) - the gate then
+  passes, but Devin must still be satisfied via review slices for the
+  over-limit diff. The gate script ensures the label exists so authors
+  can apply it themselves. The gate re-evaluates when the label is
+  applied or removed or a review is submitted or dismissed, so
+  granting the exception needs no manual re-run and revoking it
+  re-runs and fails the gate instead of leaving a stale passing check.
+  At or above the hard stop there is no exception: split
   it. The gate, its comment and this section are the whole contract;
   there is no per-repo override and no way to skip the gate without the
   exception.
