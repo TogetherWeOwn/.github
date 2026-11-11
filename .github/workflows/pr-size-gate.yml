@@ -9,39 +9,60 @@
 # "PR size gate" section of STANDARD.md (the split procedure lives there).
 #
 # REQUIRED CHECK. Unlike the advisory labeller (`pr-size.yml`), this gate
-# FAILS when the reviewable diff exceeds the automated reviewer's limit, so
-# an over-limit pull request fails here instead of wasting a review cycle on
-# a refusal later. The gate fails closed: if the size cannot be measured,
-# the run errors instead of passing silently. Adopters add this check to
-# their ruleset's required-workflows list once the caller workflow is on
-# their default branch (STANDARD.md rule: never require a check before its
-# workflow exists there).
+# FAILS when the reviewable diff exceeds the reviewability budget, so an
+# over-limit pull request fails here instead of wasting a review cycle on
+# a refusal (or a superficial review) later. The gate fails closed: if
+# the size cannot be measured, the run errors instead of passing silently.
+# Adopters add this check to their ruleset's required-workflows list once
+# the caller workflow is on their default branch (STANDARD.md rule: never
+# require a check before its workflow exists there).
 #
-# Threshold (default input `gate-threshold`, 20,000 counted lines, where
-# counted = additions + deletions after the script's lockfile / generated /
-# fixture exclusions). Measured 2026-11-11 across the rollout repositories
-# from their pull requests' Devin Review commit statuses:
-#   - Reviewed OK: labelloop#12 (35,226 raw lines), nntunev2#957 (28,095),
-#     paperclip-plugin-vuln-sentinel#1 (21,957), two-web-next#2004 (18,119),
-#     plus a dozen more at 10k-15k raw lines.
-#   - Refused: nntunev2#908 (47,982 raw lines, +47,945/-37, 140 files) -
-#     Devin Review failed in 3 seconds (instant refusal; genuine reviews
-#     take minutes). Draft pull requests carry no Devin status at all
-#     (Devin does not run on drafts), so they are not evidence either way.
-# Devin's documented limit is unknown, so the boundary is known only as
-# between ~35k raw lines (reviewed) and ~48k raw lines (refused). 20,000
-# counted lines is a conservative margin below that refusal point, and the
-# counted total is always <= the raw total, so the gate never lets through
-# a diff Devin is known to refuse. Pull requests above the gate that cannot
-# be split use the exception below; review-driven growth that trips the gate
-# is handled by splitting or by the exception, never by raising the
-# threshold for one repo.
+# Thresholds (unchanged in practice by per-repository inputs; do not raise
+# them per repository). Counted = additions + deletions after the
+# script's lockfile / generated / fixture exclusions.
+#   - Target: 100-200 reviewable lines and 10 or fewer files.
+#   - Warn: at or above 200 counted lines the gate posts a warning
+#     comment and still passes.
+#   - Gate (default input `gate-threshold`, also `gate-file-threshold`):
+#     FAIL over 400 counted lines or over 20 counted files, unless the
+#     `size-exception` below applies.
+#   - Hard stop (default input `hard-stop-threshold`): at or above 1,000
+#     counted lines the exemption never applies; the pull request must be
+#     split (review slices count as separate small pull requests).
+#
+# Why not Devin's ceiling? Devin's limit is not documented (product
+# guide, Review API and 2026 release notes give no number). The org
+# measurement of 739 recent PR heads brackets it instead:
+#   - Reviewed: labelloop#12 (35,226 raw lines, 17 files),
+#     two-web-next#2004 (18,119 lines, 231 files), nntunev2#957 (28,095),
+#     paperclip-plugin-vuln-sentinel#1 (21,957), plus more at 10k-15k.
+#   - Refused: nntunev2#908 (47,982 raw lines, 140 files), failed in 3
+#     seconds (an instant refusal; genuine reviews take minutes). Draft
+#     pull requests carry no Devin status at all (Devin does not run on
+#     drafts), so they are not evidence either way.
+# Setting the gate at that ceiling would merely accept everything up to
+# the refusal point. The gate instead encodes the reviewability budget,
+# far below any reviewer ceiling, grounded in:
+#   - Google Small CLs (google.github.io/eng-practices): about 100 lines
+#     is reasonable, about 1,000 too large.
+#   - GitLab code review guidance (docs.gitlab.com): about 200 lines.
+#   - SmartBear/Cisco peer-review findings: 200-400 lines per review
+#     session.
+# Re-measure before ever moving these numbers. Counted totals are
+# always <= raw totals, and gate comments report raw and reviewable
+# totals separately; hiding files in GitHub's display is not exclusion.
+#
+# A Devin status of `success` is not proof of review: merge-conflict
+# skips also report success (two-web-next#2064). Whether Devin's report
+# is a genuine review is decided by the review rules, which check the
+# status description, not just its state - not by this gate.
 #
 # Exception: a pull request over the gate passes only with the
-# `size-exception` label AND an APPROVED review from someone other than the
-# author. Even then, Devin must still be satisfied via review slices for
-# the over-limit diff (STANDARD.md "PR size gate"). The script ensures the
-# label exists so authors can apply it themselves.
+# `size-exception` label AND an APPROVED review from someone other than
+# the author, and only below the 1,000-line hard stop. Even then, Devin
+# must still be satisfied via review slices for the over-limit diff
+# (STANDARD.md "PR size gate"). The script ensures the label exists so
+# authors can apply it themselves.
 #
 # The gating logic lives ONCE in `.github/scripts/pr_size.py` next to this
 # file. The job checks out THIS repository at an explicit, reviewed
@@ -88,10 +109,25 @@ on:
       gate-threshold:
         description: >-
           Counted lines above which the gate fails without a
-          `size-exception` (default 20000, the org-measured limit with
-          margin; do not raise it per-repository).
+          `size-exception` (default 400, the reviewability gate; do not
+          raise it per-repository).
         required: false
-        default: "20000"
+        default: "400"
+        type: string
+      gate-file-threshold:
+        description: >-
+          Counted files above which the gate fails without a
+          `size-exception` (default 20; do not raise it per-repository).
+        required: false
+        default: "20"
+        type: string
+      hard-stop-threshold:
+        description: >-
+          Counted lines at or above which the gate fails even with a
+          `size-exception`; the pull request must be split (default
+          1000).
+        required: false
+        default: "1000"
         type: string
       runs-on:
         description: >-
@@ -118,7 +154,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: TogetherWeOwn/.github
-          ref: 5159cb07e60af722b5f3e7d63f9f126957681dcc
+          ref: 0b7309abe2f065ffd0fb84ea34e7793c3db9071b
           path: .pr-size-central
           sparse-checkout: .github/scripts/pr_size.py
           persist-credentials: false
@@ -129,5 +165,7 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr-number != '' && inputs.pr-number || github.event.pull_request.number }}
           PR_SIZE_GATE_THRESHOLD: ${{ inputs.gate-threshold }}
+          PR_SIZE_GATE_FILES: ${{ inputs.gate-file-threshold }}
+          PR_SIZE_HARD_STOP: ${{ inputs.hard-stop-threshold }}
           PR_SIZE_EXCLUDE_EXTRA: ${{ inputs.exclude-extra }}
         run: python3 .pr-size-central/.github/scripts/pr_size.py gate

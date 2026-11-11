@@ -25,9 +25,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 CENTRAL_REPOSITORY = "TogetherWeOwn/.github"
-REVIEWED_SHA = "5159cb07e60af722b5f3e7d63f9f126957681dcc"
+REVIEWED_SHA = "0b7309abe2f065ffd0fb84ea34e7793c3db9071b"
 SCRIPT = ".github/scripts/pr_size.py"
-SCRIPT_SHA256 = "9ead14c067dd8aef07c55d0440c56b28477dd9593cb499d3b11c2d066aacfc64"
+SCRIPT_SHA256 = "3330cdc091f1c71e6cf2d57d4c939f782b308541ab472fc21ae931952c5e6b84"
 MODES = {
     "pr-size.yml": "label",
     "pr-size-weekly.yml": "weekly",
@@ -146,13 +146,19 @@ class CentralSourceContract(unittest.TestCase):
                     expected.update({
                         "PR_NUMBER": "${{ inputs.pr-number != '' && inputs.pr-number || github.event.pull_request.number }}",
                         "PR_SIZE_GATE_THRESHOLD": "${{ inputs.gate-threshold }}",
+                        "PR_SIZE_GATE_FILES": "${{ inputs.gate-file-threshold }}",
+                        "PR_SIZE_HARD_STOP": "${{ inputs.hard-stop-threshold }}",
                         "PR_SIZE_EXCLUDE_EXTRA": "${{ inputs.exclude-extra }}",
                     })
                 self.assertEqual(env, expected)
                 inputs = scalars(block(block(text, 0, "on"), 4, "inputs"), 6)
                 allowed = {
                     "label": {"runs-on", "pr-number", "exclude-extra"},
-                    "gate": {"runs-on", "pr-number", "exclude-extra", "gate-threshold"},
+                    "gate": {
+                        "runs-on", "pr-number", "exclude-extra",
+                        "gate-threshold", "gate-file-threshold",
+                        "hard-stop-threshold",
+                    },
                     "weekly": {"runs-on"},
                 }[mode]
                 self.assertEqual(set(inputs), allowed)
