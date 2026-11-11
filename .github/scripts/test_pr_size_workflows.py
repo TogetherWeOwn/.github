@@ -93,7 +93,7 @@ class TemplatePermissionContract(unittest.TestCase):
         # This main commit contains all three reusable workflows. The old
         # template pinned a pre-squash commit GitHub could not resolve for
         # callers.
-        reviewed_sha = "779aa1d6f94f4620cb68433a7c5f257cc962c637"
+        reviewed_sha = "c2df0b6f7b5dc93889619fcce48fca697c305497"
         _, jobs = parse_workflow(TEMPLATE)
         callers = {name: job["uses"] for name, job in jobs.items() if job["uses"]}
         self.assertEqual(
