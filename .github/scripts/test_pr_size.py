@@ -93,12 +93,15 @@ class Sizing(unittest.TestCase):
 
 
 class FakeApi:
-    """Records the calls label_pr makes; serves canned PR state."""
+    """Records the calls pr_size makes; serves canned PR state."""
 
-    def __init__(self, files, labels=(), marker_comment=None):
+    def __init__(self, files, labels=(), marker_comment=None, author="author",
+                 reviews=()):
         self._files = files
         self.labels = list(labels)
         self.marker_comment = marker_comment
+        self.author = author
+        self.reviews = list(reviews)
         self.calls = []
 
     def pr_files(self, number):
@@ -107,8 +110,17 @@ class FakeApi:
     def pr_labels(self, number):
         return list(self.labels)
 
+    def pr_author(self, number):
+        return self.author
+
+    def pr_reviews(self, number):
+        return list(self.reviews)
+
     def ensure_label(self, name):
         self.calls.append(("ensure", name))
+
+    def ensure_named_label(self, name, colour, description):
+        self.calls.append(("ensure-named", name))
 
     def add_label(self, number, name):
         self.calls.append(("add", name))
@@ -118,10 +130,12 @@ class FakeApi:
         self.calls.append(("remove", name))
         self.labels.remove(name)
 
-    def find_marker_comment(self, number):
-        return self.marker_comment
+    def find_marker_comment(self, number, marker=pr_size.MARKER):
+        if marker in (self.marker_comment or {}).get("body", ""):
+            return self.marker_comment
+        return None
 
-    def upsert_comment(self, number, body):
+    def upsert_comment(self, number, body, marker=pr_size.MARKER):
         self.calls.append(("comment", body))
 
 
@@ -162,6 +176,126 @@ class LabelFlow(unittest.TestCase):
         pr_size.label_pr(api, 7, 400, (), log=lambda *_: None)
         self.assertNotIn(("add", "size/L"), api.calls)
         self.assertEqual([c for c in api.calls if c[0] == "remove"], [])
+
+
+class Gate(unittest.TestCase):
+    """The REQUIRED size gate: fails over threshold, exception via label +
+    a non-author APPROVED review, fails closed on API errors."""
+
+    GATE = 20000
+
+    def _over(self, lines=20001):
+        return [{"filename": "src/big.ts", "additions": lines, "deletions": 0}]
+
+    def test_under_threshold_passes_silently(self):
+        api = FakeApi([{"filename": "a.ts", "additions": 5, "deletions": 0}])
+        self.assertTrue(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+        self.assertEqual(api.calls, [])
+
+    def test_under_threshold_updates_old_gate_comment(self):
+        api = FakeApi(
+            [{"filename": "a.ts", "additions": 5, "deletions": 0}],
+            marker_comment={"id": 1, "body": pr_size.GATE_MARKER},
+        )
+        self.assertTrue(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+        comments = [body for kind, body in api.calls if kind == "comment"]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("back under", comments[0])
+
+    def test_over_threshold_without_exception_fails_with_procedure(self):
+        api = FakeApi(self._over(), labels=["size/XL"])
+        self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+        self.assertIn(("ensure-named", pr_size.EXCEPTION_LABEL), api.calls)
+        comments = [body for kind, body in api.calls if kind == "comment"]
+        self.assertEqual(len(comments), 1)
+        self.assertIn(pr_size.GATE_MARKER, comments[0])
+        self.assertIn(pr_size.SPLIT_PROCEDURE_URL, comments[0])
+        self.assertIn("20001 counted lines", comments[0])
+        self.assertIn(pr_size.EXCEPTION_LABEL, comments[0])
+
+    def test_exception_label_without_approval_still_fails(self):
+        api = FakeApi(self._over(), labels=[pr_size.EXCEPTION_LABEL])
+        self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+
+    def test_approval_by_author_alone_still_fails(self):
+        api = FakeApi(
+            self._over(),
+            labels=[pr_size.EXCEPTION_LABEL],
+            author="author",
+            reviews=[{"state": "APPROVED", "user": {"login": "author"}}],
+        )
+        self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+
+    def test_dismissed_approval_still_fails(self):
+        api = FakeApi(
+            self._over(),
+            labels=[pr_size.EXCEPTION_LABEL],
+            author="author",
+            reviews=[
+                {"state": "APPROVED", "user": {"login": "reviewer"}},
+                {"state": "DISMISSED", "user": {"login": "reviewer"}},
+            ],
+        )
+        self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+
+    def test_label_and_non_author_approval_passes_with_slices_note(self):
+        api = FakeApi(
+            self._over(),
+            labels=[pr_size.EXCEPTION_LABEL],
+            author="author",
+            reviews=[{"state": "APPROVED", "user": {"login": "reviewer"}}],
+        )
+        self.assertTrue(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+        comments = [body for kind, body in api.calls if kind == "comment"]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("review slices", comments[0])
+
+    def test_approved_by_non_author_uses_latest_state_per_user(self):
+        api = FakeApi(
+            self._over(),
+            labels=[pr_size.EXCEPTION_LABEL],
+            author="author",
+            reviews=[
+                {"state": "CHANGES_REQUESTED", "user": {"login": "reviewer"}},
+                {"state": "APPROVED", "user": {"login": "reviewer"}},
+            ],
+        )
+        self.assertTrue(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+
+    def test_gate_excludes_lockfiles_and_generated(self):
+        # A huge diff that is all lockfile/generated counts as nothing.
+        api = FakeApi([{"filename": "package-lock.json",
+                        "additions": 50000, "deletions": 0}])
+        self.assertTrue(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+
+    def test_gate_mode_exit_codes(self):
+        env = dict(self.ENV)
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(pr_size, "gate_pr", return_value=False) as gate, \
+                mock.patch.object(pr_size, "GitHubApi"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(pr_size.main(["pr_size.py", "gate"]), 1)
+        gate.assert_called_once()
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(pr_size, "gate_pr", return_value=True), \
+                mock.patch.object(pr_size, "GitHubApi"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(pr_size.main(["pr_size.py", "gate"]), 0)
+
+    def test_gate_fails_closed_on_api_error(self):
+        api = pr_size.GitHubApi("test-token", "owner/name")
+        dropped = mock.Mock(
+            side_effect=http.client.RemoteDisconnected("closed without response")
+        )
+        with mock.patch("urllib.request.urlopen", dropped), \
+                mock.patch.dict(os.environ, self.ENV, clear=True), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            code = pr_size.main(["pr_size.py", "gate"])
+        self.assertEqual(code, 1)
+        self.assertIn("::error::pr_size gate could not verify size:", out.getvalue())
+
+    ENV = {"REPO": "owner/name", "GH_TOKEN": "test-token", "PR_NUMBER": "7",
+           "PR_SIZE_GATE_THRESHOLD": "20000"}
 
 
 class Weekly(unittest.TestCase):

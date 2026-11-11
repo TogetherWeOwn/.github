@@ -1,4 +1,4 @@
-"""Offline source-trust contracts for both reusable PR-size workflows.
+"""Offline source-trust contracts for the reusable PR-size workflows.
 
 Run with: python3 -m unittest discover -s .github/scripts -p 'test_pr_size*.py'
 The existing CI discovery includes this file without any workflow changes.
@@ -7,7 +7,8 @@ For a cross-repository caller or fork PR, github.repository, github.sha and
 PR head/base values describe caller-owned code, not this central script.
 Only the reviewed central repository and immutable script snapshot may supply
 executable code; github.repository remains the API target, not the checkout.
-The approved snapshot is on main and carries the unchanged advisory script.
+The approved snapshot is on main and carries the reviewed script (advisory
+label/weekly plus the required gate mode).
 Changing that pin or script requires explicitly reviewing the new snapshot.
 
 Like test_pr_size_workflows.py, the reader supports only these workflows'
@@ -24,10 +25,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 CENTRAL_REPOSITORY = "TogetherWeOwn/.github"
-REVIEWED_SHA = "a3c24dfba42f2a8092889541bb256d244e9f67c2"
+REVIEWED_SHA = "5159cb07e60af722b5f3e7d63f9f126957681dcc"
 SCRIPT = ".github/scripts/pr_size.py"
-SCRIPT_SHA256 = "879c52b4a59619e30ff0bc7bd1de4d99a3b7cfa7533f078fb99dbb78ed0da2a7"
-MODES = {"pr-size.yml": "label", "pr-size-weekly.yml": "weekly"}
+SCRIPT_SHA256 = "9ead14c067dd8aef07c55d0440c56b28477dd9593cb499d3b11c2d066aacfc64"
+MODES = {
+    "pr-size.yml": "label",
+    "pr-size-weekly.yml": "weekly",
+    "pr-size-gate.yml": "gate",
+}
 
 
 def block(text, indent, key):
@@ -137,25 +142,40 @@ class CentralSourceContract(unittest.TestCase):
                         "PR_SIZE_THRESHOLD": "400",
                         "PR_SIZE_EXCLUDE_EXTRA": "${{ inputs.exclude-extra }}",
                     })
+                elif mode == "gate":
+                    expected.update({
+                        "PR_NUMBER": "${{ inputs.pr-number != '' && inputs.pr-number || github.event.pull_request.number }}",
+                        "PR_SIZE_GATE_THRESHOLD": "${{ inputs.gate-threshold }}",
+                        "PR_SIZE_EXCLUDE_EXTRA": "${{ inputs.exclude-extra }}",
+                    })
                 self.assertEqual(env, expected)
                 inputs = scalars(block(block(text, 0, "on"), 4, "inputs"), 6)
-                allowed = {"runs-on", "pr-number", "exclude-extra"} if mode == "label" else {"runs-on"}
+                allowed = {
+                    "label": {"runs-on", "pr-number", "exclude-extra"},
+                    "gate": {"runs-on", "pr-number", "exclude-extra", "gate-threshold"},
+                    "weekly": {"runs-on"},
+                }[mode]
                 self.assertEqual(set(inputs), allowed)
 
-    def test_label_write_and_weekly_read_scopes_remain_separate(self):
+    def test_write_and_read_only_scopes_remain_separate(self):
+        # The label and gate jobs comment/short-write on PRs; the weekly
+        # tally stays read-only. Separate reusable FILES, because GitHub
+        # validates a reusable file's nested permissions statically (see the
+        # workflow headers): a read-only caller of a file holding any write
+        # job fails at parse time.
         for filename, mode in MODES.items():
             with self.subTest(workflow=filename):
                 text = (WORKFLOWS / filename).read_text()
                 self.assertEqual(set(scalars(block(text, 0, "jobs"), 2)), {mode})
                 self.assertEqual(scalars(block(text, 0, "permissions"), 2), {"contents": "read"})
                 job = block(block(text, 0, "jobs"), 2, mode)
-                level = "write" if mode == "label" else "read"
+                level = "read" if mode == "weekly" else "write"
                 self.assertEqual(
                     scalars(block(job, 4, "permissions"), 6),
                     {"contents": "read", "issues": level, "pull-requests": level},
                 )
 
-    def test_script_bytes_still_match_the_reviewed_advisory_snapshot(self):
+    def test_script_bytes_still_match_the_reviewed_snapshot(self):
         self.assertEqual(hashlib.sha256((ROOT / SCRIPT).read_bytes()).hexdigest(), SCRIPT_SHA256)
 
 
