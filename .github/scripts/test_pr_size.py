@@ -437,6 +437,19 @@ class Gate(unittest.TestCase):
         )
         self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
 
+    def test_maintainer_can_unlock_the_exception(self):
+        # GitHub reports the maintain role as 'maintain', not 'write':
+        # a maintainer can write to this repository, so their approval
+        # satisfies the exception.
+        api = FakeApi(
+            self._over(),
+            labels=[pr_size.EXCEPTION_LABEL],
+            author="author",
+            reviews=[self._approved()],
+            permissions={"reviewer": "maintain"},
+        )
+        self.assertTrue(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+
     def test_gate_excludes_lockfiles_and_generated(self):
         # A huge diff that is all lockfile/generated counts as nothing.
         api = FakeApi([{"filename": "package-lock.json",
