@@ -93,7 +93,7 @@ class TemplatePermissionContract(unittest.TestCase):
         # This main commit contains all three reusable workflows. The old
         # template pinned a pre-squash commit GitHub could not resolve for
         # callers.
-        reviewed_sha = "83e05750e1bbf1632e86ed987caebb4a989bbf7b"
+        reviewed_sha = "ac9ce8d63e0cebd19ede904ac79137190c329964"
         _, jobs = parse_workflow(TEMPLATE)
         callers = {name: job["uses"] for name, job in jobs.items() if job["uses"]}
         self.assertEqual(
@@ -107,7 +107,9 @@ class TemplatePermissionContract(unittest.TestCase):
     def test_every_template_caller_grants_what_its_reusable_requests(self):
         top, jobs = parse_workflow(TEMPLATE)
         callers = {
-            name: job for name, job in jobs.items() if job["uses"] and USES_RE.search(job["uses"])
+            name: job
+            for name, job in jobs.items()
+            if job["uses"] and USES_RE.search(job["uses"])
         }
         self.assertTrue(callers, "template has no reusable-workflow caller jobs")
         for name, job in callers.items():
@@ -131,11 +133,11 @@ class TemplatePermissionContract(unittest.TestCase):
         # size; without it a previously passing gate stays green for an
         # oversized PR until some other subscribed event occurs.
         text = TEMPLATE.read_text(encoding="utf-8")
-        self.assertIn(
-            "types: [opened, edited, synchronize, reopened, "
-            "ready_for_review, labeled, unlabeled]",
-            text,
+        pull_request = re.search(
+            r"^  pull_request:\n    types: \[([^\]\n]+)\]$", text, re.MULTILINE
         )
+        self.assertIsNotNone(pull_request, "template has no pull_request types list")
+        self.assertIn("edited", [event.strip() for event in pull_request[1].split(",")])
 
     def test_weekly_reusable_requests_read_only(self):
         # CI-STANDARD promises the weekly tally runs read-only; that is only
