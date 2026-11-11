@@ -7,8 +7,10 @@ Also wired into the `pr-size selftest` job in .github/workflows/ci.yml.
 import contextlib
 import http.client
 import io
+import json
 import os
 import unittest
+import urllib.error
 from datetime import datetime, timedelta
 from typing import ClassVar
 from unittest import mock
@@ -341,6 +343,50 @@ class Gate(unittest.TestCase):
                 self.assertTrue(self._call(api))
                 self.assertEqual(api.request.call_args.args[:2],
                                  ("PATCH", "/repos/owner/name/issues/comments/1"))
+
+    def test_read_only_api_exception_and_negative_controls(self):
+        for scenario in ("valid", "old_head", "read_permission", "no_label",
+                         "label_read_error", "permission_error", "hard_stop"):
+            with self.subTest(scenario=scenario):
+                calls = []
+
+                def urlopen(request, timeout):
+                    method, path = request.get_method(), request.full_url.split("api.github.com", 1)[1]
+                    calls.append((method, path))
+                    if method != "GET":
+                        raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, None)
+                    if path.startswith("/repos/owner/name/pulls/7/files?"):
+                        data = self._over(1000 if scenario == "hard_stop" else 401)
+                    elif path == "/repos/owner/name/pulls/7":
+                        if scenario == "label_read_error":
+                            raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, None)
+                        data = {"labels": [] if scenario == "no_label" else
+                                [{"name": pr_size.EXCEPTION_LABEL}],
+                                "user": {"login": "author"}, "head": {"sha": "head-sha"}}
+                    elif path.startswith("/repos/owner/name/pulls/7/reviews?"):
+                        data = [self._approved(commit_id="old" if scenario == "old_head" else "head-sha")]
+                    elif path == "/repos/owner/name/collaborators/reviewer/permission":
+                        if scenario == "permission_error":
+                            raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, None)
+                        data = {"permission": "read" if scenario == "read_permission" else "write"}
+                    elif path.startswith("/repos/owner/name/issues/7/comments?"):
+                        data = []
+                    else:
+                        self.fail(f"unexpected request: {method} {path}")
+                    response = mock.MagicMock()
+                    response.__enter__.return_value.read.return_value = json.dumps(data).encode()
+                    return response
+
+                with mock.patch("urllib.request.urlopen", side_effect=urlopen), \
+                        mock.patch.dict(os.environ, self.ENV, clear=True), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    result = pr_size.main(["pr_size.py", "gate"])
+                self.assertEqual(result, 0 if scenario == "valid" else 1)
+                if scenario == "valid":
+                    self.assertNotIn(("POST", "/repos/owner/name/labels"), calls)
+                    self.assertIn(("GET", "/repos/owner/name/collaborators/reviewer/permission"), calls)
+                if scenario == "no_label":
+                    self.assertIn(("POST", "/repos/owner/name/labels"), calls)
 
     def test_valid_exception_comment_failure_is_best_effort(self):
         api = FakeApi(self._over(), labels=[pr_size.EXCEPTION_LABEL],

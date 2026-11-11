@@ -634,13 +634,14 @@ def gate_pr(api, number, threshold, extra_globs,
         )
         api.upsert_comment(number, fail_body, GATE_MARKER)
         return False
-    api.ensure_named_label(
-        EXCEPTION_LABEL,
-        EXCEPTION_LABEL_COLOR,
-        "Exception to the required PR size gate: needs an APPROVED review "
-        "from someone other than the author",
-    )
     labels = api.pr_labels(number)
+    if EXCEPTION_LABEL not in labels:
+        api.ensure_named_label(
+            EXCEPTION_LABEL,
+            EXCEPTION_LABEL_COLOR,
+            "Exception to the required PR size gate: needs an APPROVED review "
+            "from someone other than the author",
+        )
     exception = EXCEPTION_LABEL in labels and approved_by_non_author(
         api.pr_reviews(number),
         api.pr_author(number),
