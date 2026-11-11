@@ -288,7 +288,8 @@ def gate_under_body(counted, excluded, threshold, file_threshold):
 
 def gate_warn_body(counted, excluded, counted_files,
                    threshold=DEFAULT_GATE_THRESHOLD,
-                   warn=DEFAULT_WARN_THRESHOLD):
+                   warn=DEFAULT_WARN_THRESHOLD,
+                   file_threshold=DEFAULT_GATE_FILE_THRESHOLD):
     files_word = "file" if counted_files == 1 else "files"
     lines = [
         GATE_MARKER,
@@ -299,7 +300,7 @@ def gate_warn_body(counted, excluded, counted_files,
          f"lines including {excluded} in lockfiles, generated files and "
          f"fixtures, which are not counted) - over the {warn}-line review "
          f"target but under the {threshold}-line / "
-         f"{DEFAULT_GATE_FILE_THRESHOLD}-file gate, so this check passes. "
+         f"{file_threshold}-file gate, so this check passes. "
          "The target is 100-200 lines and 10 files or fewer; smaller pull "
          "requests get faster, more careful review."),
     ]
@@ -379,7 +380,13 @@ class GitHubApi:
             sep = "&" if "?" in path else "?"
             batch = self.request("GET", f"{path}{sep}per_page=100&page={page}")
             if isinstance(batch, dict):  # search API shape
-                batch = batch.get("items", [])
+                if "items" not in batch:
+                    # A dict without `items` is not a list response at all
+                    # (an empty 200 body collapses to `{}` in `request`).
+                    # Treat it as an unmeasurable diff, never an empty page:
+                    # otherwise the gate would pass on nothing.
+                    raise ApiError(f"{path} -> malformed list response")
+                batch = batch["items"]
             items.extend(batch)
             if len(batch) < 100:
                 return items
@@ -395,6 +402,10 @@ class GitHubApi:
     def pr_author(self, number):
         pr = self.request("GET", f"/repos/{self.repo}/pulls/{number}")
         return (pr.get("user") or {}).get("login", "")
+
+    def pr_head_sha(self, number):
+        pr = self.request("GET", f"/repos/{self.repo}/pulls/{number}")
+        return (pr.get("head") or {}).get("sha", "")
 
     def pr_reviews(self, number):
         return self.paged(f"/repos/{self.repo}/pulls/{number}/reviews")
@@ -497,21 +508,46 @@ def weekly(api, log=print):
     return report
 
 
-def approved_by_non_author(reviews, author):
-    """Whether some non-author's latest review state is APPROVED.
+def approved_by_non_author(reviews, author, head_sha):
+    """Whether some non-author approves the pull request at `head_sha`.
 
-    Reviews arrive chronologically; a later review (including a dismissal)
-    replaces that reviewer's standing, so only the latest state per user
-    counts. An approval by the pull request's own author never qualifies.
+    Reviews arrive chronologically. COMMENTED and PENDING reviews do not
+    change a reviewer's standing (GitHub still counts an approver who
+    later comments as approving); APPROVED, CHANGES_REQUESTED and
+    DISMISSED do, so only the latest such state per user counts. The
+    standing approval must also be on the current head - an approval of
+    an older head never unlocks a newly pushed diff - and from a
+    reviewer with approve weight (OWNER, MEMBER or COLLABORATOR), not
+    an unprivileged commenter. An approval by the pull request's own
+    author never qualifies.
     """
     latest = {}
     for review in reviews:
         login = (review.get("user") or {}).get("login", "")
-        if login:
-            latest[login] = review.get("state", "")
+        state = review.get("state", "")
+        if login and state in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+            latest[login] = review
     return any(
-        state == "APPROVED" for login, state in latest.items() if login != author
+        review.get("state") == "APPROVED"
+        and review.get("commit_id") == head_sha
+        and review.get("author_association") in ("OWNER", "MEMBER", "COLLABORATOR")
+        for login, review in latest.items()
+        if login != author
     )
+
+
+def _comment_best_effort(api, number, body, log):
+    """Post a passing-path comment; a write failure must not fail the gate.
+
+    The gate has already measured the diff, so the run passes either way:
+    a fork PR's read-only token cannot write the warning comment, and that
+    must not turn a within-limits fork PR red. Measurement failures stay
+    fatal; only the advisory comment is best-effort.
+    """
+    try:
+        api.upsert_comment(number, body, GATE_MARKER)
+    except ApiError as exc:
+        log(f"::warning::pr_size gate: could not post comment ({exc}); gate still passes")
 
 
 def gate_pr(api, number, threshold, extra_globs,
@@ -542,16 +578,20 @@ def gate_pr(api, number, threshold, extra_globs,
                 f"the {warn}-line review target (gate {threshold} lines / "
                 f"{file_threshold} files); passing with a warning."
             )
-            api.upsert_comment(
+            _comment_best_effort(
+                api,
                 number,
-                gate_warn_body(counted, excluded, counted_files, threshold, warn),
-                GATE_MARKER,
+                gate_warn_body(
+                    counted, excluded, counted_files, threshold, warn, file_threshold
+                ),
+                log,
             )
         elif api.find_marker_comment(number, GATE_MARKER) is not None:
-            api.upsert_comment(
+            _comment_best_effort(
+                api,
                 number,
                 gate_under_body(counted, excluded, threshold, file_threshold),
-                GATE_MARKER,
+                log,
             )
         return True
     fail_body = gate_failure_body(
@@ -572,7 +612,7 @@ def gate_pr(api, number, threshold, extra_globs,
     )
     labels = api.pr_labels(number)
     exception = EXCEPTION_LABEL in labels and approved_by_non_author(
-        api.pr_reviews(number), api.pr_author(number)
+        api.pr_reviews(number), api.pr_author(number), api.pr_head_sha(number)
     )
     if exception:
         log(f"PR #{number}: {EXCEPTION_LABEL} approved by a non-author; gate passes")

@@ -517,16 +517,21 @@ exclusion - only the script's exclusions, per repo config, count.
   The full evidence is recorded in the reusable workflow's header
   comment; re-measure before ever moving the thresholds.
 - **Fails closed**: if the size cannot be measured, the check errors
-  instead of passing silently. Fork PRs (read-only token) therefore
-  ERR on this gate until the fork is updated - intentional.
+  instead of passing silently. Passing-path comments are best-effort,
+  so a fork PR (read-only token) within the budget passes on that
+  token; a fork PR over the gate still errors (it cannot post the
+  failure comment, ensure the exception label, or complete the
+  exception approval) - intentional.
 - **Devin success is not proof of review**: merge-conflict skips also
   report `success` (two-web-next#2064). Whether Devin actually reviewed
   is decided by the review rules, which check the status description,
   not just its state - not by this gate.
 - **Ship in two steps** (the "never require a check before its workflow
   exists on the default branch" rule above): merge the caller workflow,
-  confirm the gate reports on the default branch, then add
-  `pr-size-gate` to the ruleset's required-workflows list.
+  confirm the gate reports on the default branch, then require the
+  caller's `pr-size-gate` job in the ruleset (the check the caller
+  workflow reports; the reusable workflow itself is never required
+  standalone).
 - **Split procedure** (the gate's failure comment links here): split an
   over-gate pull request as **stacked pull requests** (independently
   mergeable pieces, each landing on the previous one's branch),
@@ -538,13 +543,18 @@ exclusion - only the script's exclusions, per repo config, count.
   over-limit code in chunks for reviewers (Devin and humans) and are
   closed once the mergeable part lands; each slice must itself be under
   the gate. Slicing by review order (e.g. production code first, tests
-  last) keeps each slice focused.
+  last) keeps each slice focused. Review slices apply **below** the
+  hard stop - at or above it the mergeable pull request itself must be
+  split into smaller mergeable pull requests, since slices do not
+  shrink its counted diff.
 - **Exception**: for a genuinely atomic change below the hard stop,
   label the pull request `size-exception` and get an APPROVED review
   **from someone other than the author** - the gate then passes, but
   Devin must still be satisfied via review slices for the over-limit
   diff. The gate script ensures the label exists so authors can apply
-  it themselves. At or above the hard stop there is no exception: split
+  it themselves. The gate re-evaluates when the label is applied or a
+  review is submitted, so granting the exception needs no manual
+  re-run. At or above the hard stop there is no exception: split
   it. The gate, its comment and this section are the whole contract;
   there is no per-repo override and no way to skip the gate without the
   exception.

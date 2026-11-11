@@ -20,8 +20,12 @@
 # in two steps (STANDARD.md: never require a check before its workflow
 # exists on the default branch): first merge this caller and confirm the
 # gate reports on the default branch, then add the check to the required
-# list. The gate script fails closed, so fork pull requests (read-only
-# token) ERR on the gate until the fork is updated - that is intentional.
+# list. The gate fails closed on measurement; fork pull requests within
+# the gate pass (their warning comment is best-effort), while over-gate
+# forks ERR (they cannot post the split comment or ensure the exception
+# label) - that is intentional. The gate job also runs when the
+# `size-exception` label is applied or a review is submitted, so granting
+# an exception re-evaluates the check without a manual re-run.
 #
 # The weekly tally's schedule lives here, in the caller, because the tally
 # is per-repository. It calls a SEPARATE reusable file so this job can stay
@@ -33,7 +37,9 @@ name: pr-size
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  pull_request_review:
+    types: [submitted]
   schedule:
     - cron: '17 7 * * 1'
   workflow_dispatch:
@@ -53,7 +59,7 @@ concurrency:
 jobs:
   pr-size:
     name: pr-size
-    if: github.event_name == 'pull_request' || inputs.pr_number != ''
+    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''
     permissions:
       contents: read
       issues: write
@@ -71,7 +77,7 @@ jobs:
   # reported on this repo's default branch (two-step ship, STANDARD.md).
   pr-size-gate:
     name: pr-size-gate
-    if: github.event_name == 'pull_request' || inputs.pr_number != ''
+    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''
     permissions:
       contents: read
       issues: write

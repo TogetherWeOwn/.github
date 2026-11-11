@@ -17,18 +17,18 @@
 # the caller workflow is on their default branch (STANDARD.md rule: never
 # require a check before its workflow exists there).
 #
-# Thresholds (unchanged in practice by per-repository inputs; do not raise
+# Thresholds: fixed at the org standard inside this workflow (there are
+# no threshold inputs, so a caller cannot weaken the gate; do not raise
 # them per repository). Counted = additions + deletions after the
 # script's lockfile / generated / fixture exclusions.
 #   - Target: 100-200 reviewable lines and 10 or fewer files.
 #   - Warn: at or above 200 counted lines the gate posts a warning
 #     comment and still passes.
-#   - Gate (default input `gate-threshold`, also `gate-file-threshold`):
-#     FAIL over 400 counted lines or over 20 counted files, unless the
-#     `size-exception` below applies.
-#   - Hard stop (default input `hard-stop-threshold`): at or above 1,000
-#     counted lines the exemption never applies; the pull request must be
-#     split (review slices count as separate small pull requests).
+#   - Gate (fixed below): FAIL over 400 counted lines or over 20 counted
+#     files, unless the `size-exception` below applies.
+#   - Hard stop (fixed below): at or above 1,000 counted lines the
+#     exemption never applies; the pull request must be split (review
+#     slices count as separate small pull requests).
 #
 # Why not Devin's ceiling? Devin's limit is not documented (product
 # guide, Review API and 2026 release notes give no number). The org
@@ -106,29 +106,10 @@ on:
         required: false
         default: ""
         type: string
-      gate-threshold:
-        description: >-
-          Counted lines above which the gate fails without a
-          `size-exception` (default 400, the reviewability gate; do not
-          raise it per-repository).
-        required: false
-        default: "400"
-        type: string
-      gate-file-threshold:
-        description: >-
-          Counted files above which the gate fails without a
-          `size-exception` (default 20; do not raise it per-repository).
-        required: false
-        default: "20"
-        type: string
-      hard-stop-threshold:
-        description: >-
-          Counted lines at or above which the gate fails even with a
-          `size-exception`; the pull request must be split (default
-          1000).
-        required: false
-        default: "1000"
-        type: string
+      # No threshold inputs by design: the reviewability budget (400
+      # lines / 20 files / 1,000 hard stop) is fixed below. A caller that
+      # could set those values could exempt its own pull requests, so the
+      # gate would no longer be a gate.
       runs-on:
         description: >-
           JSON runner label(s), e.g. '["ubuntu-latest"]'.
@@ -164,8 +145,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr-number != '' && inputs.pr-number || github.event.pull_request.number }}
-          PR_SIZE_GATE_THRESHOLD: ${{ inputs.gate-threshold }}
-          PR_SIZE_GATE_FILES: ${{ inputs.gate-file-threshold }}
-          PR_SIZE_HARD_STOP: ${{ inputs.hard-stop-threshold }}
+          PR_SIZE_GATE_THRESHOLD: "400"
+          PR_SIZE_GATE_FILES: "20"
+          PR_SIZE_HARD_STOP: "1000"
           PR_SIZE_EXCLUDE_EXTRA: ${{ inputs.exclude-extra }}
         run: python3 .pr-size-central/.github/scripts/pr_size.py gate

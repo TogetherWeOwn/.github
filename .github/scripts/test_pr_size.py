@@ -96,12 +96,13 @@ class FakeApi:
     """Records the calls pr_size makes; serves canned PR state."""
 
     def __init__(self, files, labels=(), marker_comment=None, author="author",
-                 reviews=()):
+                 reviews=(), head_sha="head-sha"):
         self._files = files
         self.labels = list(labels)
         self.marker_comment = marker_comment
         self.author = author
         self.reviews = list(reviews)
+        self.head_sha = head_sha
         self.calls = []
 
     def pr_files(self, number):
@@ -112,6 +113,9 @@ class FakeApi:
 
     def pr_author(self, number):
         return self.author
+
+    def pr_head_sha(self, number):
+        return self.head_sha
 
     def pr_reviews(self, number):
         return list(self.reviews)
@@ -227,6 +231,45 @@ class Gate(unittest.TestCase):
         self.assertIn(pr_size.GATE_MARKER, comments[0])
         self.assertIn("250 counted lines", comments[0])
         self.assertIn(f"{self.WARN}-line", comments[0])
+        self.assertIn(f"{self.GATE_FILES}-file gate", comments[0])
+
+    def test_warning_comment_uses_the_configured_file_threshold(self):
+        # The warning comment must state the configured file limit, not the
+        # module default, when a caller sets another threshold.
+        api = FakeApi(self._over(250))
+        pr_size.gate_pr(
+            api, 7, self.GATE, (), 99, self.HARD_STOP, self.WARN,
+            log=lambda *_: None,
+        )
+        comments = [body for kind, body in api.calls if kind == "comment"]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("99-file gate", comments[0])
+
+    def test_within_gate_fork_pr_passes_when_the_comment_cannot_be_written(self):
+        # A fork PR's read-only token cannot post the warning comment;
+        # that must not fail a gate that measured the diff as within limits.
+
+        class ReadOnlyToken(FakeApi):
+            def upsert_comment(self, number, body, marker=pr_size.MARKER):
+                raise pr_size.ApiError("POST /issues/7/comments -> HTTP 403")
+
+        api = ReadOnlyToken(self._over(250))
+        logs = []
+        self.assertTrue(
+            pr_size.gate_pr(
+                api, 7, self.GATE, (), self.GATE_FILES, self.HARD_STOP, self.WARN,
+                log=logs.append,
+            )
+        )
+        self.assertTrue(any("could not post comment" in line for line in logs))
+
+    def test_malformed_list_response_fails_closed(self):
+        # An empty 200 body collapses to {}; paged must not read that as a
+        # valid empty page and pass the gate on an unmeasured diff.
+        api = pr_size.GitHubApi("test-token", "owner/name")
+        api.request = lambda method, path, body=None: {}
+        with self.assertRaises(pr_size.ApiError):
+            api.paged("/repos/owner/name/pulls/7/files")
 
     def test_over_threshold_without_exception_fails_with_procedure(self):
         api = FakeApi(self._over(), labels=["size/XL"])
@@ -263,12 +306,18 @@ class Gate(unittest.TestCase):
         self.assertTrue(self._call(api))
         self.assertEqual(api.calls, [])
 
+    def _approved(self, login="reviewer", **overrides):
+        review = {"state": "APPROVED", "user": {"login": login},
+                  "commit_id": "head-sha", "author_association": "MEMBER"}
+        review.update(overrides)
+        return review
+
     def test_just_under_hard_stop_exception_still_applies(self):
         api = FakeApi(
             self._over(999),
             labels=[pr_size.EXCEPTION_LABEL],
             author="author",
-            reviews=[{"state": "APPROVED", "user": {"login": "reviewer"}}],
+            reviews=[self._approved()],
         )
         self.assertTrue(self._call(api))
 
@@ -277,7 +326,7 @@ class Gate(unittest.TestCase):
             self._over(1500),
             labels=[pr_size.EXCEPTION_LABEL],
             author="author",
-            reviews=[{"state": "APPROVED", "user": {"login": "reviewer"}}],
+            reviews=[self._approved()],
         )
         self.assertFalse(self._call(api))
         comments = [body for kind, body in api.calls if kind == "comment"]
@@ -294,7 +343,7 @@ class Gate(unittest.TestCase):
             self._over(),
             labels=[pr_size.EXCEPTION_LABEL],
             author="author",
-            reviews=[{"state": "APPROVED", "user": {"login": "author"}}],
+            reviews=[self._approved(login="author")],
         )
         self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
 
@@ -304,8 +353,8 @@ class Gate(unittest.TestCase):
             labels=[pr_size.EXCEPTION_LABEL],
             author="author",
             reviews=[
-                {"state": "APPROVED", "user": {"login": "reviewer"}},
-                {"state": "DISMISSED", "user": {"login": "reviewer"}},
+                self._approved(),
+                self._approved(state="DISMISSED"),
             ],
         )
         self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
@@ -315,7 +364,7 @@ class Gate(unittest.TestCase):
             self._over(),
             labels=[pr_size.EXCEPTION_LABEL],
             author="author",
-            reviews=[{"state": "APPROVED", "user": {"login": "reviewer"}}],
+            reviews=[self._approved()],
         )
         self.assertTrue(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
         comments = [body for kind, body in api.calls if kind == "comment"]
@@ -328,11 +377,48 @@ class Gate(unittest.TestCase):
             labels=[pr_size.EXCEPTION_LABEL],
             author="author",
             reviews=[
-                {"state": "CHANGES_REQUESTED", "user": {"login": "reviewer"}},
-                {"state": "APPROVED", "user": {"login": "reviewer"}},
+                self._approved(state="CHANGES_REQUESTED"),
+                self._approved(),
             ],
         )
         self.assertTrue(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+
+    def test_comment_review_after_approval_keeps_the_approval(self):
+        # A COMMENTED review must not withdraw an earlier approval:
+        # GitHub still counts that reviewer as approving.
+        api = FakeApi(
+            self._over(),
+            labels=[pr_size.EXCEPTION_LABEL],
+            author="author",
+            reviews=[
+                self._approved(),
+                {"state": "COMMENTED", "user": {"login": "reviewer"},
+                 "commit_id": "head-sha", "author_association": "MEMBER"},
+            ],
+        )
+        self.assertTrue(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+
+    def test_approval_of_an_older_head_does_not_unlock_a_new_diff(self):
+        # The approval must be bound to the current head: a reviewer can
+        # approve 300 lines, then the author pushes 999 more lines.
+        api = FakeApi(
+            self._over(999),
+            labels=[pr_size.EXCEPTION_LABEL],
+            author="author",
+            reviews=[self._approved(commit_id="older-head")],
+        )
+        self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+
+    def test_unprivileged_approver_cannot_unlock_the_exception(self):
+        # An approver without write access has no merge weight; their
+        # review must not satisfy the exception.
+        api = FakeApi(
+            self._over(),
+            labels=[pr_size.EXCEPTION_LABEL],
+            author="author",
+            reviews=[self._approved(author_association="CONTRIBUTOR")],
+        )
+        self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
 
     def test_gate_excludes_lockfiles_and_generated(self):
         # A huge diff that is all lockfile/generated counts as nothing.

@@ -27,7 +27,7 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 CENTRAL_REPOSITORY = "TogetherWeOwn/.github"
 REVIEWED_SHA = "0b7309abe2f065ffd0fb84ea34e7793c3db9071b"
 SCRIPT = ".github/scripts/pr_size.py"
-SCRIPT_SHA256 = "3330cdc091f1c71e6cf2d57d4c939f782b308541ab472fc21ae931952c5e6b84"
+SCRIPT_SHA256 = "aa4c3cd30256db7bd3540ec16aa9060beccdf608371dd52fd284eadc4bdeb31b"
 MODES = {
     "pr-size.yml": "label",
     "pr-size-weekly.yml": "weekly",
@@ -143,22 +143,21 @@ class CentralSourceContract(unittest.TestCase):
                         "PR_SIZE_EXCLUDE_EXTRA": "${{ inputs.exclude-extra }}",
                     })
                 elif mode == "gate":
+                    # The thresholds are fixed at the org standard in the
+                    # reusable workflow itself - there are no threshold
+                    # inputs, so a caller cannot weaken the gate.
                     expected.update({
                         "PR_NUMBER": "${{ inputs.pr-number != '' && inputs.pr-number || github.event.pull_request.number }}",
-                        "PR_SIZE_GATE_THRESHOLD": "${{ inputs.gate-threshold }}",
-                        "PR_SIZE_GATE_FILES": "${{ inputs.gate-file-threshold }}",
-                        "PR_SIZE_HARD_STOP": "${{ inputs.hard-stop-threshold }}",
+                        "PR_SIZE_GATE_THRESHOLD": "400",
+                        "PR_SIZE_GATE_FILES": "20",
+                        "PR_SIZE_HARD_STOP": "1000",
                         "PR_SIZE_EXCLUDE_EXTRA": "${{ inputs.exclude-extra }}",
                     })
                 self.assertEqual(env, expected)
                 inputs = scalars(block(block(text, 0, "on"), 4, "inputs"), 6)
                 allowed = {
                     "label": {"runs-on", "pr-number", "exclude-extra"},
-                    "gate": {
-                        "runs-on", "pr-number", "exclude-extra",
-                        "gate-threshold", "gate-file-threshold",
-                        "hard-stop-threshold",
-                    },
+                    "gate": {"runs-on", "pr-number", "exclude-extra"},
                     "weekly": {"runs-on"},
                 }[mode]
                 self.assertEqual(set(inputs), allowed)
