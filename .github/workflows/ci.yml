@@ -246,12 +246,14 @@ jobs:
       - name: CalVer engine and adapter acceptance tests (required)
         run: node --test ci/calver*.test.mjs
 
-  # Unit tests for the org PR-size labeller (stdlib unittest, seconds),
-  # including the static check that every caller job in the shipped
-  # template grants at least the permissions its reusable file requests
+  # Unit tests for the org PR-size script: the advisory labeller, the
+  # weekly tally and the REQUIRED gate mode (stdlib unittest, seconds),
+  # plus the static checks that every caller job in the shipped template
+  # grants at least the permissions its reusable file requests, and that
+  # every reusable checks the script out from the reviewed central source
   # (GitHub rejects an under-granting caller at parse time, which no
   # executing job here could catch). Always-on like gate-selftest so
-  # labeller changes can never merge red.
+  # pr-size changes can never merge red.
   pr-size-selftest:
     name: pr-size selftest (Python ${{ matrix.python }})
     runs-on: ubuntu-latest

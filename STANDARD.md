@@ -451,12 +451,14 @@ labeller or silence its own label by deleting a local copy.
   `size/L` <= 1000 counted lines (additions + deletions, lockfiles /
   generated files / fixtures excluded), `size/XL` above that. They are not
   caller inputs; changing them is one reviewed PR here.
-- **Advisory only, permanently.** `pr-size` is never a required status
-  check and must never appear in a ruleset's required-workflows list -
-  either would make it block merges and break the invariant. Org-level
-  inheritance happens through this template and repo bootstrap, not merge
-  blocking. The script exits 0 on any API failure (and fork PRs, whose
-  token is read-only, warn and skip), so labelling can never turn a run red.
+- **Advisory only, permanently - with one deliberate exception.** The
+  `pr-size` label workflow is never a required status check and must never
+  appear in a ruleset's required-workflows list. The labeller exits 0 on
+  any API failure (and fork PRs, whose token is read-only, warn and skip),
+  so labelling can never turn a run red. The exception is `pr-size-gate`
+  (next section): a separate reusable workflow whose whole purpose is to
+  block, and which therefore MUST be required. Org-level inheritance
+  happens through the template and repo bootstrap, not merge blocking.
 - **Token**: callers grant job-level `issues: write` + `pull-requests:
   write` to call the label reusable and read-only to call the weekly one.
   The two modes are separate reusable FILES because GitHub validates a
@@ -483,6 +485,48 @@ labeller or silence its own label by deleting a local copy.
   pinned labeller, which is safe because it is advisory.
 
 Reference adoption: TogetherWeOwn/two-web-next `.github/workflows/pr-size.yml`.
+
+### PR size gate
+
+A required status check that fails pull requests too large for the
+automated reviewer (Devin Review), so an over-limit diff fails here
+instead of wasting a review cycle on a refusal later. One definition,
+same repo: the `gate` mode of `.github/scripts/pr_size.py` behind the
+reusable `.github/workflows/pr-size-gate.yml`, reusing the advisory
+script's counted-line exclusions (lockfiles, generated files, vendored
+code, snapshots, fixtures - plus each repo's `exclude-extra`).
+
+- **Threshold**: 20,000 counted lines (default `gate-threshold` input;
+  do not raise it per-repository). Measured 2026-11-11 from the rollout
+  repos' Devin Review commit statuses: 35,226 raw lines (labelloop#12)
+  was the largest diff Devin reviewed successfully; 47,982 raw lines
+  (nntunev2#908) was the smallest it refused (a 3-second instant
+  failure). Counted lines are always <= raw lines, so 20,000 counted is
+  a conservative margin below the refusal point. The full evidence is
+  recorded in the reusable workflow's header comment. Re-measure before
+  ever moving the threshold.
+- **Fails closed**: if the size cannot be measured, the check errors
+  instead of passing silently. Fork PRs (read-only token) therefore
+  ERR on this gate until the fork is updated - intentional.
+- **Ship in two steps** (the "never require a check before its workflow
+  exists on the default branch" rule above): merge the caller workflow,
+  confirm the gate reports on the default branch, then add
+  `pr-size-gate` to the ruleset's required-workflows list.
+- **Split procedure** (the gate's failure comment links here): split an
+  over-gate pull request either as **stacked pull requests** (independently
+  mergeable pieces, each landing on the previous one's branch) or as
+  **review-only slices**: one mergeable pull request plus slice pull
+  requests titled `review-slice N/M of #<original> - do not merge` that
+  carry the over-limit code in chunks for reviewers (Devin and humans)
+  and are closed once the mergeable part lands. Slicing by review order
+  (e.g. production code first, tests last) keeps each slice focused.
+- **Exception**: for a genuinely atomic change, label the pull request
+  `size-exception` and get an APPROVED review **from someone other than
+  the author** - the gate then passes, but Devin must still be satisfied
+  via review slices for the over-limit diff. The gate script ensures the
+  label exists so authors can apply it themselves. The gate, its comment
+  and this section are the whole contract; there is no per-repo override
+  and no way to skip the gate without the exception.
 
 ### Banned
 

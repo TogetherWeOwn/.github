@@ -16,6 +16,10 @@ do not add policy here. Follow the links below to the canonical sections.
 
 [Advisory PR-size labels](STANDARD.md#advisory-pr-size-labels)
 
+<a id="pr-size-gate"></a>
+
+[PR size gate](STANDARD.md#pr-size-gate)
+
 <a id="banned"></a>
 
 [Banned](STANDARD.md#banned)
