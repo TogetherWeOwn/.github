@@ -452,7 +452,10 @@ class GitHubApi:
 
     def find_marker_comment(self, number, marker=MARKER):
         for comment in self.paged(f"/repos/{self.repo}/issues/{number}/comments"):
-            if marker in (comment.get("body") or ""):
+            user = comment.get("user") or {}
+            if (user.get("login") == "github-actions[bot]"
+                    and user.get("type") == "Bot"
+                    and marker in (comment.get("body") or "")):
                 return comment
         return None
 
@@ -560,8 +563,8 @@ def approved_by_non_author(reviews, author, head_sha, permission_of):
     )
 
 
-def _comment_best_effort(api, number, body, log):
-    """Post a passing-path comment; a write failure must not fail the gate.
+def _comment_best_effort(api, number, body, log, existing_only=False):
+    """Post a passing-path comment; lookup/write failures must not fail the gate.
 
     The gate has already measured the diff, so the run passes either way:
     a fork PR's read-only token cannot write the warning comment, and that
@@ -569,6 +572,8 @@ def _comment_best_effort(api, number, body, log):
     fatal; only the advisory comment is best-effort.
     """
     try:
+        if existing_only and api.find_marker_comment(number, GATE_MARKER) is None:
+            return
         api.upsert_comment(number, body, GATE_MARKER)
     except ApiError as exc:
         log(f"::warning::pr_size gate: could not post comment ({exc}); gate still passes")
@@ -610,12 +615,13 @@ def gate_pr(api, number, threshold, extra_globs,
                 ),
                 log,
             )
-        elif api.find_marker_comment(number, GATE_MARKER) is not None:
+        else:
             _comment_best_effort(
                 api,
                 number,
                 gate_under_body(counted, excluded, threshold, file_threshold),
                 log,
+                existing_only=True,
             )
         return True
     fail_body = gate_failure_body(
@@ -643,7 +649,7 @@ def gate_pr(api, number, threshold, extra_globs,
     )
     if exception:
         log(f"PR #{number}: {EXCEPTION_LABEL} approved by a non-author; gate passes")
-        api.upsert_comment(number, gate_exception_body(counted, threshold), GATE_MARKER)
+        _comment_best_effort(api, number, gate_exception_body(counted, threshold), log)
         return True
     api.upsert_comment(number, fail_body, GATE_MARKER)
     return False

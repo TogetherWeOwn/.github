@@ -186,6 +186,49 @@ class LabelFlow(unittest.TestCase):
         self.assertEqual([c for c in api.calls if c[0] == "remove"], [])
 
 
+class CommentOwnership(unittest.TestCase):
+    def test_foreign_or_missing_author_is_never_updated(self):
+        for marker in (pr_size.MARKER, pr_size.GATE_MARKER):
+            for user in (None, {}, {"login": "contributor", "type": "User"},
+                         {"login": "other[bot]", "type": "Bot"},
+                         {"login": "github-actions[bot]", "type": "User"}):
+                with self.subTest(marker=marker, user=user):
+                    api = pr_size.GitHubApi("test-token", "owner/name")
+                    foreign = {"id": 1, "body": marker, "user": user}
+                    api.request = mock.Mock(side_effect=[[foreign], {}])
+                    self.assertEqual(api.upsert_comment(7, marker + " new", marker), "created")
+                    self.assertEqual(api.request.call_args_list, [
+                        mock.call("GET", "/repos/owner/name/issues/7/comments?per_page=100&page=1"),
+                        mock.call("POST", "/repos/owner/name/issues/7/comments",
+                                  {"body": marker + " new"}),
+                    ])
+
+    def test_bot_comment_after_foreign_markers_on_later_page_is_updated(self):
+        for marker in (pr_size.MARKER, pr_size.GATE_MARKER):
+            with self.subTest(marker=marker):
+                api = pr_size.GitHubApi("test-token", "owner/name")
+                foreign = {"id": 1, "body": marker,
+                           "user": {"login": "contributor", "type": "User"}}
+                owned = {"id": 101, "body": marker,
+                         "user": {"login": "github-actions[bot]", "type": "Bot"}}
+                api.request = mock.Mock(side_effect=[[foreign] * 100, [owned], {}])
+                self.assertEqual(api.upsert_comment(7, marker + " new", marker), "updated")
+                self.assertEqual(api.request.call_args_list, [
+                    mock.call("GET", "/repos/owner/name/issues/7/comments?per_page=100&page=1"),
+                    mock.call("GET", "/repos/owner/name/issues/7/comments?per_page=100&page=2"),
+                    mock.call("PATCH", "/repos/owner/name/issues/comments/101",
+                              {"body": marker + " new"}),
+                ])
+
+    def test_unchanged_bot_comment_is_not_written(self):
+        api = pr_size.GitHubApi("test-token", "owner/name")
+        owned = {"id": 1, "body": pr_size.GATE_MARKER,
+                 "user": {"login": "github-actions[bot]", "type": "Bot"}}
+        api.request = mock.Mock(return_value=[owned])
+        self.assertEqual(api.upsert_comment(7, pr_size.GATE_MARKER, pr_size.GATE_MARKER), "updated")
+        self.assertEqual(api.request.call_count, 1)
+
+
 class Gate(unittest.TestCase):
     """The REQUIRED size gate: fails over the 400-line / 20-file budget,
     warns from 200 lines, no exception at or above the 1000-line hard
@@ -266,6 +309,55 @@ class Gate(unittest.TestCase):
             )
         )
         self.assertTrue(any("could not post comment" in line for line in logs))
+
+    def test_comment_lookup_failure_cannot_fail_measured_passing_gate(self):
+        for lines in (5, 250):
+            with self.subTest(lines=lines):
+                api = pr_size.GitHubApi("test-token", "owner/name")
+                api.pr_files = mock.Mock(return_value=self._over(lines))
+                api.request = mock.Mock(side_effect=pr_size.ApiError("comments -> HTTP 403"))
+                with mock.patch.dict(os.environ, self.ENV, clear=True), \
+                        mock.patch.object(pr_size, "GitHubApi", return_value=api), \
+                        contextlib.redirect_stdout(io.StringIO()) as out:
+                    self.assertEqual(pr_size.main(["pr_size.py", "gate"]), 0)
+                api.pr_files.assert_called_once_with(7)
+                self.assertIn("gate still passes", out.getvalue())
+                self.assertEqual(api.request.call_count, 1)
+
+    def test_passing_comment_patch_failure_is_best_effort(self):
+        for lines in (5, 250):
+            with self.subTest(lines=lines):
+                api = pr_size.GitHubApi("test-token", "owner/name")
+                api.pr_files = mock.Mock(return_value=self._over(lines))
+                owned = {"id": 1, "body": pr_size.GATE_MARKER,
+                         "user": {"login": "github-actions[bot]", "type": "Bot"}}
+
+                def request(method, path, body=None, owned=owned):
+                    if method == "GET":
+                        return [owned]
+                    raise pr_size.ApiError("PATCH comments/1 -> HTTP 403")
+
+                api.request = mock.Mock(side_effect=request)
+                self.assertTrue(self._call(api))
+                self.assertEqual(api.request.call_args.args[:2],
+                                 ("PATCH", "/repos/owner/name/issues/comments/1"))
+
+    def test_valid_exception_comment_failure_is_best_effort(self):
+        api = FakeApi(self._over(), labels=[pr_size.EXCEPTION_LABEL],
+                      reviews=[self._approved()])
+        api.upsert_comment = mock.Mock(side_effect=pr_size.ApiError("comments -> HTTP 403"))
+        self.assertTrue(self._call(api))
+        api.upsert_comment.assert_called_once()
+
+    def test_over_limit_comment_failure_still_exits_one(self):
+        for lines in (401, 1000):
+            with self.subTest(lines=lines):
+                api = FakeApi(self._over(lines))
+                api.upsert_comment = mock.Mock(side_effect=pr_size.ApiError("comments -> HTTP 403"))
+                with mock.patch.dict(os.environ, self.ENV, clear=True), \
+                        mock.patch.object(pr_size, "GitHubApi", return_value=api), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(pr_size.main(["pr_size.py", "gate"]), 1)
 
     def test_malformed_list_response_fails_closed(self):
         # An empty 200 body collapses to {}; paged must not read that as a
