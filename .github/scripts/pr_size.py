@@ -415,7 +415,8 @@ class GitHubApi:
 
         Association alone is not authorization - an organization MEMBER can
         hold only read access to this repository. Only a reviewer who can
-        write (or administer) the repository may grant the size exception.
+        write, maintain or administer the repository may grant the size
+        exception.
         """
         data = self.request(
             "GET", f"/repos/{self.repo}/collaborators/{username}/permission"
@@ -530,7 +531,7 @@ def approved_by_non_author(reviews, author, head_sha, permission_of):
     standing approval must also be on the current head - an approval of
     an older head never unlocks a newly pushed diff - and from a
     reviewer with approve weight (OWNER, MEMBER or COLLABORATOR) who can
-    write or administer this repository: association is not
+    write, maintain or administer this repository: association is not
     authorization, since a read-only organization member reports MEMBER
     but cannot grant the exception. `permission_of` maps a login to its
     repository permission; a lookup failure is not authorization. An
@@ -545,7 +546,7 @@ def approved_by_non_author(reviews, author, head_sha, permission_of):
 
     def authorized(login):
         try:
-            return permission_of(login) in ("admin", "write")
+            return permission_of(login) in ("admin", "maintain", "write")
         except ApiError:
             return False
 

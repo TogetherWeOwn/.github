@@ -549,8 +549,8 @@ exclusion - only the script's exclusions, per repo config, count.
   shrink its counted diff.
 - **Exception**: for a genuinely atomic change below the hard stop,
   label the pull request `size-exception` and get an APPROVED review
-  **from someone other than the author who can write or administer this
-  repository** (association is not authorization - a read-only
+  **from someone other than the author who can write, maintain or
+  administer this repository** (association is not authorization - a read-only
   organization member cannot grant the exception) - the gate then
   passes, but Devin must still be satisfied via review slices for the
   over-limit diff. The gate script ensures the label exists so authors
