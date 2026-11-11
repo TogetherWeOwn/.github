@@ -28,7 +28,7 @@ TARGETS = {
     ("ci", "secret-scan"): {},
     ("ci", "pincheck"): {"fetch-depth": "0"},
     ("ci", "gate-selftest"): {},
-    ("ci", "pr-size-selftest"): {},
+    ("ci", "pr-size-selftest"): {"fetch-depth": "0"},
     ("ci", "gradual-promote-selftest"): {},
     ("test-guard", "gate"): {"fetch-depth": "0"},
 }
