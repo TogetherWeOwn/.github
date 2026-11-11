@@ -27,7 +27,11 @@
 # `size-exception` label is applied or removed or a review is submitted
 # or dismissed, so granting an exception re-evaluates the check without
 # a manual re-run - and revoking it re-runs and fails the gate, instead
-# of leaving a stale passing check on the pull request.
+# of leaving a stale passing check on the pull request. The
+# `pull_request.edited` type is subscribed for the same reason: changing
+# a PR's base branch changes its diff size, so a previously passing gate
+# must not stay green for an oversized PR; extra runs on title/body edits
+# are harmless.
 #
 # The weekly tally's schedule lives here, in the caller, because the tally
 # is per-repository. It calls a SEPARATE reusable file so this job can stay
@@ -39,7 +43,7 @@ name: pr-size
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    types: [opened, edited, synchronize, reopened, ready_for_review, labeled, unlabeled]
   pull_request_review:
     types: [submitted, dismissed]
   schedule:

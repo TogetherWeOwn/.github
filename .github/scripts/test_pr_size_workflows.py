@@ -126,6 +126,17 @@ class TemplatePermissionContract(unittest.TestCase):
                     "this caller at workflow-parse time",
                 )
 
+    def test_template_subscribes_to_edited(self):
+        # `edited` fires on a base-branch change, which changes the diff
+        # size; without it a previously passing gate stays green for an
+        # oversized PR until some other subscribed event occurs.
+        text = TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn(
+            "types: [opened, edited, synchronize, reopened, "
+            "ready_for_review, labeled, unlabeled]",
+            text,
+        )
+
     def test_weekly_reusable_requests_read_only(self):
         # CI-STANDARD promises the weekly tally runs read-only; that is only
         # possible because pr-size-weekly.yml holds no write job.
