@@ -26,9 +26,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 CENTRAL_REPOSITORY = "TogetherWeOwn/.github"
-REVIEWED_SHA = "ac9ce8d63e0cebd19ede904ac79137190c329964"
+REVIEWED_SHAS = {
+    "label": "ac9ce8d63e0cebd19ede904ac79137190c329964",
+    "weekly": "ac9ce8d63e0cebd19ede904ac79137190c329964",
+    "gate": "86aec407d4fccc8b30ed9f9e484661f5d258239d",
+}
 SCRIPT = ".github/scripts/pr_size.py"
-SCRIPT_SHA256 = "6f1945a60713dabbd4fbf168243077a4d461409be91ce3c09a4e226b98df3e15"
+SCRIPT_SHA256 = {
+    "label": "193cd5c1a9d96e78905562bce3dbf71bdad19db5fda0b728bbda7723b1890ba9",
+    "weekly": "193cd5c1a9d96e78905562bce3dbf71bdad19db5fda0b728bbda7723b1890ba9",
+    "gate": "3d20e0d175bbe5957548a8993f6a2bcbe1987d99544f338ca4f474a24f6e545a",
+}
 MODES = {
     "pr-size.yml": "label",
     "pr-size-weekly.yml": "weekly",
@@ -89,14 +97,14 @@ def assert_trusted_source(test, text, mode):
     options = checkout_options(text, mode)
     # Full identity, not merely a 40-hex shape: an unreviewed commit or a
     # caller's otherwise-valid SHA is not an approved script snapshot.
-    for field, expected in (("repository", CENTRAL_REPOSITORY), ("ref", REVIEWED_SHA)):
+    for field, expected in (("repository", CENTRAL_REPOSITORY), ("ref", REVIEWED_SHAS[mode])):
         with test.subTest(field=field):
             test.assertEqual(options.get(field), expected)
 
 
-def source_fixture(text):
+def source_fixture(text, mode):
     """Known-good source fields for controls, even before the fix is present."""
-    for field, value in (("repository", CENTRAL_REPOSITORY), ("ref", REVIEWED_SHA)):
+    for field, value in (("repository", CENTRAL_REPOSITORY), ("ref", REVIEWED_SHAS[mode])):
         text, count = re.subn(
             rf"(?m)^          {field}: .*$", f"          {field}: {value}", text
         )
@@ -184,22 +192,24 @@ class CentralSourceContract(unittest.TestCase):
     def test_pinned_script_bytes_match_the_reviewed_snapshot(self):
         # The proposed working-tree script can differ until a later reviewed
         # repin. Verify the bytes actually selected by the immutable ref.
-        pinned = subprocess.check_output(
-            ["git", "show", f"{REVIEWED_SHA}:{SCRIPT}"], cwd=ROOT
-        )
-        self.assertEqual(hashlib.sha256(pinned).hexdigest(), SCRIPT_SHA256)
+        for mode, ref in REVIEWED_SHAS.items():
+            with self.subTest(mode=mode):
+                pinned = subprocess.check_output(
+                    ["git", "show", f"{ref}:{SCRIPT}"], cwd=ROOT
+                )
+                self.assertEqual(hashlib.sha256(pinned).hexdigest(), SCRIPT_SHA256[mode])
 
 
 class SourceNegativeControls(unittest.TestCase):
     def test_reviewed_source_fixture_is_accepted(self):
         for filename, mode in MODES.items():
             with self.subTest(workflow=filename):
-                text = source_fixture((WORKFLOWS / filename).read_text())
+                text = source_fixture((WORKFLOWS / filename).read_text(), mode)
                 assert_trusted_source(self, text, mode)
 
     def test_caller_or_fork_repository_is_rejected(self):
         for filename, mode in MODES.items():
-            good = source_fixture((WORKFLOWS / filename).read_text())
+            good = source_fixture((WORKFLOWS / filename).read_text(), mode)
             for repository in (
                 "${{ job.workflow_repository }}",
                 "${{ github.repository }}",
@@ -216,9 +226,18 @@ class SourceNegativeControls(unittest.TestCase):
                         # assertRaises rather than swallowing it in a subTest.
                         assert_trusted_source(unittest.TestCase(), bad, mode)
 
+    def test_other_modes_reviewed_ref_is_rejected(self):
+        for filename, mode in MODES.items():
+            good = source_fixture((WORKFLOWS / filename).read_text(), mode)
+            for ref in set(REVIEWED_SHAS.values()) - {REVIEWED_SHAS[mode]}:
+                with self.subTest(workflow=filename, ref=ref):
+                    bad = good.replace(f"ref: {REVIEWED_SHAS[mode]}", f"ref: {ref}")
+                    with self.assertRaises(AssertionError):
+                        assert_trusted_source(unittest.TestCase(), bad, mode)
+
     def test_mutable_caller_or_unreviewed_ref_is_rejected(self):
         for filename, mode in MODES.items():
-            good = source_fixture((WORKFLOWS / filename).read_text())
+            good = source_fixture((WORKFLOWS / filename).read_text(), mode)
             for ref in (
                 "${{ job.workflow_sha }}",
                 "${{ github.sha }}",
@@ -238,7 +257,7 @@ class SourceNegativeControls(unittest.TestCase):
                 "",
             ):
                 with self.subTest(workflow=filename, ref=ref):
-                    bad = good.replace(f"ref: {REVIEWED_SHA}", f"ref: {ref}")
+                    bad = good.replace(f"ref: {REVIEWED_SHAS[mode]}", f"ref: {ref}")
                     with self.assertRaises(AssertionError):
                         assert_trusted_source(unittest.TestCase(), bad, mode)
 
