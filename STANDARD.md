@@ -451,12 +451,14 @@ labeller or silence its own label by deleting a local copy.
   `size/L` <= 1000 counted lines (additions + deletions, lockfiles /
   generated files / fixtures excluded), `size/XL` above that. They are not
   caller inputs; changing them is one reviewed PR here.
-- **Advisory only, permanently.** `pr-size` is never a required status
-  check and must never appear in a ruleset's required-workflows list -
-  either would make it block merges and break the invariant. Org-level
-  inheritance happens through this template and repo bootstrap, not merge
-  blocking. The script exits 0 on any API failure (and fork PRs, whose
-  token is read-only, warn and skip), so labelling can never turn a run red.
+- **Advisory only, permanently - with one deliberate exception.** The
+  `pr-size` label workflow is never a required status check and must never
+  appear in a ruleset's required-workflows list. The labeller exits 0 on
+  any API failure (and fork PRs, whose token is read-only, warn and skip),
+  so labelling can never turn a run red. The exception is `pr-size-gate`
+  (next section): a separate reusable workflow whose whole purpose is to
+  block, and which therefore MUST be required. Org-level inheritance
+  happens through the template and repo bootstrap, not merge blocking.
 - **Token**: callers grant job-level `issues: write` + `pull-requests:
   write` to call the label reusable and read-only to call the weekly one.
   The two modes are separate reusable FILES because GitHub validates a
@@ -483,6 +485,83 @@ labeller or silence its own label by deleting a local copy.
   pinned labeller, which is safe because it is advisory.
 
 Reference adoption: TogetherWeOwn/two-web-next `.github/workflows/pr-size.yml`.
+
+### PR size gate
+
+A required status check that fails pull requests too large to review
+carefully - by the automated reviewer (Devin Review) or a human - so an
+over-limit diff fails here instead of wasting a review cycle on a
+refusal or a superficial review later. One definition, same repo: the
+`gate` mode of `.github/scripts/pr_size.py` behind the reusable
+`.github/workflows/pr-size-gate.yml`, reusing the advisory script's
+counted-line exclusions (lockfiles, generated files, vendored code,
+snapshots, fixtures - plus each repo's `exclude-extra`). The metric is
+additions + deletions against the PR base; gate comments report raw and
+reviewable totals separately. Hiding files in GitHub's display is not
+exclusion - only the script's exclusions, per repo config, count.
+
+- **Thresholds** (never raise per-repository): target 100-200 reviewable
+  lines and 10 or fewer files; warn (post a warning comment, still
+  pass) from 200 counted lines; fail over 400 counted lines or over 20
+  counted files; hard stop at or above 1,000 counted lines, where no
+  exception applies.
+- **Why not Devin's ceiling**: Devin's limit is undocumented; the org
+  measurement of 739 recent PR heads only brackets it (35,226 raw
+  lines reviewed, labelloop#12; 47,982 refused, nntunev2#908, a
+  3-second instant failure; drafts carry no Devin status and are not
+  evidence). The numbers above are the evidence-based reviewability
+  budget, from Google's Small CLs (~100 lines reasonable, ~1,000 too
+  large), GitLab's code-review guidance (~200) and SmartBear/Cisco
+  peer-review findings (200-400 lines per review session). A gate set
+  at Devin's ceiling would accept everything up to the refusal point.
+  The full evidence is recorded in the reusable workflow's header
+  comment; re-measure before ever moving the thresholds.
+- **Fails closed**: if the size cannot be measured, the check errors
+  instead of passing silently. Passing-path comments are best-effort,
+  so a fork PR (read-only token) within the budget passes on that
+  token; a fork PR over the gate still errors (it cannot post the
+  failure comment, ensure the exception label, or complete the
+  exception approval) - intentional.
+- **Devin success is not proof of review**: merge-conflict skips also
+  report `success` (two-web-next#2064). Whether Devin actually reviewed
+  is decided by the review rules, which check the status description,
+  not just its state - not by this gate.
+- **Ship in two steps** (the "never require a check before its workflow
+  exists on the default branch" rule above): merge the caller workflow,
+  confirm the gate reports on the default branch, then require the
+  caller's `pr-size-gate` job in the ruleset (the check the caller
+  workflow reports; the reusable workflow itself is never required
+  standalone).
+- **Split procedure** (the gate's failure comment links here): split an
+  over-gate pull request as **stacked pull requests** (independently
+  mergeable pieces, each landing on the previous one's branch),
+  **refactor-then-change** (mechanical moves first, behaviour change
+  second), **feature flags** for incomplete features, **generated code
+  in its own pull request**, or as **review-only slices**: one
+  mergeable pull request plus slice pull requests titled
+  `review-slice N/M of #<original> - do not merge` that carry the
+  over-limit code in chunks for reviewers (Devin and humans) and are
+  closed once the mergeable part lands; each slice must itself be under
+  the gate. Slicing by review order (e.g. production code first, tests
+  last) keeps each slice focused. Review slices apply **below** the
+  hard stop - at or above it the mergeable pull request itself must be
+  split into smaller mergeable pull requests, since slices do not
+  shrink its counted diff.
+- **Exception**: for a genuinely atomic change below the hard stop,
+  label the pull request `size-exception` and get an APPROVED review
+  **from someone other than the author who can write, maintain or
+  administer this repository** (association is not authorization - a read-only
+  organization member cannot grant the exception) - the gate then
+  passes, but Devin must still be satisfied via review slices for the
+  over-limit diff. The gate script ensures the label exists so authors
+  can apply it themselves. The gate re-evaluates when the label is
+  applied or removed or a review is submitted or dismissed, so
+  granting the exception needs no manual re-run and revoking it
+  re-runs and fails the gate instead of leaving a stale passing check.
+  At or above the hard stop there is no exception: split
+  it. The gate, its comment and this section are the whole contract;
+  there is no per-repo override and no way to skip the gate without the
+  exception.
 
 ### Banned
 

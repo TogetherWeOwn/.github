@@ -148,6 +148,7 @@ class OrgStandardTests(unittest.TestCase):
                     "STANDARD.md#4-ci-rules",
                 "rules": "STANDARD.md#4-ci-rules",
                 "advisory-pr-size-labels": "STANDARD.md#advisory-pr-size-labels",
+                "pr-size-gate": "STANDARD.md#pr-size-gate",
                 "banned": "STANDARD.md#banned",
                 "verification-per-repo": "STANDARD.md#6-verification-and-adoption",
             },

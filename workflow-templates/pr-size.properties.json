@@ -1,5 +1,5 @@
 {
   "name": "pr-size",
-  "description": "Advisory PR size labels (size/S/M/L/XL) via the org reusable workflow - never a required check (TogetherWeOwn standard).",
+  "description": "Advisory PR size labels (size/S/M/L/XL) plus the REQUIRED pr-size-gate (fails PRs too large for the automated reviewer) via the org reusable workflows (TogetherWeOwn standard).",
   "iconName": "octicon tag"
 }

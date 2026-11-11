@@ -22,8 +22,9 @@
 # The tally logic is the `weekly` mode of `.github/scripts/pr_size.py`,
 # checked out from THIS repository at an explicit, reviewed main-branch
 # commit - the same single definition and SHA the labeller uses. When the
-# script changes, commit it first, then repin BOTH reusable workflows to
-# that reviewed main-branch SHA; never use a caller context or PR head.
+# script changes, commit it first, then repin ALL THREE reusable workflows
+# (this file, `pr-size.yml`, `pr-size-gate.yml`) to that reviewed
+# main-branch SHA; never use a caller context or PR head.
 #
 # Token: no secrets are passed or needed. The job's GITHUB_TOKEN is minted
 # for the caller's repository and capped by the caller's job permissions;
@@ -57,7 +58,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: TogetherWeOwn/.github
-          ref: a3c24dfba42f2a8092889541bb256d244e9f67c2
+          ref: 83e05750e1bbf1632e86ed987caebb4a989bbf7b
           path: .pr-size-central
           sparse-checkout: .github/scripts/pr_size.py
           persist-credentials: false
