@@ -365,7 +365,7 @@ class Gate(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("::error::pr_size gate could not verify size:", out.getvalue())
 
-    ENV = {"REPO": "owner/name", "GH_TOKEN": "test-token", "PR_NUMBER": "7",
+    ENV: ClassVar[dict[str, str]] = {"REPO": "owner/name", "GH_TOKEN": "test-token", "PR_NUMBER": "7",
            "PR_SIZE_GATE_THRESHOLD": "400", "PR_SIZE_GATE_FILES": "20",
            "PR_SIZE_HARD_STOP": "1000", "PR_SIZE_WARN_THRESHOLD": "200"}
 
