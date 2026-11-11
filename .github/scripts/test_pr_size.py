@@ -407,7 +407,7 @@ class Gate(unittest.TestCase):
                     if path.startswith("/repos/owner/name/pulls/7/files?"):
                         data = self._over(1000 if scenario == "hard_stop" else 401)
                     elif path == "/repos/owner/name/pulls/7":
-                        if scenario == "label_read_error":
+                        if scenario == "label_read_error" and calls.count((method, path)) == 3:
                             raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, None)
                         data = {"labels": [] if scenario == "no_label" else
                                 [{"name": pr_size.EXCEPTION_LABEL}],
@@ -437,6 +437,9 @@ class Gate(unittest.TestCase):
                     self.assertIn(("GET", "/repos/owner/name/collaborators/reviewer/permission"), calls)
                 if scenario == "no_label":
                     self.assertIn(("POST", "/repos/owner/name/labels"), calls)
+                if scenario == "label_read_error":
+                    self.assertEqual(calls.count(("GET", "/repos/owner/name/pulls/7")), 3)
+                    self.assertNotIn(("POST", "/repos/owner/name/labels"), calls)
 
     def test_valid_exception_comment_failure_is_best_effort(self):
         api = FakeApi(self._over(), labels=[pr_size.EXCEPTION_LABEL],
