@@ -27,7 +27,7 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 CENTRAL_REPOSITORY = "TogetherWeOwn/.github"
 REVIEWED_SHA = "ac9ce8d63e0cebd19ede904ac79137190c329964"
 SCRIPT = ".github/scripts/pr_size.py"
-SCRIPT_SHA256 = "6f1945a60713dabbd4fbf168243077a4d461409be91ce3c09a4e226b98df3e15"
+SCRIPT_SHA256 = "34b95b26b3fab3a493a416f5ae62a85d86faa6423aefb5eff22be2065e2bf597"
 MODES = {
     "pr-size.yml": "label",
     "pr-size-weekly.yml": "weekly",

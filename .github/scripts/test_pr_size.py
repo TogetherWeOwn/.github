@@ -350,7 +350,7 @@ class Gate(unittest.TestCase):
             with self.subTest(scenario=scenario):
                 calls = []
 
-                def urlopen(request, timeout):
+                def urlopen(request, timeout, scenario=scenario, calls=calls):
                     method, path = request.get_method(), request.full_url.split("api.github.com", 1)[1]
                     calls.append((method, path))
                     if method != "GET":
