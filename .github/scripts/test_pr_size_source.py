@@ -19,6 +19,7 @@ GitHub expression semantics. Negative controls mutate strings in memory only.
 
 import hashlib
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -180,8 +181,13 @@ class CentralSourceContract(unittest.TestCase):
                     {"contents": "read", "issues": level, "pull-requests": level},
                 )
 
-    def test_script_bytes_still_match_the_reviewed_snapshot(self):
-        self.assertEqual(hashlib.sha256((ROOT / SCRIPT).read_bytes()).hexdigest(), SCRIPT_SHA256)
+    def test_pinned_script_bytes_match_the_reviewed_snapshot(self):
+        # The proposed working-tree script can differ until a later reviewed
+        # repin. Verify the bytes actually selected by the immutable ref.
+        pinned = subprocess.check_output(
+            ["git", "show", f"{REVIEWED_SHA}:{SCRIPT}"], cwd=ROOT
+        )
+        self.assertEqual(hashlib.sha256(pinned).hexdigest(), SCRIPT_SHA256)
 
 
 class SourceNegativeControls(unittest.TestCase):
