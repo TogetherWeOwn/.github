@@ -126,6 +126,30 @@ class TemplatePermissionContract(unittest.TestCase):
                     "this caller at workflow-parse time",
                 )
 
+    def test_template_subscribes_to_edited(self):
+        # `edited` fires when a pull request is retargeted to a different
+        # base branch, which changes the diff size; without it a previously
+        # passing gate stays green for an oversized pull request until some
+        # other subscribed event occurs. Title/body edits also fire `edited`;
+        # the extra re-measurement is harmless (seconds-long script run).
+        text = TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn(
+            "types: [opened, edited, synchronize, reopened, "
+            "ready_for_review, labeled, unlabeled]",
+            text,
+        )
+
+    def test_dispatch_does_not_satisfy_gate(self):
+        # A manual workflow_dispatch run is not associated with a pull
+        # request, so it cannot update or satisfy the required gate check.
+        # The input description must say so, or authors will expect a
+        # manual run to clear the gate.
+        text = TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn(
+            "manual runs do not update or satisfy the PR gate check",
+            text,
+        )
+
     def test_weekly_reusable_requests_read_only(self):
         # CI-STANDARD promises the weekly tally runs read-only; that is only
         # possible because pr-size-weekly.yml holds no write job.
