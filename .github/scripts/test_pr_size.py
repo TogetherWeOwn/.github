@@ -179,17 +179,34 @@ class LabelFlow(unittest.TestCase):
 
 
 class Gate(unittest.TestCase):
-    """The REQUIRED size gate: fails over threshold, exception via label +
-    a non-author APPROVED review, fails closed on API errors."""
+    """The REQUIRED size gate: fails over the 400-line / 20-file budget,
+    warns from 200 lines, no exception at or above the 1000-line hard
+    stop, exception via label + a non-author APPROVED review below it,
+    fails closed on API errors."""
 
-    GATE = 20000
+    GATE = 400
+    GATE_FILES = 20
+    HARD_STOP = 1000
+    WARN = 200
 
-    def _over(self, lines=20001):
+    def _call(self, api):
+        return pr_size.gate_pr(
+            api, 7, self.GATE, (), self.GATE_FILES, self.HARD_STOP, self.WARN,
+            log=lambda *_: None,
+        )
+
+    def _over(self, lines=401):
         return [{"filename": "src/big.ts", "additions": lines, "deletions": 0}]
+
+    def _files(self, count, each=5):
+        return [
+            {"filename": f"src/f{i}.ts", "additions": each, "deletions": 0}
+            for i in range(count)
+        ]
 
     def test_under_threshold_passes_silently(self):
         api = FakeApi([{"filename": "a.ts", "additions": 5, "deletions": 0}])
-        self.assertTrue(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+        self.assertTrue(self._call(api))
         self.assertEqual(api.calls, [])
 
     def test_under_threshold_updates_old_gate_comment(self):
@@ -197,21 +214,76 @@ class Gate(unittest.TestCase):
             [{"filename": "a.ts", "additions": 5, "deletions": 0}],
             marker_comment={"id": 1, "body": pr_size.GATE_MARKER},
         )
-        self.assertTrue(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+        self.assertTrue(self._call(api))
         comments = [body for kind, body in api.calls if kind == "comment"]
         self.assertEqual(len(comments), 1)
         self.assertIn("back under", comments[0])
 
+    def test_over_warn_threshold_passes_with_warning_comment(self):
+        api = FakeApi(self._over(250))
+        self.assertTrue(self._call(api))
+        comments = [body for kind, body in api.calls if kind == "comment"]
+        self.assertEqual(len(comments), 1)
+        self.assertIn(pr_size.GATE_MARKER, comments[0])
+        self.assertIn("250 counted lines", comments[0])
+        self.assertIn(f"{self.WARN}-line", comments[0])
+
     def test_over_threshold_without_exception_fails_with_procedure(self):
         api = FakeApi(self._over(), labels=["size/XL"])
-        self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+        self.assertFalse(self._call(api))
         self.assertIn(("ensure-named", pr_size.EXCEPTION_LABEL), api.calls)
         comments = [body for kind, body in api.calls if kind == "comment"]
         self.assertEqual(len(comments), 1)
         self.assertIn(pr_size.GATE_MARKER, comments[0])
         self.assertIn(pr_size.SPLIT_PROCEDURE_URL, comments[0])
-        self.assertIn("20001 counted lines", comments[0])
+        self.assertIn("401 counted lines", comments[0])
         self.assertIn(pr_size.EXCEPTION_LABEL, comments[0])
+
+    def test_failure_comment_reports_raw_and_reviewable_totals(self):
+        api = FakeApi([
+            {"filename": "src/big.ts", "additions": 401, "deletions": 0},
+            {"filename": "package-lock.json", "additions": 900, "deletions": 0},
+        ])
+        self.assertFalse(self._call(api))
+        comments = [body for kind, body in api.calls if kind == "comment"]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("401 counted lines", comments[0])
+        self.assertIn("raw diff 1301 lines", comments[0])
+        self.assertIn("900 in lockfiles", comments[0])
+
+    def test_over_file_threshold_fails_even_with_few_lines(self):
+        api = FakeApi(self._files(21))
+        self.assertFalse(self._call(api))
+        comments = [body for kind, body in api.calls if kind == "comment"]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("21 files", comments[0])
+
+    def test_at_file_threshold_passes(self):
+        api = FakeApi(self._files(20))
+        self.assertTrue(self._call(api))
+        self.assertEqual(api.calls, [])
+
+    def test_just_under_hard_stop_exception_still_applies(self):
+        api = FakeApi(
+            self._over(999),
+            labels=[pr_size.EXCEPTION_LABEL],
+            author="author",
+            reviews=[{"state": "APPROVED", "user": {"login": "reviewer"}}],
+        )
+        self.assertTrue(self._call(api))
+
+    def test_hard_stop_fails_even_with_exception_label_and_approval(self):
+        api = FakeApi(
+            self._over(1500),
+            labels=[pr_size.EXCEPTION_LABEL],
+            author="author",
+            reviews=[{"state": "APPROVED", "user": {"login": "reviewer"}}],
+        )
+        self.assertFalse(self._call(api))
+        comments = [body for kind, body in api.calls if kind == "comment"]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("1500 counted lines", comments[0])
+        self.assertIn(f"{self.HARD_STOP}-line hard stop", comments[0])
 
     def test_exception_label_without_approval_still_fails(self):
         api = FakeApi(self._over(), labels=[pr_size.EXCEPTION_LABEL])
@@ -295,7 +367,8 @@ class Gate(unittest.TestCase):
         self.assertIn("::error::pr_size gate could not verify size:", out.getvalue())
 
     ENV = {"REPO": "owner/name", "GH_TOKEN": "test-token", "PR_NUMBER": "7",
-           "PR_SIZE_GATE_THRESHOLD": "20000"}
+           "PR_SIZE_GATE_THRESHOLD": "400", "PR_SIZE_GATE_FILES": "20",
+           "PR_SIZE_HARD_STOP": "1000", "PR_SIZE_WARN_THRESHOLD": "200"}
 
 
 class Weekly(unittest.TestCase):

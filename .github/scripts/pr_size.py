@@ -6,24 +6,35 @@ Two contracts share this one file:
 * label / weekly are advisory only. Their workflows are never required
   checks; any API failure is a warning and an exit code of 0. They exist as
   a visible nudge plus a countable record (the labels) for a weekly tally.
-* gate is a REQUIRED check. It fails (exit 1) when the reviewable diff is
-  larger than the automated reviewer (Devin Review) can review, so an
-  over-limit pull request fails here instead of wasting a review cycle on
-  a refusal later. It fails closed: if the size cannot be measured, it
-  errors rather than passing silently. The only way past it for a
-  genuinely atomic change is the `size-exception` label plus an APPROVED
-  review from someone other than the author - and even then the diff must
-  still be reviewed by Devin via review slices (see the STANDARD.md
-  "PR size gate" section).
+* gate is a REQUIRED check. It fails (exit 1) when the reviewable diff
+  exceeds the reviewability budget - more than 400 counted lines or more
+  than 20 counted files - so an over-limit pull request fails here instead
+  of wasting a review cycle on a refusal (or a superficial review) later.
+  It fails closed: if the size cannot be measured, it errors rather than
+  passing silently. Pull requests at or above the 1,000-line hard stop
+  have no exception: they must be split. Between the gate and the hard
+  stop, the only way past it for a genuinely atomic change is the
+  `size-exception` label plus an APPROVED review from someone other than
+  the author - and even then Devin must still be satisfied via review
+  slices (see the STANDARD.md "PR size gate" section). The gate warns
+  (posts a warning comment, still passes) from 200 counted lines.
+
+  Why these numbers, not the automated reviewer's ceiling: Devin's limit
+  is not documented, and measurements only bracket it (35,226 raw lines
+  reviewed vs 47,982 refused), so the gate sits at the evidence-based
+  reviewability budget, far below any reviewer ceiling (see the gate
+  reusable's threshold comment for the sources).
 
 Size is additions + deletions over the files the pull-request API reports,
 excluding lockfiles, generated files and fixtures (see EXCLUDED below; a repo
 adds its own generated paths with PR_SIZE_EXCLUDE_EXTRA). A renamed file is
 judged by its new path. Binary files report 0 additions/deletions in the API,
-so images and other binaries never inflate the count. The gate reuses these
-same exclusions: measured evidence (see the gate reusable's threshold
-comment) is in raw diff lines, while the gate counts fewer, so the counted
-threshold sits safely below the raw refusal point.
+so images and other binaries never inflate the count. The gate and its
+comments report raw and reviewable (counted) totals separately: the raw
+total is every reported line, the reviewable total is after exclusions,
+and only the reviewable total is gated. Hiding files in GitHub's display
+is not exclusion - the exclusions above are the script's, applied per
+repository config, never the viewer's.
 
 Modes (first argument):
   label   Label one pull request and keep one advisory comment when the
@@ -31,8 +42,11 @@ Modes (first argument):
   weekly  Count pull requests merged in the last 7 days by size label and
           print the tally (also appended to $GITHUB_STEP_SUMMARY when set).
   gate    Required check: exit 1 when the counted size exceeds
-          PR_SIZE_GATE_THRESHOLD without a valid `size-exception`, and keep
-          a failure comment with the split procedure.
+          PR_SIZE_GATE_THRESHOLD lines or PR_SIZE_GATE_FILES files
+          without a valid `size-exception` (never at or above
+          PR_SIZE_HARD_STOP), and keep a failure comment with the split
+          procedure. Passing-but-large diffs (at or above
+          PR_SIZE_WARN_THRESHOLD lines) keep a warning comment.
 
 Environment contract (every value is a plain string):
   GH_TOKEN               token for the GitHub API (the workflow's GITHUB_TOKEN)
@@ -40,7 +54,12 @@ Environment contract (every value is a plain string):
   PR_NUMBER              label and gate modes: the pull request number
   PR_SIZE_THRESHOLD      label mode: counted lines above which the advisory
                          comment posts (default 400)
-  PR_SIZE_GATE_THRESHOLD gate mode: counted lines the gate allows (default 20000)
+  PR_SIZE_GATE_THRESHOLD gate mode: counted lines the gate allows (default 400)
+  PR_SIZE_GATE_FILES     gate mode: counted files the gate allows (default 20)
+  PR_SIZE_HARD_STOP      gate mode: counted lines where the exception no
+                         longer applies (default 1000)
+  PR_SIZE_WARN_THRESHOLD gate mode: counted lines from which the passing
+                         gate warns (default 200)
   PR_SIZE_EXCLUDE_EXTRA  comma-separated extra exclusion globs for this repo
   GITHUB_API_URL         API base (default https://api.github.com)
   GITHUB_STEP_SUMMARY    optional path the weekly tally is appended to
@@ -68,7 +87,10 @@ UTC = timezone(timedelta(0))
 MARKER = "<!-- pr-size-advisory -->"
 GATE_MARKER = "<!-- pr-size-gate -->"
 DEFAULT_THRESHOLD = 400
-DEFAULT_GATE_THRESHOLD = 20000
+DEFAULT_GATE_THRESHOLD = 400
+DEFAULT_GATE_FILE_THRESHOLD = 20
+DEFAULT_HARD_STOP_THRESHOLD = 1000
+DEFAULT_WARN_THRESHOLD = 200
 EXCEPTION_LABEL = "size-exception"
 EXCEPTION_LABEL_COLOR = "5319E7"
 # The split procedure for over-gate pull requests, published once in the
@@ -201,27 +223,37 @@ def under_body(counted, threshold):
     return "\n".join(lines) + "\n"
 
 
-def gate_failure_body(counted, excluded, counted_files, threshold):
+def gate_failure_body(counted, excluded, counted_files,
+                      threshold=DEFAULT_GATE_THRESHOLD,
+                      file_threshold=DEFAULT_GATE_FILE_THRESHOLD,
+                      hard_stop=DEFAULT_HARD_STOP_THRESHOLD):
     files_word = "file" if counted_files == 1 else "files"
+    raw = counted + excluded
     lines = [
         GATE_MARKER,
-        "## Pull request too large to review automatically (required gate)",
+        "## Pull request too large to review (required gate)",
         "",
         (f"This pull request changes **{counted} counted lines** across "
-         f"{counted_files} {files_word}, over the {threshold}-line gate "
-         f"({excluded} further lines in lockfiles, generated files and "
-         "fixtures are not counted). The automated reviewer refuses diffs "
-         "this large, so this check fails now instead of wasting a review "
-         "cycle on a refusal later."),
+         f"{counted_files} {files_word} (raw diff {raw} lines including "
+         f"{excluded} in lockfiles, generated files and fixtures, which "
+         f"are not counted), over the {threshold}-line / {file_threshold}-file "
+         "gate. Reviewers - automated and human alike - cannot review "
+         "diffs this large carefully, so this check fails now instead of "
+         "wasting a review cycle on a refusal or a superficial review later."),
         "",
-        f"**Split it.** Follow the split procedure: {SPLIT_PROCEDURE_URL} - "
-        "stacked pull requests, or review-only slices alongside one mergeable "
-        "pull request.",
+        (f"**Split it.** Follow the split procedure: {SPLIT_PROCEDURE_URL} - "
+         "stacked pull requests, refactor-then-change, feature flags for "
+         "incomplete features, generated code in its own pull request, or "
+         "review-only slices alongside one mergeable pull request (each "
+         "slice its own small pull request)."),
         "",
         (f"**Genuinely atomic?** Add the `{EXCEPTION_LABEL}` label and get an "
          "APPROVED review **from someone other than the author**; this gate "
-         "then passes. Devin must still be satisfied via review slices for "
-         "the over-limit diff even with the exception."),
+         f"then passes - but only below the {hard_stop}-line hard stop. At "
+         "or above the hard stop there is no exception: split it (review "
+         "slices count as separate small pull requests). Devin must still "
+         "be satisfied via review slices for the over-limit diff even with "
+         "the exception."),
     ]
     return "\n".join(lines) + "\n"
 
@@ -242,13 +274,34 @@ def gate_exception_body(counted, threshold):
     return "\n".join(lines) + "\n"
 
 
-def gate_under_body(counted, threshold):
+def gate_under_body(counted, excluded, threshold, file_threshold):
     lines = [
         GATE_MARKER,
         "## Pull request size gate",
         "",
-        (f"This pull request is back under the {threshold}-line gate "
-         f"({counted} counted lines). Thank you."),
+        (f"This pull request is back under the {threshold}-line / "
+         f"{file_threshold}-file gate ({counted} counted lines, raw diff "
+         f"{counted + excluded} lines). Thank you."),
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def gate_warn_body(counted, excluded, counted_files,
+                   threshold=DEFAULT_GATE_THRESHOLD,
+                   warn=DEFAULT_WARN_THRESHOLD):
+    files_word = "file" if counted_files == 1 else "files"
+    lines = [
+        GATE_MARKER,
+        "## Pull request size gate: large but passing (warning)",
+        "",
+        (f"This pull request changes **{counted} counted lines** across "
+         f"{counted_files} {files_word} (raw diff {counted + excluded} "
+         f"lines including {excluded} in lockfiles, generated files and "
+         f"fixtures, which are not counted) - over the {warn}-line review "
+         f"target but under the {threshold}-line / "
+         f"{DEFAULT_GATE_FILE_THRESHOLD}-file gate, so this check passes. "
+         "The target is 100-200 lines and 10 files or fewer; smaller pull "
+         "requests get faster, more careful review."),
     ]
     return "\n".join(lines) + "\n"
 
@@ -461,24 +514,56 @@ def approved_by_non_author(reviews, author):
     )
 
 
-def gate_pr(api, number, threshold, extra_globs, log=print):
+def gate_pr(api, number, threshold, extra_globs,
+            file_threshold=DEFAULT_GATE_FILE_THRESHOLD,
+            hard_stop=DEFAULT_HARD_STOP_THRESHOLD,
+            warn=DEFAULT_WARN_THRESHOLD, log=print):
     """Required size gate for one pull request. True when it may merge.
 
-    Passes when the counted size is within the threshold, or over it with a
-    valid `size-exception` (label plus APPROVED review from a non-author).
-    Otherwise posts the split-procedure comment and returns False; the
-    caller exits 1. ApiError propagates: the gate fails closed.
+    Passes when the counted size is within the line and file thresholds
+    (with a warning comment at or above the warn line count), or over them
+    with a valid `size-exception` below the hard stop. At or above the
+    hard stop no exception applies. Otherwise posts the split-procedure
+    comment and returns False; the caller exits 1. ApiError propagates:
+    the gate fails closed.
     """
     files = api.pr_files(number)
     counted, excluded, counted_files = count_files(files, extra_globs)
     log(
         f"PR #{number}: {counted} counted lines ({counted_files} files), "
-        f"{excluded} excluded lines, gate threshold {threshold}"
+        f"raw diff {counted + excluded} lines ({excluded} excluded), gate "
+        f"{threshold} lines / {file_threshold} files, hard stop {hard_stop}, "
+        f"warn from {warn}"
     )
-    if counted <= threshold:
-        if api.find_marker_comment(number, GATE_MARKER) is not None:
-            api.upsert_comment(number, gate_under_body(counted, threshold), GATE_MARKER)
+    if counted <= threshold and counted_files <= file_threshold:
+        if counted >= warn:
+            log(
+                f"::warning::pr_size gate: {counted} counted lines is over "
+                f"the {warn}-line review target (gate {threshold} lines / "
+                f"{file_threshold} files); passing with a warning."
+            )
+            api.upsert_comment(
+                number,
+                gate_warn_body(counted, excluded, counted_files, threshold, warn),
+                GATE_MARKER,
+            )
+        elif api.find_marker_comment(number, GATE_MARKER) is not None:
+            api.upsert_comment(
+                number,
+                gate_under_body(counted, excluded, threshold, file_threshold),
+                GATE_MARKER,
+            )
         return True
+    fail_body = gate_failure_body(
+        counted, excluded, counted_files, threshold, file_threshold, hard_stop
+    )
+    if counted >= hard_stop:
+        log(
+            f"PR #{number}: {counted} counted lines at or above the "
+            f"{hard_stop}-line hard stop; {EXCEPTION_LABEL} does not apply"
+        )
+        api.upsert_comment(number, fail_body, GATE_MARKER)
+        return False
     api.ensure_named_label(
         EXCEPTION_LABEL,
         EXCEPTION_LABEL_COLOR,
@@ -493,11 +578,7 @@ def gate_pr(api, number, threshold, extra_globs, log=print):
         log(f"PR #{number}: {EXCEPTION_LABEL} approved by a non-author; gate passes")
         api.upsert_comment(number, gate_exception_body(counted, threshold), GATE_MARKER)
         return True
-    api.upsert_comment(
-        number,
-        gate_failure_body(counted, excluded, counted_files, threshold),
-        GATE_MARKER,
-    )
+    api.upsert_comment(number, fail_body, GATE_MARKER)
     return False
 
 
@@ -522,13 +603,20 @@ def main(argv):
         # size or a failed API call is an error, never a silent pass.
         try:
             threshold = int(os.environ.get("PR_SIZE_GATE_THRESHOLD", DEFAULT_GATE_THRESHOLD))
-            ok = gate_pr(api, int(os.environ["PR_NUMBER"]), threshold, _extra_globs())
+            file_threshold = int(os.environ.get("PR_SIZE_GATE_FILES", DEFAULT_GATE_FILE_THRESHOLD))
+            hard_stop = int(os.environ.get("PR_SIZE_HARD_STOP", DEFAULT_HARD_STOP_THRESHOLD))
+            warn = int(os.environ.get("PR_SIZE_WARN_THRESHOLD", DEFAULT_WARN_THRESHOLD))
+            ok = gate_pr(
+                api, int(os.environ["PR_NUMBER"]), threshold, _extra_globs(),
+                file_threshold, hard_stop, warn,
+            )
         except (ApiError, KeyError, ValueError) as exc:
             print(f"::error::pr_size gate could not verify size: {exc}")
             return 1
         if not ok:
-            print(f"::error::pr_size gate: diff over {threshold} counted lines "
-                  f"without a {EXCEPTION_LABEL} exception; see above.")
+            print(f"::error::pr_size gate: diff over {threshold} counted lines / "
+                  f"{file_threshold} files without a {EXCEPTION_LABEL} exception, "
+                  "or at/above the hard stop; see above.")
             return 1
         return 0
     try:
