@@ -456,8 +456,9 @@ labeller or silence its own label by deleting a local copy.
   appear in a ruleset's required-workflows list. The labeller exits 0 on
   any API failure (and fork PRs, whose token is read-only, warn and skip),
   so labelling can never turn a run red. The exception is `pr-size-gate`
-  (next section): a separate reusable workflow whose whole purpose is to
-  block, and which therefore MUST be required. Org-level inheritance
+  (next section): a separate reusable workflow intended to block once the
+  enforcement prerequisites and qualification in that section are met. Do
+  not add or enable its requirement before then. Org-level inheritance
   happens through the template and repo bootstrap, not merge blocking.
 - **Token**: callers grant job-level `issues: write` + `pull-requests:
   write` to call the label reusable and read-only to call the weekly one.

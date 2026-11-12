@@ -219,6 +219,7 @@ class TemplatePermissionContract(unittest.TestCase):
             "github.event_name == 'pull_request' || "
             "github.event_name == 'pull_request_review' || inputs.pr_number != ''",
         )
+        self.assertNotIn("needs", test_pr_size_source.scalars(caller, 4))
         self.assertNotIn("continue-on-error:", caller)
         self.assertNotIn("secrets:", caller)
         self.assertNotIn("continue-on-error:", gate)
@@ -250,6 +251,8 @@ class TemplatePermissionContract(unittest.TestCase):
             with self.subTest(missing=original), self.assertRaises(AssertionError):
                 self.assert_gate_event_and_failure_contract(mutated, gate)
         mutations = (
+            ("  pr-size-gate:\n    name: pr-size-gate\n",
+             "  pr-size-gate:\n    name: pr-size-gate\n    needs: failing-job\n"),
             ("  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.event_name }}${{ github.event_name == 'workflow_dispatch' && '-dispatch' || '' }}",
              "  group: shared\n# github.event_name == 'workflow_dispatch' && '-dispatch'"),
             ("  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
