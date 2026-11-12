@@ -261,16 +261,40 @@ class SourceNegativeControls(unittest.TestCase):
                         assert_trusted_source(unittest.TestCase(), bad, mode)
 
 
+# Include the historical negative controls as well as the reviewed pin.
+# Never execute a ref selected solely by a proposed workflow change.
+SOURCE_HASHES = {
+    "6523ade876de30dfc71e4bdfe0821dd22ff9404c": "ffaf044922d01171f7a851ca9c9249cc9c09c4d5d577c30c0276c46e100875a5",
+    "e79d9ecbd94620b0f103edcbe5d705d47a0edceb": "6f1945a60713dabbd4fbf168243077a4d461409be91ce3c09a4e226b98df3e15",
+    "86aec407d4fccc8b30ed9f9e484661f5d258239d": "3d20e0d175bbe5957548a8993f6a2bcbe1987d99544f338ca4f474a24f6e545a",
+}
+
+
 class PinnedBehavior(unittest.TestCase):
     def run_fixture(self, ref, case, name):
+        self.assertIn(ref, SOURCE_HASHES, "unapproved fixture source")
         source = subprocess.check_output(["git", "show", f"{ref}:{SCRIPT}"], cwd=ROOT)
+        self.assertEqual(hashlib.sha256(source).hexdigest(), SOURCE_HASHES[ref])
         module = types.ModuleType("pinned_pr_size")
-        exec(compile(source, f"{ref}:{SCRIPT}", "exec"), module.__dict__)
+        # This intentionally executes the exact hash-verified historical script.
+        exec(compile(source, f"{ref}:{SCRIPT}", "exec"), module.__dict__)  # noqa: S102
         result = unittest.TestResult()
         with mock.patch.object(test_pr_size, "pr_size", module):
             case(name).run(result)
         self.assertEqual(result.testsRun, 1)
         return result
+
+    def test_unapproved_ref_is_rejected_before_git_lookup(self):
+        with mock.patch.object(subprocess, "check_output") as lookup:
+            with self.assertRaisesRegex(AssertionError, "unapproved fixture source"):
+                self.run_fixture("HEAD", test_pr_size.Gate, "test_at_file_threshold_passes")
+            lookup.assert_not_called()
+
+    def test_changed_source_bytes_are_rejected_before_execution(self):
+        ref = REVIEWED_SHAS["gate"]
+        with (mock.patch.object(subprocess, "check_output", return_value=b"raise RuntimeError('executed')"),
+              self.assertRaises(AssertionError)):
+            self.run_fixture(ref, test_pr_size.Gate, "test_at_file_threshold_passes")
 
     def test_selected_script_passes_existing_behavior_fixtures(self):
         fixtures = (
