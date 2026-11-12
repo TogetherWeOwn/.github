@@ -16,22 +16,18 @@
 #
 # REQUIRED PART: `pr-size-gate` is the deliberate exception to that
 # invariant - it FAILS pull requests too large for the automated reviewer
-# and MUST be added to this repo's ruleset required-workflows list. Ship it
-# in two steps (STANDARD.md: never require a check before its workflow
-# exists on the default branch): first merge this caller and confirm the
-# gate reports on the default branch, then add the check to the required
-# list. The gate fails closed on measurement; fork pull requests within
-# the gate pass (their warning comment is best-effort), while over-gate
-# forks ERR (they cannot post the split comment or ensure the exception
-# label) - that is intentional. The gate job also runs when the
-# `size-exception` label is applied or removed or a review is submitted
-# or dismissed, so granting an exception re-evaluates the check without
-# a manual re-run - and revoking it re-runs and fails the gate, instead
-# of leaving a stale passing check on the pull request. The
-# `pull_request.edited` type is subscribed for the same reason: changing
-# a PR's base branch changes its diff size, so a previously passing gate
-# must not stay green for an oversized PR; extra runs on title/body edits
-# are harmless.
+# and is intended as a required status check, not a required workflow.
+# Ship in two steps: merge the caller, then discover its emitted check
+# context and GitHub Actions App on a PR before requiring that status check.
+# Qualify event refresh and enforcement before promotion; pinning the App
+# does not bind a workflow or prevent another job using the same context.
+# A skipped or neutral check may satisfy a requirement. Events are async:
+# label/review changes do not atomically replace an earlier passing result.
+# The edited event also refreshes the gate when a base change alters the
+# diff; title and body edits can trigger harmless extra runs.
+# The gate fails closed on measurement; within-budget forks can pass with
+# best-effort comments, while over-gate forks can error. Manual dispatch is
+# diagnostic only and does not refresh the required PR check.
 #
 # The weekly tally's schedule lives here, in the caller, because the tally
 # is per-repository. It calls a SEPARATE reusable file so this job can stay
@@ -79,8 +75,8 @@ jobs:
       exclude-extra: ""
 
   # REQUIRED: fails pull requests too large for the automated reviewer.
-  # Add this check to the ruleset's required-workflows list after it has
-  # reported on this repo's default branch (two-step ship, STANDARD.md).
+  # After installing this caller, discover and qualify its actual status
+  # check and expected App before requiring it (STANDARD.md).
   pr-size-gate:
     name: pr-size-gate
     if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''

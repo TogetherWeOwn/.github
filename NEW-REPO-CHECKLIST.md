@@ -69,11 +69,11 @@ property defaults alone do not prove that live protections are installed.
 - [ ] `pr-lint.yml`, keeping `INTERNAL_ID_LEVEL: "error"` and
       `REQUIRE_CARD_REF: "false"`.
 - [ ] `gitleaks.yml` and `pr-size.yml`. Templates are copied/adapted; callable
-      workflows listed in README are called by full reviewed SHA. The
-      `pr-size` template's `pr-size-gate` job is a **required** check - add
-      it to the ruleset's required-workflows list only after the caller
-      workflow has merged and reported on the default branch (STANDARD.md
-      "PR size gate").
+      workflows listed in README are called by full reviewed SHA.
+      Merge the caller first and observe its reported check before adding a
+      required status check. Discover the actual emitted context and expected
+      GitHub Actions App for each repository; do not infer the context from the
+      caller job ID (STANDARD.md "PR size gate").
 - [ ] Record exact-head GitHub Actions run/job evidence. No local full-suite or
       CI-mirror substitute. Prove docs-only skipping and full-run dependency paths.
 - [ ] For preview/staging, document zero-idle-cost startup, bounded use and native
