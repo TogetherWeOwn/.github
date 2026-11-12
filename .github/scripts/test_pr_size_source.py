@@ -20,23 +20,21 @@ GitHub expression semantics. Negative controls mutate strings in memory only.
 import hashlib
 import re
 import subprocess
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
+
+import test_pr_size
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 CENTRAL_REPOSITORY = "TogetherWeOwn/.github"
-REVIEWED_SHAS = {
-    "label": "ac9ce8d63e0cebd19ede904ac79137190c329964",
-    "weekly": "ac9ce8d63e0cebd19ede904ac79137190c329964",
-    "gate": "86aec407d4fccc8b30ed9f9e484661f5d258239d",
-}
+REVIEWED_SHAS = dict.fromkeys(("label", "weekly", "gate"),
+                              "6523ade876de30dfc71e4bdfe0821dd22ff9404c")
 SCRIPT = ".github/scripts/pr_size.py"
-SCRIPT_SHA256 = {
-    "label": "193cd5c1a9d96e78905562bce3dbf71bdad19db5fda0b728bbda7723b1890ba9",
-    "weekly": "193cd5c1a9d96e78905562bce3dbf71bdad19db5fda0b728bbda7723b1890ba9",
-    "gate": "3d20e0d175bbe5957548a8993f6a2bcbe1987d99544f338ca4f474a24f6e545a",
-}
+SCRIPT_SHA256 = dict.fromkeys(REVIEWED_SHAS,
+                              "ffaf044922d01171f7a851ca9c9249cc9c09c4d5d577c30c0276c46e100875a5")
 MODES = {
     "pr-size.yml": "label",
     "pr-size-weekly.yml": "weekly",
@@ -226,10 +224,11 @@ class SourceNegativeControls(unittest.TestCase):
                         # assertRaises rather than swallowing it in a subTest.
                         assert_trusted_source(unittest.TestCase(), bad, mode)
 
-    def test_other_modes_reviewed_ref_is_rejected(self):
+    def test_previous_refs_are_rejected(self):
         for filename, mode in MODES.items():
             good = source_fixture((WORKFLOWS / filename).read_text(), mode)
-            for ref in set(REVIEWED_SHAS.values()) - {REVIEWED_SHAS[mode]}:
+            for ref in ("e79d9ecbd94620b0f103edcbe5d705d47a0edceb",
+                        "86aec407d4fccc8b30ed9f9e484661f5d258239d"):
                 with self.subTest(workflow=filename, ref=ref):
                     bad = good.replace(f"ref: {REVIEWED_SHAS[mode]}", f"ref: {ref}")
                     with self.assertRaises(AssertionError):
@@ -260,6 +259,54 @@ class SourceNegativeControls(unittest.TestCase):
                     bad = good.replace(f"ref: {REVIEWED_SHAS[mode]}", f"ref: {ref}")
                     with self.assertRaises(AssertionError):
                         assert_trusted_source(unittest.TestCase(), bad, mode)
+
+
+class PinnedBehavior(unittest.TestCase):
+    def run_fixture(self, ref, case, name):
+        source = subprocess.check_output(["git", "show", f"{ref}:{SCRIPT}"], cwd=ROOT)
+        module = types.ModuleType("pinned_pr_size")
+        exec(compile(source, f"{ref}:{SCRIPT}", "exec"), module.__dict__)
+        result = unittest.TestResult()
+        with mock.patch.object(test_pr_size, "pr_size", module):
+            case(name).run(result)
+        self.assertEqual(result.testsRun, 1)
+        return result
+
+    def test_selected_script_passes_existing_behavior_fixtures(self):
+        fixtures = (
+            (test_pr_size.InventoryValidation, "test_successful_capped_inventory_fails_before_exclusions"),
+            (test_pr_size.InventoryValidation, "test_complete_excluded_inventory_passes"),
+            (test_pr_size.Gate, "test_read_only_api_exception_and_negative_controls"),
+            (test_pr_size.Gate, "test_approval_by_author_alone_still_fails"),
+            (test_pr_size.Gate, "test_approval_of_an_older_head_does_not_unlock_a_new_diff"),
+            (test_pr_size.Gate, "test_hard_stop_fails_even_with_exception_label_and_approval"),
+            (test_pr_size.Gate, "test_at_file_threshold_passes"),
+            (test_pr_size.Gate, "test_over_file_threshold_fails_even_with_few_lines"),
+        )
+        for filename, mode in MODES.items():
+            ref = checkout_options((WORKFLOWS / filename).read_text(), mode)["ref"]
+            for case, name in fixtures:
+                with self.subTest(workflow=filename, fixture=name):
+                    result = self.run_fixture(ref, case, name)
+                    self.assertTrue(result.wasSuccessful(), (result.failures, result.errors))
+
+    def test_old_snapshots_fail_the_corresponding_regressions(self):
+        controls = (
+            ("e79d9ecbd94620b0f103edcbe5d705d47a0edceb",
+             test_pr_size.InventoryValidation, "test_successful_capped_inventory_fails_before_exclusions"),
+            ("86aec407d4fccc8b30ed9f9e484661f5d258239d",
+             test_pr_size.Gate, "test_read_only_api_exception_and_negative_controls"),
+        )
+        for ref, case, name in controls:
+            with self.subTest(ref=ref):
+                result = self.run_fixture(ref, case, name)
+                if case is test_pr_size.InventoryValidation:
+                    self.assertEqual(len(result.failures), 1, result.failures)
+                    self.assertEqual(result.errors, [])
+                else:
+                    self.assertEqual(result.errors, [])
+                    self.assertTrue(any("scenario='valid'" in str(test)
+                                        for test, _ in result.failures), result.failures)
 
 
 if __name__ == "__main__":
