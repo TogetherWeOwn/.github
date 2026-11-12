@@ -208,8 +208,11 @@ class TemplatePermissionContract(unittest.TestCase):
         self.assertEqual(len(steps), 2)
         for step in steps:
             self.assertNotIn("if", test_pr_size_source.scalars(step, 8))
-        self.assertIn("github.event_name == 'workflow_dispatch' && '-dispatch'", template)
-        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", template)
+        concurrency = test_pr_size_source.scalars(test_pr_size_source.block(template, 0, "concurrency"), 2)
+        self.assertEqual(concurrency, {
+            "group": "${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.event_name }}${{ github.event_name == 'workflow_dispatch' && '-dispatch' || '' }}",
+            "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+        })
         caller = template.split("  pr-size-gate:\n", 1)[1].split("\n  pr-size-weekly:", 1)[0]
         self.assertEqual(
             test_pr_size_source.scalars(caller, 4).get("if"),
@@ -247,6 +250,10 @@ class TemplatePermissionContract(unittest.TestCase):
             with self.subTest(missing=original), self.assertRaises(AssertionError):
                 self.assert_gate_event_and_failure_contract(mutated, gate)
         mutations = (
+            ("  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.event_name }}${{ github.event_name == 'workflow_dispatch' && '-dispatch' || '' }}",
+             "  group: shared\n# github.event_name == 'workflow_dispatch' && '-dispatch'"),
+            ("  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+             "  cancel-in-progress: true\n# cancel-in-progress: ${{ github.event_name == 'pull_request' }}"),
             ("    types: [submitted, dismissed]", "    types: [submitted, dismissed]\n    paths: ['src/**']"),
             ("  pr-size-gate:\n    name: pr-size-gate\n    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''",
              "  pr-size-gate:\n    name: pr-size-gate\n    if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != '') && false"),
@@ -265,20 +272,45 @@ class TemplatePermissionContract(unittest.TestCase):
     def assert_checklist_install_contract(self, text):
         item = text.split("- [ ] `gitleaks.yml` and `pr-size.yml`.", 1)[1].split("- [ ]", 1)[0]
         item = " ".join(item.split())
-        self.assertIn("Merge the caller first and observe its reported check before adding a required status check.", item)
-        self.assertIn("Discover the actual emitted context and expected GitHub Actions App for each repository", item)
-        self.assertIn("do not infer the context from the caller job ID", item)
+        self.assertIn("STOP before adding or enabling a requirement", item)
+        self.assertIn("PR observation does not satisfy rule 25's default-branch reporting prerequisite", item)
+        self.assertIn("current caller does not establish", item)
+        self.assertIn("expected GitHub Actions App for each repository", item)
+        self.assertIn("not infer the context from the caller job ID", item)
         self.assertNotIn("required-workflows", item)
 
     def test_checklist_install_contract(self):
         checklist = (ROOT / "NEW-REPO-CHECKLIST.md").read_text(encoding="utf-8")
         self.assert_checklist_install_contract(checklist)
-        former = checklist.replace(
-            "required status check.", "ruleset's required-workflows list.", 1
-        )
+        former = checklist.replace("STOP before adding or enabling", "Proceed with adding or enabling", 1)
         self.assertNotEqual(former, checklist)
         with self.assertRaises(AssertionError):
             self.assert_checklist_install_contract(former)
+
+    def assert_install_guidance(self, text):
+        self.assertIn("default-branch", text)
+        self.assertIn("prerequisite", text)
+        self.assertIn("c9d36db5b08703a3d7c8cd2112256f8768be44ce", text)
+        self.assertIn("obsolete required-workflow", text)
+        self.assertRegex(text, r"(?i)stop before adding or enabling")
+        self.assertRegex(text, r"(?i)PR (result|observation) (does not|is not)")
+
+    def test_install_guidance_preserves_hold_and_pin_caveat(self):
+        sections = (
+            (ROOT / "STANDARD.md", "- **Prepare, then stop before enforcement**", "- **Split procedure**"),
+            (TEMPLATE, "# REQUIRED PART:", "# The weekly tally"),
+            (WORKFLOWS / "pr-size-gate.yml", "# REQUIRED CHECK.", "# Thresholds:"),
+        )
+        for path, start, end in sections:
+            text = path.read_text(encoding="utf-8").split(start, 1)[1].split(end, 1)[0]
+            normalized = " ".join(line.lstrip("# ") for line in text.splitlines())
+            with self.subTest(path=path):
+                self.assert_install_guidance(normalized)
+                for phrase in ("stop before adding or enabling", "obsolete required-workflow"):
+                    mutated = re.sub(phrase, "removed", normalized, flags=re.IGNORECASE)
+                    self.assertNotEqual(mutated, normalized)
+                    with self.assertRaises(AssertionError):
+                        self.assert_install_guidance(mutated)
 
     def test_weekly_reusable_requests_read_only(self):
         # CI-STANDARD promises the weekly tally runs read-only; that is only

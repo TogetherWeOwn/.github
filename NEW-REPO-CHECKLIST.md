@@ -70,10 +70,12 @@ property defaults alone do not prove that live protections are installed.
       `REQUIRE_CARD_REF: "false"`.
 - [ ] `gitleaks.yml` and `pr-size.yml`. Templates are copied/adapted; callable
       workflows listed in README are called by full reviewed SHA.
-      Merge the caller first and observe its reported check before adding a
-      required status check. Discover the actual emitted context and expected
-      GitHub Actions App for each repository; do not infer the context from the
-      caller job ID (STANDARD.md "PR size gate").
+      Merge the caller and observe its genuine PR check to discover the actual
+      emitted context and expected GitHub Actions App for each repository; do
+      not infer the context from the caller job ID. STOP before adding or enabling
+      a requirement: PR observation does not satisfy rule 25's default-branch
+      reporting prerequisite, which the current caller does not establish. See
+      STANDARD.md "PR size gate" for the prerequisite and qualification hold.
 - [ ] Record exact-head GitHub Actions run/job evidence. No local full-suite or
       CI-mirror substitute. Prove docs-only skipping and full-run dependency paths.
 - [ ] For preview/staging, document zero-idle-cost startup, bounded use and native

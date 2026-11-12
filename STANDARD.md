@@ -527,13 +527,21 @@ exclusion - only the script's exclusions, per repo config, count.
   report `success` (two-web-next#2064). Whether Devin actually reviewed
   is decided by the review rules, which check the status description,
   not just its state - not by this gate.
-- **Ship in two steps** (the "never require a check before its workflow
-  exists on the default branch" rule above): merge the caller workflow,
-  then observe the gate on a PR and discover its exact emitted check
+- **Prepare, then stop before enforcement**: merge the caller workflow,
+  then observe the genuine gate on a PR and discover its exact emitted check
   context and source App. One observed caller emitted `pr-size-gate / gate`
-  from GitHub Actions App `15368`; verify both per adopter. After qualifying
-  enforcement, require that status check with the expected App, not a
-  ruleset-required workflow or the advisory labeller or weekly tally.
+  from GitHub Actions App `15368`; verify both per adopter. A PR result does
+  not satisfy rule 25's default-branch reporting prerequisite: the current
+  caller does not establish a meaningful gate result on a default-branch
+  commit. Stop before adding or enabling the requirement until a separately
+  admitted, independently reviewed producer/evidence approach establishes
+  that prerequisite and genuine PR enforcement is qualified. When eligible,
+  require the status check with the expected App, not a ruleset-required
+  workflow or the advisory labeller or weekly tally.
+  The template selects `c9d36db5b08703a3d7c8cd2112256f8768be44ce`, whose
+  immutable reusable gate header contains obsolete required-workflow guidance;
+  follow this current contract and enforcement hold instead. A later repin
+  requires the normal reviewed pin chain.
   App pinning does not bind a particular workflow: another same-App job can
   reuse the context. Protect caller changes independently, and verify that
   skipped or neutral results and missing events cannot satisfy the intended

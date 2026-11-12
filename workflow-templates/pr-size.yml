@@ -17,8 +17,12 @@
 # REQUIRED PART: `pr-size-gate` is the deliberate exception to that
 # invariant - it FAILS pull requests too large for the automated reviewer
 # and is intended as a required status check, not a required workflow.
-# Ship in two steps: merge the caller, then discover its emitted check
-# context and GitHub Actions App on a PR before requiring that status check.
+# Merge the caller and discover its genuine PR context and GitHub Actions App.
+# STOP before adding or enabling a requirement: this caller does not establish
+# rule 25's meaningful default-branch result; PR observation is not a substitute.
+# See STANDARD.md for the prerequisite and independent qualification hold.
+# The selected c9d36db5b08703a3d7c8cd2112256f8768be44ce reusable gate header
+# contains obsolete required-workflow guidance; follow the current contract.
 # Qualify event refresh and enforcement before promotion; pinning the App
 # does not bind a workflow or prevent another job using the same context.
 # A skipped or neutral check may satisfy a requirement. Events are async:
