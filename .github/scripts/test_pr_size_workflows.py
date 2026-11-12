@@ -20,8 +20,12 @@ three files use (top-level `permissions:`, per-job `permissions:` and
 """
 
 import re
+import subprocess
 import unittest
 from pathlib import Path
+
+import test_pr_size
+import test_pr_size_source
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "workflow-templates" / "pr-size.yml"
@@ -33,12 +37,16 @@ USES_RE = re.compile(r"workflows/(?P<file>[\w.-]+\.yml)@(?P<ref>[\w./-]+)")
 
 def parse_workflow(path):
     """Return (top_permissions, {job: {"permissions": {...}|None, "uses": str|None}})."""
+    return parse_workflow_text(path.read_text(encoding="utf-8"))
+
+
+def parse_workflow_text(text):
     top = {}
     jobs = {}
     section = None  # None | "top-permissions" | "jobs"
     job = None
     in_job_permissions = False
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         indent = len(line) - len(line.lstrip())
@@ -93,7 +101,7 @@ class TemplatePermissionContract(unittest.TestCase):
         # This main commit contains all three reusable workflows. The old
         # template pinned a pre-squash commit GitHub could not resolve for
         # callers.
-        reviewed_sha = "f9aef7f2aa4312c4ae5744c58f2933a0091ec9ef"
+        reviewed_sha = "c9d36db5b08703a3d7c8cd2112256f8768be44ce"
         _, jobs = parse_workflow(TEMPLATE)
         callers = {name: job["uses"] for name, job in jobs.items() if job["uses"]}
         self.assertEqual(
@@ -127,6 +135,55 @@ class TemplatePermissionContract(unittest.TestCase):
                     f"{match.group('file')} requests {level}; GitHub rejects "
                     "this caller at workflow-parse time",
                 )
+
+    def test_caller_selected_workflows_and_script_behavior(self):
+        top, callers = parse_workflow(TEMPLATE)
+        fixtures = (
+            (test_pr_size.InventoryValidation, "test_successful_capped_inventory_fails_before_exclusions"),
+            (test_pr_size.Gate, "test_read_only_api_exception_and_negative_controls"),
+            (test_pr_size.Gate, "test_hard_stop_fails_even_with_exception_label_and_approval"),
+        )
+        runner = test_pr_size_source.PinnedBehavior()
+        for filename, mode in test_pr_size_source.MODES.items():
+            with self.subTest(workflow=filename):
+                match = USES_RE.search(callers[filename.removesuffix(".yml")]["uses"])
+                text = subprocess.check_output(
+                    ["git", "show", f"{match.group('ref')}:.github/workflows/{filename}"],
+                    cwd=ROOT, text=True,
+                )
+                test_pr_size_source.assert_trusted_source(self, text, mode)
+                checkout, execution = test_pr_size_source.steps(text, mode)
+                options = test_pr_size_source.checkout_options(text, mode)
+                self.assertRegex(test_pr_size_source.scalars(checkout, 8)["uses"], r"^actions/checkout@[0-9a-f]{40}$")
+                self.assertEqual(options["persist-credentials"], "false")
+                self.assertEqual(options["path"], ".pr-size-central")
+                self.assertEqual(options["sparse-checkout"], test_pr_size_source.SCRIPT)
+                if mode == "gate":
+                    env = test_pr_size_source.scalars(test_pr_size_source.block(execution, 8, "env"), 10)
+                    for key, value in (("PR_SIZE_GATE_THRESHOLD", "400"), ("PR_SIZE_GATE_FILES", "20"), ("PR_SIZE_HARD_STOP", "1000")):
+                        self.assertEqual(env[key], value)
+                attrs = test_pr_size_source.scalars(execution, 8)
+                self.assertEqual(attrs["run"], f"python3 .pr-size-central/{test_pr_size_source.SCRIPT} {mode}")
+                reusable_top, jobs = parse_workflow_text(text)
+                granted = effective(top, callers[filename.removesuffix(".yml")])
+                for job in jobs.values():
+                    for scope, level in effective(reusable_top, job).items():
+                        self.assertGreaterEqual(LEVELS[granted.get(scope, "none")], LEVELS[level])
+                for case, name in fixtures:
+                    result = runner.run_fixture(options["ref"], case, name)
+                    self.assertTrue(result.wasSuccessful(), (result.failures, result.errors))
+
+    def test_previous_caller_chain_fails_inventory_regression(self):
+        old = "f9aef7f2aa4312c4ae5744c58f2933a0091ec9ef"
+        text = subprocess.check_output(
+            ["git", "show", f"{old}:.github/workflows/pr-size-gate.yml"], cwd=ROOT, text=True
+        )
+        ref = test_pr_size_source.checkout_options(text, "gate")["ref"]
+        result = test_pr_size_source.PinnedBehavior().run_fixture(
+            ref, test_pr_size.InventoryValidation, "test_successful_capped_inventory_fails_before_exclusions"
+        )
+        self.assertEqual(len(result.failures), 1)
+        self.assertEqual(result.errors, [])
 
     def test_template_subscribes_to_edited(self):
         # `edited` fires on a base-branch change, which changes the diff
