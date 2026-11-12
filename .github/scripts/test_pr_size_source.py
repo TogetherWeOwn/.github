@@ -20,15 +20,21 @@ GitHub expression semantics. Negative controls mutate strings in memory only.
 import hashlib
 import re
 import subprocess
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
+
+import test_pr_size
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 CENTRAL_REPOSITORY = "TogetherWeOwn/.github"
-REVIEWED_SHA = "e79d9ecbd94620b0f103edcbe5d705d47a0edceb"
+REVIEWED_SHAS = dict.fromkeys(("label", "weekly", "gate"),
+                              "6523ade876de30dfc71e4bdfe0821dd22ff9404c")
 SCRIPT = ".github/scripts/pr_size.py"
-SCRIPT_SHA256 = "193cd5c1a9d96e78905562bce3dbf71bdad19db5fda0b728bbda7723b1890ba9"
+SCRIPT_SHA256 = dict.fromkeys(REVIEWED_SHAS,
+                              "ffaf044922d01171f7a851ca9c9249cc9c09c4d5d577c30c0276c46e100875a5")
 MODES = {
     "pr-size.yml": "label",
     "pr-size-weekly.yml": "weekly",
@@ -89,14 +95,14 @@ def assert_trusted_source(test, text, mode):
     options = checkout_options(text, mode)
     # Full identity, not merely a 40-hex shape: an unreviewed commit or a
     # caller's otherwise-valid SHA is not an approved script snapshot.
-    for field, expected in (("repository", CENTRAL_REPOSITORY), ("ref", REVIEWED_SHA)):
+    for field, expected in (("repository", CENTRAL_REPOSITORY), ("ref", REVIEWED_SHAS[mode])):
         with test.subTest(field=field):
             test.assertEqual(options.get(field), expected)
 
 
-def source_fixture(text):
+def source_fixture(text, mode):
     """Known-good source fields for controls, even before the fix is present."""
-    for field, value in (("repository", CENTRAL_REPOSITORY), ("ref", REVIEWED_SHA)):
+    for field, value in (("repository", CENTRAL_REPOSITORY), ("ref", REVIEWED_SHAS[mode])):
         text, count = re.subn(
             rf"(?m)^          {field}: .*$", f"          {field}: {value}", text
         )
@@ -184,22 +190,24 @@ class CentralSourceContract(unittest.TestCase):
     def test_pinned_script_bytes_match_the_reviewed_snapshot(self):
         # The proposed working-tree script can differ until a later reviewed
         # repin. Verify the bytes actually selected by the immutable ref.
-        pinned = subprocess.check_output(
-            ["git", "show", f"{REVIEWED_SHA}:{SCRIPT}"], cwd=ROOT
-        )
-        self.assertEqual(hashlib.sha256(pinned).hexdigest(), SCRIPT_SHA256)
+        for mode, ref in REVIEWED_SHAS.items():
+            with self.subTest(mode=mode):
+                pinned = subprocess.check_output(
+                    ["git", "show", f"{ref}:{SCRIPT}"], cwd=ROOT
+                )
+                self.assertEqual(hashlib.sha256(pinned).hexdigest(), SCRIPT_SHA256[mode])
 
 
 class SourceNegativeControls(unittest.TestCase):
     def test_reviewed_source_fixture_is_accepted(self):
         for filename, mode in MODES.items():
             with self.subTest(workflow=filename):
-                text = source_fixture((WORKFLOWS / filename).read_text())
+                text = source_fixture((WORKFLOWS / filename).read_text(), mode)
                 assert_trusted_source(self, text, mode)
 
     def test_caller_or_fork_repository_is_rejected(self):
         for filename, mode in MODES.items():
-            good = source_fixture((WORKFLOWS / filename).read_text())
+            good = source_fixture((WORKFLOWS / filename).read_text(), mode)
             for repository in (
                 "${{ job.workflow_repository }}",
                 "${{ github.repository }}",
@@ -216,9 +224,19 @@ class SourceNegativeControls(unittest.TestCase):
                         # assertRaises rather than swallowing it in a subTest.
                         assert_trusted_source(unittest.TestCase(), bad, mode)
 
+    def test_previous_refs_are_rejected(self):
+        for filename, mode in MODES.items():
+            good = source_fixture((WORKFLOWS / filename).read_text(), mode)
+            for ref in ("e79d9ecbd94620b0f103edcbe5d705d47a0edceb",
+                        "86aec407d4fccc8b30ed9f9e484661f5d258239d"):
+                with self.subTest(workflow=filename, ref=ref):
+                    bad = good.replace(f"ref: {REVIEWED_SHAS[mode]}", f"ref: {ref}")
+                    with self.assertRaises(AssertionError):
+                        assert_trusted_source(unittest.TestCase(), bad, mode)
+
     def test_mutable_caller_or_unreviewed_ref_is_rejected(self):
         for filename, mode in MODES.items():
-            good = source_fixture((WORKFLOWS / filename).read_text())
+            good = source_fixture((WORKFLOWS / filename).read_text(), mode)
             for ref in (
                 "${{ job.workflow_sha }}",
                 "${{ github.sha }}",
@@ -238,9 +256,57 @@ class SourceNegativeControls(unittest.TestCase):
                 "",
             ):
                 with self.subTest(workflow=filename, ref=ref):
-                    bad = good.replace(f"ref: {REVIEWED_SHA}", f"ref: {ref}")
+                    bad = good.replace(f"ref: {REVIEWED_SHAS[mode]}", f"ref: {ref}")
                     with self.assertRaises(AssertionError):
                         assert_trusted_source(unittest.TestCase(), bad, mode)
+
+
+class PinnedBehavior(unittest.TestCase):
+    def run_fixture(self, ref, case, name):
+        source = subprocess.check_output(["git", "show", f"{ref}:{SCRIPT}"], cwd=ROOT)
+        module = types.ModuleType("pinned_pr_size")
+        exec(compile(source, f"{ref}:{SCRIPT}", "exec"), module.__dict__)
+        result = unittest.TestResult()
+        with mock.patch.object(test_pr_size, "pr_size", module):
+            case(name).run(result)
+        self.assertEqual(result.testsRun, 1)
+        return result
+
+    def test_selected_script_passes_existing_behavior_fixtures(self):
+        fixtures = (
+            (test_pr_size.InventoryValidation, "test_successful_capped_inventory_fails_before_exclusions"),
+            (test_pr_size.InventoryValidation, "test_complete_excluded_inventory_passes"),
+            (test_pr_size.Gate, "test_read_only_api_exception_and_negative_controls"),
+            (test_pr_size.Gate, "test_approval_by_author_alone_still_fails"),
+            (test_pr_size.Gate, "test_approval_of_an_older_head_does_not_unlock_a_new_diff"),
+            (test_pr_size.Gate, "test_hard_stop_fails_even_with_exception_label_and_approval"),
+            (test_pr_size.Gate, "test_at_file_threshold_passes"),
+            (test_pr_size.Gate, "test_over_file_threshold_fails_even_with_few_lines"),
+        )
+        for filename, mode in MODES.items():
+            ref = checkout_options((WORKFLOWS / filename).read_text(), mode)["ref"]
+            for case, name in fixtures:
+                with self.subTest(workflow=filename, fixture=name):
+                    result = self.run_fixture(ref, case, name)
+                    self.assertTrue(result.wasSuccessful(), (result.failures, result.errors))
+
+    def test_old_snapshots_fail_the_corresponding_regressions(self):
+        controls = (
+            ("e79d9ecbd94620b0f103edcbe5d705d47a0edceb",
+             test_pr_size.InventoryValidation, "test_successful_capped_inventory_fails_before_exclusions"),
+            ("86aec407d4fccc8b30ed9f9e484661f5d258239d",
+             test_pr_size.Gate, "test_read_only_api_exception_and_negative_controls"),
+        )
+        for ref, case, name in controls:
+            with self.subTest(ref=ref):
+                result = self.run_fixture(ref, case, name)
+                if case is test_pr_size.InventoryValidation:
+                    self.assertEqual(len(result.failures), 1, result.failures)
+                    self.assertEqual(result.errors, [])
+                else:
+                    self.assertEqual(result.errors, [])
+                    self.assertTrue(any("scenario='valid'" in str(test)
+                                        for test, _ in result.failures), result.failures)
 
 
 if __name__ == "__main__":
