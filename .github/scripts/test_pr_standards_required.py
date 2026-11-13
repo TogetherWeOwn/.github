@@ -103,9 +103,30 @@ class ReviewReplies(unittest.TestCase):
         self.assertIn(needle, out)
         self.assertIn(THREAD_URL, out)
 
-    def test_no_devin_threads_passes(self):
+    def test_no_automated_reviewer_threads_passes(self):
         self.assertPasses(run_replies())
-        self.assertPasses(run_replies([thread(("someone", "hi"), first_login="coderabbitai")]))
+        self.assertPasses(run_replies([thread(("someone", "hi"), first_login="someone-else")]))
+
+    def test_sourcery_thread_without_reply_fails(self):
+        self.assertUnanswered(run_replies([thread(first_login="sourcery-ai")]), "no reply yet")
+
+    def test_coderabbit_thread_requires_an_answer(self):
+        self.assertUnanswered(run_replies([thread(first_login="coderabbitai")]))
+        self.assertPasses(run_replies([thread(
+            ("someone", "Rejected: src/auth.py:42 already validates this at the head."),
+            first_login="coderabbitai")]))
+
+    def test_automated_reviewer_replies_never_count_as_answers(self):
+        reviewers = ("devin-ai-integration", "sourcery-ai", "coderabbitai")
+        for opener in reviewers:
+            for replier in reviewers:
+                with self.subTest(opener=opener, replier=replier):
+                    self.assertUnanswered(run_replies([thread(
+                        (replier, "Fixed in abc1234"), first_login=opener)]), "no reply yet")
+
+    def test_reviewer_logins_are_case_insensitive(self):
+        self.assertUnanswered(run_replies([thread(
+            ("CODERABBITAI", "Fixed in abc1234"), first_login="Sourcery-AI")]))
 
     def test_each_counted_first_line_passes(self):
         for body in ("Fixed in 3f24b0ce. `find_open` now pages.",
@@ -157,10 +178,12 @@ class ReviewReplies(unittest.TestCase):
             ("devin-ai-integration", "✅ **Resolved**: no longer applies."),
             ("someone", "Fixed in abc1234"))]))
 
-    def test_every_devin_thread_must_be_answered(self):
-        code, out = run_replies([thread(("someone", "Fixed in abc1234")), thread()])
+    def test_every_automated_reviewer_thread_must_be_answered(self):
+        code, out = run_replies([thread(("someone", "Fixed in abc1234")),
+                                 thread(first_login="sourcery-ai"),
+                                 thread(first_login="coderabbitai")])
         self.assertEqual(code, 1, out)
-        self.assertIn("Devin review threads: 2; answered in format: 1", out)
+        self.assertIn("Automated review threads (Devin, Sourcery, CodeRabbit): 3; answered in format: 1", out)
 
     def test_warning_only_contexts_pass(self):
         for kw in ({"draft": "true"}, {"created": OLD},
