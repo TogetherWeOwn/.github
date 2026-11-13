@@ -58,14 +58,14 @@ The PR follows the rename. Never rewrite merged history.
   a run link, or a doc link showing the finding is wrong), or
   `Duplicate of <link>`. Any other opener (`Fixed.`, `Confirmed — …`,
   `✅ Resolved`) does not count, and neither does resolving the
-  conversation. The required `pr-standards` check lists every Devin Review
-  thread without such a reply and fails the PR; it warns instead on drafts,
+  conversation. The required `pr-standards` check lists every Devin Review,
+  Sourcery and CodeRabbit thread without such a reply and fails the PR; it warns instead on drafts,
   dependabot/renovate and fork-head PRs, and PRs opened before 2026-11-03.
 - Batch each review round: commit the fixes, post the replies citing that
   commit's sha, then push once. The check reads the threads when it runs,
   so replies posted after the last push are only seen at the next run —
   push a commit or close and reopen the PR to re-run it.
-- The target merge gate is CI, `Devin Review` pinned to App 811515 and CodeQL where `codeql=required`; verify the effective rules and rollout state per [STANDARD.md](STANDARD.md#1-governance-and-required-gates). Zero required GitHub approving reviews does not waive independent task/security review. **CodeRabbit is advisory**: read and answer each finding, but never wait for it or post commands to trigger it. The final-stage reviewer merges; the author merges only when no review stage exists. Production deploys and merges with an automatic production path need exact-head Release Manager acceptance (STANDARD.md §2), not owner merge approval.
+- The target merge gate is CI, `Devin Review` pinned to App 811515 and CodeQL where `codeql=required`; verify the effective rules and rollout state per [STANDARD.md](STANDARD.md#1-governance-and-required-gates). Zero required GitHub approving reviews does not waive independent task/security review. **CodeRabbit is advisory**: answer each finding that arrives, but do not wait for a review to start or post commands to trigger it. The final-stage reviewer merges; the author merges only when no review stage exists. Production deploys and merges with an automatic production path need exact-head Release Manager acceptance (STANDARD.md §2), not owner merge approval.
 - Fix findings on the same PR and reply on the finding's thread; do not open a
   new PR to get a fresh review.
 - Ask for a security review when the diff touches auth, sessions, secrets,

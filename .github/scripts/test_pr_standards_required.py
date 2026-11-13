@@ -76,7 +76,8 @@ def thread(*replies, first_login="devin-ai-integration"):
 
 
 def run_replies(threads=(), created=NEW, event="pull_request", author="someone",
-                draft="false", head_repo=REPO, raw=None):
+                draft="false", head_repo=REPO, raw=None, live_pr=None,
+                live_error=False, payload_draft="true"):
     env = {
         "PATH": os.environ.get("PATH", ""),
         "REVIEW_ENFORCE_SINCE": enforce_since("REVIEW_ENFORCE_SINCE"),
@@ -85,7 +86,30 @@ def run_replies(threads=(), created=NEW, event="pull_request", author="someone",
         "GH_TOKEN": "",
         "THREADS_JSON": raw if raw is not None else json.dumps(list(threads)),
     }
-    p = subprocess.run([sys.executable, "-I", "-c", REPLIES_SCRIPT], env=env,
+    source = REPLIES_SCRIPT
+    if live_pr is not None or live_error:
+        env.pop("DRAFT")
+        # Model the step's environment on a rerun whose original payload was draft.
+        if "DRAFT: ${{ github.event.pull_request.draft }}" in WORKFLOW.read_text():
+            env["DRAFT"] = payload_draft
+        env["LIVE_PR_JSON"] = json.dumps(live_pr)
+        env["LIVE_PR_ERROR"] = str(live_error)
+        source = textwrap.dedent('''\
+            import io, json, os, urllib.request
+            def live_response(req, timeout):
+                assert req.full_url == "https://api.github.com/repos/TogetherWeOwn/example/pulls/7"
+                assert req.get_method() == "GET"
+                assert req.get_header("Accept") == "application/vnd.github+json"
+                assert req.get_header("Authorization") == "Bearer "
+                assert req.get_header("User-agent") == "pr-standards-review-replies"
+                assert timeout == 30
+                print("Live PR fetched")
+                if os.environ["LIVE_PR_ERROR"] == "True":
+                    raise RuntimeError("simulated live PR failure")
+                return io.BytesIO(os.environ["LIVE_PR_JSON"].encode())
+            urllib.request.urlopen = live_response
+            ''') + REPLIES_SCRIPT
+    p = subprocess.run([sys.executable, "-I", "-c", source], env=env,
                        capture_output=True, text=True, timeout=30, check=False)
     return p.returncode, p.stdout + p.stderr
 
@@ -103,9 +127,30 @@ class ReviewReplies(unittest.TestCase):
         self.assertIn(needle, out)
         self.assertIn(THREAD_URL, out)
 
-    def test_no_devin_threads_passes(self):
+    def test_no_automated_reviewer_threads_passes(self):
         self.assertPasses(run_replies())
-        self.assertPasses(run_replies([thread(("someone", "hi"), first_login="coderabbitai")]))
+        self.assertPasses(run_replies([thread(("someone", "hi"), first_login="someone-else")]))
+
+    def test_sourcery_thread_without_reply_fails(self):
+        self.assertUnanswered(run_replies([thread(first_login="sourcery-ai")]), "no reply yet")
+
+    def test_coderabbit_thread_requires_an_answer(self):
+        self.assertUnanswered(run_replies([thread(first_login="coderabbitai")]))
+        self.assertPasses(run_replies([thread(
+            ("someone", "Rejected: src/auth.py:42 already validates this at the head."),
+            first_login="coderabbitai")]))
+
+    def test_automated_reviewer_replies_never_count_as_answers(self):
+        reviewers = ("devin-ai-integration", "sourcery-ai", "coderabbitai")
+        for opener in reviewers:
+            for replier in reviewers:
+                with self.subTest(opener=opener, replier=replier):
+                    self.assertUnanswered(run_replies([thread(
+                        (replier, "Fixed in abc1234"), first_login=opener)]), "no reply yet")
+
+    def test_reviewer_logins_are_case_insensitive(self):
+        self.assertUnanswered(run_replies([thread(
+            ("CODERABBITAI", "Fixed in abc1234"), first_login="Sourcery-AI")]))
 
     def test_each_counted_first_line_passes(self):
         for body in ("Fixed in 3f24b0ce. `find_open` now pages.",
@@ -157,10 +202,12 @@ class ReviewReplies(unittest.TestCase):
             ("devin-ai-integration", "✅ **Resolved**: no longer applies."),
             ("someone", "Fixed in abc1234"))]))
 
-    def test_every_devin_thread_must_be_answered(self):
-        code, out = run_replies([thread(("someone", "Fixed in abc1234")), thread()])
+    def test_every_automated_reviewer_thread_must_be_answered(self):
+        code, out = run_replies([thread(("someone", "Fixed in abc1234")),
+                                 thread(first_login="sourcery-ai"),
+                                 thread(first_login="coderabbitai")])
         self.assertEqual(code, 1, out)
-        self.assertIn("Devin review threads: 2; answered in format: 1", out)
+        self.assertIn("Automated review threads (Devin, Sourcery, CodeRabbit): 3; answered in format: 1", out)
 
     def test_warning_only_contexts_pass(self):
         for kw in ({"draft": "true"}, {"created": OLD},
@@ -170,6 +217,36 @@ class ReviewReplies(unittest.TestCase):
                 code, out = run_replies([thread()], **kw)
                 self.assertEqual(code, 0, out)
                 self.assertIn("::warning title=Unanswered review finding", out)
+
+    def test_live_ready_pr_overrides_the_original_draft_payload(self):
+        result = run_replies([thread()], live_pr={"draft": False}, payload_draft="true")
+        self.assertUnanswered(result)
+        self.assertIn("Live PR fetched", result[1])
+
+    def test_live_draft_pr_warns_even_if_the_original_payload_was_ready(self):
+        code, out = run_replies([thread()], live_pr={"draft": True}, payload_draft="false")
+        self.assertEqual(code, 0, out)
+        self.assertIn("Live PR fetched", out)
+        self.assertIn("::warning title=Unanswered review finding", out)
+
+    def test_live_draft_lookup_failure_always_fails_closed(self):
+        for kw in ({}, {"author": "dependabot[bot]"}, {"created": OLD},
+                   {"head_repo": "someone/example"}):
+            with self.subTest(kw=kw):
+                code, out = run_replies([thread()], live_error=True, **kw)
+                self.assertEqual(code, 1, out)
+                self.assertIn("::error title=Review replies", out)
+                self.assertIn("Could not read the live PR draft state", out)
+
+    def test_missing_or_non_boolean_live_draft_state_fails_closed(self):
+        for live_pr in ({}, {"draft": "false"}, {"draft": None}):
+            with self.subTest(live_pr=live_pr):
+                code, out = run_replies(live_pr=live_pr)
+                self.assertEqual(code, 1, out)
+                self.assertIn("Could not read the live PR draft state", out)
+
+    def test_workflow_does_not_supply_a_stale_draft_override(self):
+        self.assertNotRegex(WORKFLOW.read_text(), r"(?m)^\s+DRAFT:")
 
     def test_thread_list_failure_fails_closed(self):
         code, out = run_replies(raw="__error__")

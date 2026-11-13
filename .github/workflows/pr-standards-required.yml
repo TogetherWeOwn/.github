@@ -12,15 +12,16 @@
 # Branch name and commit messages: the same internal-reference check is an
 # error for PRs opened after ENFORCE_SINCE, a warning on older PRs (their
 # branches and commits predate the rule; titles and bodies were cleaned).
-# Automated-review threads: every Devin Review thread needs a reply in that
-# thread whose first line is `Fixed in <sha>`, `Rejected: <proof>` or
-# `Duplicate of <link>` (an error for PRs opened after REVIEW_ENFORCE_SINCE;
-# a warning on drafts, dependabot/renovate PRs, fork-head PRs and older
-# PRs). Resolving a conversation is not an answer, and Devin's own
-# follow-up comments do not count. CodeRabbit stays advisory and is not
-# gated here. The step reads the threads when it runs, so a reply posted
-# after the last push is seen at the next run (push a commit, or close and
-# reopen the PR). See CONTRIBUTING.md §4.
+# Automated-review threads: every Devin, Sourcery and CodeRabbit thread needs
+# a reply in that thread whose first line is `Fixed in <sha>`,
+# `Rejected: <proof>` or `Duplicate of <link>` (an error for PRs opened after
+# REVIEW_ENFORCE_SINCE; a warning on drafts, dependabot/renovate PRs, fork-head
+# PRs and older PRs). Resolving a conversation is not an answer, and replies
+# from any of these bots do not count. CodeRabbit findings need answers too:
+# fixed / rejected with evidence / duplicate. The step reads current threads
+# on each run. Ruleset workflows ignore review events; repositories can use
+# review-replies-recheck.yml to re-run this check on reviews and thread replies.
+# Otherwise push a commit, or close and reopen the PR. See CONTRIBUTING.md §4.
 # Same rule as paperclipai/paperclip CONTRIBUTING "No Internal Issue
 # References" and "Branch Naming"; see CONTRIBUTING.md §2 in this repo.
 # Self-tests: .github/scripts/test_pr_standards_required.py (ci.yml).
@@ -188,7 +189,6 @@ jobs:
           EVENT: ${{ github.event_name }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
           CREATED_AT: ${{ github.event.pull_request.created_at }}
-          DRAFT: ${{ github.event.pull_request.draft }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
@@ -197,7 +197,7 @@ jobs:
           python3 -I - <<'PYEOF2'
           import json, os, re, sys, urllib.request
 
-          DEVIN = "devin-ai-integration"
+          REVIEWERS = {"devin-ai-integration", "sourcery-ai", "coderabbitai"}
           FORMATS = "`Fixed in <commit sha>`, `Rejected: <proof>` or `Duplicate of <link>`"
           # A rejection counts only with evidence on the first line (a link, an
           # issue ref, a file:line or a quoted name) or a full-sentence proof;
@@ -221,6 +221,21 @@ jobs:
           def first_line(body):
               lines = (body or "").splitlines()
               return lines[0].strip() if lines else ""
+
+          def live_draft():
+              if "DRAFT" in os.environ:  # self-test override only; never set by the workflow
+                  return os.environ["DRAFT"] == "true"
+              # Re-runs reuse the original event payload, including its draft flag.
+              req = urllib.request.Request(
+                  f"https://api.github.com/repos/{os.environ['REPO']}/pulls/{os.environ['PR_NUMBER']}",
+                  headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                           "Accept": "application/vnd.github+json",
+                           "User-Agent": "pr-standards-review-replies"})
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  draft = json.load(resp)["draft"]
+              if not isinstance(draft, bool):
+                  raise RuntimeError("live PR draft state is not a boolean")
+              return draft
 
           def fetch_threads():
               if "THREADS_JSON" in os.environ:  # self-tests
@@ -266,7 +281,12 @@ jobs:
           author = os.environ.get("AUTHOR") or ""
           bot = author.endswith("[bot]") and author.startswith(("dependabot", "renovate"))
           legacy = (os.environ.get("CREATED_AT") or "") < os.environ["REVIEW_ENFORCE_SINCE"]
-          draft = os.environ.get("DRAFT") == "true"
+          try:
+              draft = live_draft()
+          except Exception as exc:  # unknown draft state must never downgrade enforcement
+              print(f"::error title=Review replies::{esc(f'Could not read the live PR draft state: {exc}.')} "
+                    "Re-run this check, push a commit or close and reopen the PR.")
+              sys.exit(1)
           fork_head = (os.environ.get("HEAD_REPO") or "") != (os.environ.get("REPO") or "")
           level = "warning" if (bot or legacy or draft or fork_head) else "error"
 
@@ -274,13 +294,13 @@ jobs:
               threads = fetch_threads()
           except Exception as exc:  # fail closed at error level; a re-run fixes a transient API error
               print(f"::{level} title=Review replies::{esc(f'Could not list the review threads: {exc}.')} "
-                    "Push a commit or close and reopen the PR to re-run this check.")
+                    "Re-run this check, push a commit or close and reopen the PR.")
               sys.exit(1 if level == "error" else 0)
 
-          devin_threads = [t for t in threads if t and (t[0].get("login") or "").lower() == DEVIN]
+          review_threads = [t for t in threads if t and (t[0].get("login") or "").lower() in REVIEWERS]
           unanswered = []
-          for thread in devin_threads:
-              replies = [c for c in thread[1:] if (c.get("login") or "").lower() != DEVIN]
+          for thread in review_threads:
+              replies = [c for c in thread[1:] if (c.get("login") or "").lower() not in REVIEWERS]
               if any(pat.match(first_line(c.get("body"))) for c in replies for pat in ANSWERED):
                   continue
               # Never echo reply text into logs, annotations or the summary:
@@ -292,8 +312,8 @@ jobs:
                   detail = "no reply yet (resolving the conversation does not count)"
               unanswered.append((thread[0].get("url") or "", detail))
 
-          print(f"Devin review threads: {len(devin_threads)}; "
-                f"answered in format: {len(devin_threads) - len(unanswered)}")
+          print(f"Automated review threads (Devin, Sourcery, CodeRabbit): {len(review_threads)}; "
+                f"answered in format: {len(review_threads) - len(unanswered)}")
           summary = os.environ.get("GITHUB_STEP_SUMMARY")
           if summary and unanswered:
               try:
@@ -310,7 +330,8 @@ jobs:
                     "(see TogetherWeOwn/.github CONTRIBUTING.md §4).")
           if unanswered:
               print("::notice title=Re-running this check::Replies are read when this check runs. "
-                    "Post the replies, then push a commit or close and reopen the PR to re-run it. "
+                    "Post replies, then re-run (automatic where review-replies-recheck.yml is installed), "
+                    "push a commit or close and reopen the PR. "
                     "Fastest path next round: commit the fixes, post the replies citing that "
                     "commit, then push once.")
               sys.exit(1 if level == "error" else 0)
