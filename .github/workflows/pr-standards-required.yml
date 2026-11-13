@@ -189,7 +189,6 @@ jobs:
           EVENT: ${{ github.event_name }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
           CREATED_AT: ${{ github.event.pull_request.created_at }}
-          DRAFT: ${{ github.event.pull_request.draft }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
@@ -222,6 +221,21 @@ jobs:
           def first_line(body):
               lines = (body or "").splitlines()
               return lines[0].strip() if lines else ""
+
+          def live_draft():
+              if "DRAFT" in os.environ:  # self-test override only; never set by the workflow
+                  return os.environ["DRAFT"] == "true"
+              # Re-runs reuse the original event payload, including its draft flag.
+              req = urllib.request.Request(
+                  f"https://api.github.com/repos/{os.environ['REPO']}/pulls/{os.environ['PR_NUMBER']}",
+                  headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                           "Accept": "application/vnd.github+json",
+                           "User-Agent": "pr-standards-review-replies"})
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  draft = json.load(resp)["draft"]
+              if not isinstance(draft, bool):
+                  raise RuntimeError("live PR draft state is not a boolean")
+              return draft
 
           def fetch_threads():
               if "THREADS_JSON" in os.environ:  # self-tests
@@ -267,7 +281,12 @@ jobs:
           author = os.environ.get("AUTHOR") or ""
           bot = author.endswith("[bot]") and author.startswith(("dependabot", "renovate"))
           legacy = (os.environ.get("CREATED_AT") or "") < os.environ["REVIEW_ENFORCE_SINCE"]
-          draft = os.environ.get("DRAFT") == "true"
+          try:
+              draft = live_draft()
+          except Exception as exc:  # unknown draft state must never downgrade enforcement
+              print(f"::error title=Review replies::{esc(f'Could not read the live PR draft state: {exc}.')} "
+                    "Re-run this check, push a commit or close and reopen the PR.")
+              sys.exit(1)
           fork_head = (os.environ.get("HEAD_REPO") or "") != (os.environ.get("REPO") or "")
           level = "warning" if (bot or legacy or draft or fork_head) else "error"
 
