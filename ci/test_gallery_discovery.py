@@ -42,8 +42,14 @@ class GalleryDiscoveryTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("fixture failure", result.stderr)
 
+            lifecycle.write_text("import unittest\nclass Lifecycle(unittest.TestCase):\n def test_lifecycle(self): pass\n")
+            result = run()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Ran 2 tests", result.stderr)
+
             required.unlink()
-            self.assertNotEqual(run().returncode, 0)
+            result = run()
+            self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":
