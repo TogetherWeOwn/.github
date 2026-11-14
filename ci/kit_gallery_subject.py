@@ -128,6 +128,29 @@ def fetch_pull_request_subject(event, token):
     return resolve_pull_request(event, api_pull)
 
 
+def merge_group_event_identity(event):
+    """Parse identity only, not membership, freshness, checkout or admission."""
+    try:
+        if event["action"] != "checks_requested":
+            raise SubjectError("unsupported merge group action")
+        group = event["merge_group"]
+        refs = []
+        for ref in (group["head_ref"], group["base_ref"]):
+            if not isinstance(ref, str) or not ref.startswith("refs/heads/"):
+                raise SubjectError("invalid merge group ref")
+            _ref(ref.removeprefix("refs/heads/"))
+            refs.append(ref)
+        return {
+            "repository_id": _id(event["repository"]["id"]),
+            "head_sha": _sha(group["head_sha"]),
+            "base_sha": _sha(group["base_sha"]),
+            "head_ref": refs[0],
+            "base_ref": refs[1],
+        }
+    except (KeyError, TypeError) as exc:
+        raise SubjectError("incomplete merge group event") from exc
+
+
 def resolve_pull_request(event, api_pull):
     """Return the exact identity only if event and current API data agree."""
     try:
