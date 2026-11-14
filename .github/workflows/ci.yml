@@ -243,6 +243,8 @@ jobs:
         run: test -f ci/test_kit_gallery_required.py && python3 -I -m unittest discover -v -s ci -p 'test_kit_gallery_*.py'
       - name: Gallery test discovery regression
         run: python3 -I ci/test_gallery_discovery.py
+      - name: Gallery collector inventory contract
+        run: python3 -I ci/test_kit_gallery_inventory.py -v
       # Fetch/check the pinned source object before acceptance inspects it;
       # preserve the existing shallow checkout/credential contract.
       - name: CalVer caller pins carry the current tooling
