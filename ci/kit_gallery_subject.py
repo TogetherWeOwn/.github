@@ -23,7 +23,18 @@ def _sha(value):
 
 
 def _ref(value):
-    if not isinstance(value, str) or not value:
+    if (
+        not isinstance(value, str)
+        or not value
+        or re.search(r"[\x00-\x20\x7f~^:?*\[\\]", value)
+        or ".." in value
+        or "@{" in value
+        or value.endswith(".")
+        or any(
+            not part or part.startswith(".") or part.endswith(".lock")
+            for part in value.split("/")
+        )
+    ):
         raise SubjectError("invalid branch ref")
     return value
 
