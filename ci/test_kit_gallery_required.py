@@ -2,9 +2,11 @@
 
 import copy
 import importlib.util
+import json
 import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -50,6 +52,120 @@ class SubjectTest(unittest.TestCase):
                 "head_ref": "feature",
             },
         )
+
+    def test_authenticated_fetch_is_bounded_and_reconciled(self):
+        response = mock.MagicMock(status=200, length=0)
+        response.__enter__.return_value = response
+        response.read.return_value = json.dumps(self.api).encode()
+        with mock.patch.object(subject.urllib.request, "build_opener") as build:
+            build.return_value.open.return_value = response
+            self.assertEqual(
+                subject._fetch_metadata(10, 7, "token"), response.read.return_value
+            )
+            request = build.return_value.open.call_args.args[0]
+            self.assertEqual(
+                request.full_url, "https://api.github.com/repositories/10/pulls/7"
+            )
+            self.assertEqual(request.get_header("Authorization"), "Bearer token")
+            self.assertIs(build.call_args.args[0], subject._NoRedirect)
+            self.assertEqual(build.return_value.open.call_args.kwargs["timeout"], 10)
+            response.read.assert_called_once_with(subject._MAX_RESPONSE_BYTES + 1)
+        self.assertIsNone(
+            subject._NoRedirect().redirect_request(
+                None, None, 302, None, None, "https://other.example"
+            )
+        )
+
+    def test_fetch_refuses_failures_and_invalid_input(self):
+        response = mock.MagicMock(status=200, length=0)
+        response.__enter__.return_value = response
+        with mock.patch.object(subject.urllib.request, "build_opener") as build:
+            build.return_value.open.return_value = response
+            response.read.return_value = b"x" * (subject._MAX_RESPONSE_BYTES + 1)
+            with self.assertRaises(subject.SubjectError):
+                subject._fetch_metadata(10, 7, "token")
+            response.read.return_value = json.dumps(self.api).encode()
+            response.length = 1
+            with self.assertRaises(subject.SubjectError):
+                subject._fetch_metadata(10, 7, "token")
+            response.length = 0
+            response.read.side_effect = subject.http.client.IncompleteRead(b"partial")
+            with self.assertRaises(subject.SubjectError):
+                subject._fetch_metadata(10, 7, "token")
+            response.read.side_effect = None
+            response.status = 302
+            with self.assertRaises(subject.SubjectError):
+                subject._fetch_metadata(10, 7, "token")
+            for error in (subject.urllib.error.URLError("refused"), TimeoutError()):
+                build.return_value.open.side_effect = error
+                with self.assertRaises(subject.SubjectError):
+                    subject._fetch_metadata(10, 7, "token")
+        with mock.patch.object(subject.urllib.request, "build_opener") as build:
+            for token in ("", "bad\ntoken", None, "é"):
+                with self.subTest(token=token), self.assertRaises(subject.SubjectError):
+                    subject.fetch_pull_request_subject(self.event, token)
+            with self.assertRaises(subject.SubjectError):
+                subject.fetch_pull_request_subject(
+                    {"repository": {"id": True}, "number": 7}, "token"
+                )
+            build.assert_not_called()
+
+    def test_fetch_supervisor_reconciles_and_refuses_bad_results(self):
+        with mock.patch.object(subject.subprocess, "run") as run:
+            run.return_value.stdout = json.dumps(self.api).encode()
+            self.assertEqual(
+                subject.fetch_pull_request_subject(self.event, "token"),
+                subject.resolve_pull_request(self.event, self.api),
+            )
+            self.assertEqual(run.call_args.kwargs["timeout"], 10)
+            self.assertNotIn("token", run.call_args.args[0])
+            for data in (b"invalid", b"[" * 2000 + b"]" * 2000, b"{}"):
+                run.return_value.stdout = data
+                with self.assertRaises(subject.SubjectError):
+                    subject.fetch_pull_request_subject(self.event, "token")
+            run.side_effect = subprocess.TimeoutExpired("worker", 10)
+            with self.assertRaises(subject.SubjectError):
+                subject.fetch_pull_request_subject(self.event, "token")
+
+    def test_worker_protocol_offline(self):
+        real_run = subprocess.run
+        code = f"""
+import runpy, sys
+from unittest import mock
+import urllib.request
+response = mock.MagicMock(status=200, length=0)
+response.__enter__.return_value = response
+response.read.return_value = {json.dumps(self.api).encode()!r}
+opener = mock.Mock()
+opener.open.return_value = response
+sys.argv = [sys.argv[1], '--fetch-worker']
+with mock.patch.object(urllib.request, 'build_opener', return_value=opener):
+    runpy.run_path(sys.argv[0], run_name='__main__')
+"""
+
+        def offline_worker(args, **kwargs):
+            return real_run([args[0], "-I", "-c", code, args[2]], **kwargs)
+
+        with mock.patch.object(subject.subprocess, "run", side_effect=offline_worker):
+            self.assertEqual(
+                subject.fetch_pull_request_subject(self.event, "token"),
+                subject.resolve_pull_request(self.event, self.api),
+            )
+
+    def test_supervisor_terminates_stalled_worker(self):
+        real_run = subprocess.run
+
+        def stalled_worker(args, **kwargs):
+            kwargs["timeout"] = 0.1
+            return real_run(
+                [args[0], "-I", "-c", "import time; time.sleep(5)"], **kwargs
+            )
+
+        with (
+            mock.patch.object(subject.subprocess, "run", side_effect=stalled_worker),
+            self.assertRaises(subject.SubjectError),
+        ):
+            subject.fetch_pull_request_subject(self.event, "token")
 
     def test_stale_or_mismatched_identities_refused(self):
         for path, value in (
