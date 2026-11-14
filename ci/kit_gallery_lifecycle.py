@@ -27,7 +27,7 @@ def check_lifecycle(outcome):
     }
     if type(outcome) is not dict or outcome.keys() != keys:
         raise LifecycleError("invalid lifecycle outcome")
-    if outcome["conclusion"] != "success" or type(outcome["conclusion"]) is not str:
+    if type(outcome["conclusion"]) is not str or outcome["conclusion"] != "success":
         raise LifecycleError("attempt did not complete successfully")
     deadline = outcome["overall_deadline_seconds"]
     if type(deadline) is not int or not 0 < deadline < 900:

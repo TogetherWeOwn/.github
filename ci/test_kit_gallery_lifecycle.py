@@ -51,6 +51,13 @@ class LifecycleTest(unittest.TestCase):
                     report["phases"][name]["outcome"] = status
                     self.refused(report)
 
+    def test_conclusion_type_checked_before_comparison(self):
+        class Hostile:
+            def __ne__(self, other):
+                raise AssertionError("unexpected comparison")
+
+        self.refused(dict(self.report, conclusion=Hostile()))
+
     def test_missing_extra_and_malformed_fields(self):
         for key in self.report:
             report = dict(self.report)
