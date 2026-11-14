@@ -22,14 +22,22 @@ def _sha(value):
     return value
 
 
+def _ref(value):
+    if not isinstance(value, str) or not value:
+        raise SubjectError("invalid branch ref")
+    return value
+
+
 def _identity(pr):
     try:
         return {
             "number": _id(pr["number"]),
             "base_repository_id": _id(pr["base"]["repo"]["id"]),
             "base_sha": _sha(pr["base"]["sha"]),
+            "base_ref": _ref(pr["base"]["ref"]),
             "head_repository_id": _id(pr["head"]["repo"]["id"]),
             "head_sha": _sha(pr["head"]["sha"]),
+            "head_ref": _ref(pr["head"]["ref"]),
         }
     except (KeyError, TypeError) as exc:
         raise SubjectError("incomplete pull request identity") from exc

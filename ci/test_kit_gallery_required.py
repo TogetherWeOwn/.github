@@ -28,8 +28,8 @@ class SubjectTest(unittest.TestCase):
         self.api = {
             "number": 7,
             "state": "open",
-            "base": {"repo": {"id": 10}, "sha": "a" * 40},
-            "head": {"repo": {"id": 20}, "sha": "b" * 40},
+            "base": {"repo": {"id": 10}, "sha": "a" * 40, "ref": "main"},
+            "head": {"repo": {"id": 20}, "sha": "b" * 40, "ref": "feature"},
         }
         self.event = {
             "number": 7,
@@ -44,8 +44,10 @@ class SubjectTest(unittest.TestCase):
                 "number": 7,
                 "base_repository_id": 10,
                 "base_sha": "a" * 40,
+                "base_ref": "main",
                 "head_repository_id": 20,
                 "head_sha": "b" * 40,
+                "head_ref": "feature",
             },
         )
 
@@ -57,6 +59,8 @@ class SubjectTest(unittest.TestCase):
             (("head", "repo", "id"), 21),
             (("base", "sha"), "c" * 40),
             (("head", "sha"), "c" * 40),
+            (("base", "ref"), "release"),
+            (("head", "ref"), "other"),
         ):
             with self.subTest(path=path):
                 api = copy.deepcopy(self.api)
@@ -76,6 +80,7 @@ class SubjectTest(unittest.TestCase):
             (("number",), (True, 0, -1, "7", None)),
             (("head", "repo", "id"), (False, 0, "20", None)),
             (("base", "sha"), (None, "a" * 39, "A" * 40, "g" * 40)),
+            (("base", "ref"), (None, "", 7)),
             (("head", "repo"), (None, {})),
         ):
             for value in values:
