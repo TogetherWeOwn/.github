@@ -26,6 +26,7 @@ def _ref(value):
     if (
         not isinstance(value, str)
         or not value
+        or value.startswith("-")
         or re.search(r"[\x00-\x20\x7f~^:?*\[\\]", value)
         or ".." in value
         or "@{" in value

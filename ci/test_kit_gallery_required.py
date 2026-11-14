@@ -92,7 +92,16 @@ class SubjectTest(unittest.TestCase):
                     target[path[-1]] = value
                     with self.assertRaises(subject.SubjectError):
                         subject.resolve_pull_request(self.event, api)
-        for ref in ("bad ref", "a..b", "a//b", ".hidden", "a.lock", "a@{b", "a\\b"):
+        for ref in (
+            "bad ref",
+            "a..b",
+            "a//b",
+            ".hidden",
+            "a.lock",
+            "a@{b",
+            "a\\b",
+            "-feature",
+        ):
             with self.subTest(ref=ref), self.assertRaises(subject.SubjectError):
                 api = copy.deepcopy(self.api)
                 api["base"]["ref"] = ref
