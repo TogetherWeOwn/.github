@@ -1,0 +1,22 @@
+# Source preparation only: this entry point must not be selected by a ruleset
+# until the trusted supervisor and independent qualification are complete.
+name: Kit gallery (required entry point)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  merge_group:
+    types: [checks_requested]
+
+permissions: {}
+
+jobs:
+  kit-gallery:
+    name: kit-gallery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Refuse unqualified gallery evidence
+        run: |
+          printf '%s\n' 'Gallery supervisor and evidence qualification are not implemented.'
+          exit 1
