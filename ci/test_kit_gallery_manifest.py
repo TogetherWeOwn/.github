@@ -28,6 +28,8 @@ def valid_manifest():
 class ManifestTests(unittest.TestCase):
     def test_explicit_immutable_policy(self):
         self.assertIsNone(check_manifest(valid_manifest()))
+        for repository in ("TogetherWeOwn/.github", "owner/" + "a" * 100):
+            self.assertIsNone(check_manifest({**valid_manifest(), "repository": repository}))
 
     def test_missing_unknown_or_wrong_shape(self):
         for candidate in (None, [], {}, {**valid_manifest(), "extra": True}):
@@ -41,7 +43,7 @@ class ManifestTests(unittest.TestCase):
 
     def test_source_identity_refusals(self):
         for key, values in {
-            "repository": [None, "", "owner", "owner/repo/extra", "owner/..", "https://x/y", "_invalid/repo", "x--y/repo", "a" * 40 + "/repo"],
+            "repository": [None, "", "owner", "owner/repo/extra", "owner/..", "owner/.", "owner/" + "a" * 101, "https://x/y", "_invalid/repo", "x--y/repo", "a" * 40 + "/repo"],
             "path": [None, "", "/absolute", "../gallery.yml", "a/../b", "a//b", "a\\b"],
             "sha": [None, "main", "a" * 39, "A" * 40, "0" * 40, "a" * 40 + "\n"],
         }.items():

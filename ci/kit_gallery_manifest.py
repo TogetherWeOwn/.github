@@ -17,7 +17,9 @@ def check_manifest(manifest):
         return type(value) is str and re.fullmatch(pattern, value, re.ASCII) is not None
 
     def repository(value):
-        return matches(value, r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/[A-Za-z0-9_][A-Za-z0-9_.-]*") and len(value.split("/")[0]) <= 39
+        return (matches(value, r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/[A-Za-z0-9_.-]+") and
+                len(value.split("/")[0]) <= 39 and len(value.split("/")[1]) <= 100 and
+                value.split("/")[1] not in (".", ".."))
 
     def path(value):
         return (type(value) is str and bool(value) and
