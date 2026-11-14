@@ -232,6 +232,70 @@ with mock.patch.object(urllib.request, 'build_opener', return_value=opener):
                 subject.resolve_pull_request(event, self.api)
 
 
+class MergeGroupEventTest(unittest.TestCase):
+    def setUp(self):
+        self.event = {
+            "action": "checks_requested",
+            "repository": {"id": 10},
+            "merge_group": {
+                "head_sha": "a" * 40,
+                "base_sha": "b" * 40,
+                "head_ref": "refs/heads/gh-readonly-queue/main/example",
+                "base_ref": "refs/heads/main",
+            },
+        }
+
+    def test_identity_only(self):
+        self.assertEqual(
+            subject.merge_group_event_identity(self.event),
+            {
+                "repository_id": 10,
+                "head_sha": "a" * 40,
+                "base_sha": "b" * 40,
+                "head_ref": "refs/heads/gh-readonly-queue/main/example",
+                "base_ref": "refs/heads/main",
+            },
+        )
+
+    def test_malformed_events_are_refused(self):
+        for event in (
+            None,
+            {},
+            {**self.event, "merge_group": None},
+            {**self.event, "action": "destroyed"},
+            {**self.event, "repository": {"id": True}},
+        ):
+            with self.subTest(event=event), self.assertRaises(subject.SubjectError):
+                subject.merge_group_event_identity(event)
+        for field, values in (
+            ("head_sha", (None, "a" * 39, "A" * 40, "g" * 40)),
+            ("base_sha", (None, "b" * 39)),
+            ("head_ref", (None, "refs/tags/x", "refs/heads/", "refs/heads/a..b")),
+            (
+                "base_ref",
+                (
+                    "refs/heads/main\nother",
+                    "refs/heads/a//b",
+                    "refs/heads/a.lock",
+                    "refs/heads/HEAD",
+                ),
+            ),
+        ):
+            for value in values:
+                event = copy.deepcopy(self.event)
+                event["merge_group"][field] = value
+                with (
+                    self.subTest(field=field, value=value),
+                    self.assertRaises(subject.SubjectError),
+                ):
+                    subject.merge_group_event_identity(event)
+        for field in ("head_sha", "base_sha", "head_ref", "base_ref"):
+            event = copy.deepcopy(self.event)
+            del event["merge_group"][field]
+            with self.subTest(missing=field), self.assertRaises(subject.SubjectError):
+                subject.merge_group_event_identity(event)
+
+
 class GalleryPreparationTest(unittest.TestCase):
     def test_fixture_is_inert_and_declares_refusal_contract(self):
         self.assertFalse((ROOT / ".github/workflows/kit-gallery-required.yml").exists())
