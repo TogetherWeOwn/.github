@@ -25,6 +25,60 @@ subject = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(subject)
 
 
+isolation_spec = importlib.util.spec_from_file_location(
+    "kit_gallery_isolation", Path(__file__).with_name("kit_gallery_isolation.py")
+)
+isolation = importlib.util.module_from_spec(isolation_spec)
+isolation_spec.loader.exec_module(isolation)
+
+
+class IsolationProfileTest(unittest.TestCase):
+    def setUp(self):
+        self.profile = {
+            "privileged": False,
+            "host_pid": False,
+            "host_ipc": False,
+            "host_uts": False,
+            "host_network": False,
+            "trusted_source_writable": False,
+            "trusted_output_writable": False,
+            "host_mounts": [],
+            "credentials": [],
+        }
+
+    def test_explicit_restrictive_profile(self):
+        self.assertIsNone(isolation.check_profile(self.profile))
+
+    def test_missing_malformed_and_unsafe_controls_refused(self):
+        for key in self.profile:
+            for bad in (None, True, 0, "false", ["/var/run/docker.sock"]):
+                profile = dict(self.profile, **{key: bad})
+                with (
+                    self.subTest(key=key, bad=bad),
+                    self.assertRaises(isolation.IsolationError),
+                ):
+                    isolation.check_profile(profile)
+            profile = dict(self.profile)
+            del profile[key]
+            with self.subTest(missing=key), self.assertRaises(isolation.IsolationError):
+                isolation.check_profile(profile)
+
+    def test_extra_fields_and_host_control_mounts_refused(self):
+        for profile in (
+            None,
+            [],
+            dict(self.profile, unknown=False),
+            dict(self.profile, host_mounts=["/var/run/docker.sock"]),
+            dict(self.profile, host_mounts=["/proc"]),
+            dict(self.profile, credentials=["token"]),
+        ):
+            with (
+                self.subTest(profile=profile),
+                self.assertRaises(isolation.IsolationError),
+            ):
+                isolation.check_profile(profile)
+
+
 class SubjectTest(unittest.TestCase):
     def setUp(self):
         self.api = {
