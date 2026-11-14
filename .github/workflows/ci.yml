@@ -241,6 +241,8 @@ jobs:
         run: python3 -I ci/test_org_standard.py
       - name: Gallery entry point preparation contract
         run: python3 -I ci/test_kit_gallery_required.py
+      - name: Gallery collector inventory contract
+        run: python3 -I ci/test_kit_gallery_inventory.py -v
       # Fetch/check the pinned source object before acceptance inspects it;
       # preserve the existing shallow checkout/credential contract.
       - name: CalVer caller pins carry the current tooling
