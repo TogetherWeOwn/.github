@@ -3,8 +3,11 @@
 The fetch helper is not wired to a caller and does not admit evidence.
 """
 
+import http.client
 import json
 import re
+import subprocess
+import sys
 import urllib.error
 import urllib.request
 
@@ -66,15 +69,7 @@ def _identity(pr):
         raise SubjectError("incomplete pull request identity") from exc
 
 
-def fetch_pull_request_subject(event, token):
-    """Fetch current PR metadata, then reconcile it with the event."""
-    try:
-        repository_id = _id(event["repository"]["id"])
-        number = _id(event["number"])
-    except (KeyError, TypeError) as exc:
-        raise SubjectError("incomplete event identity") from exc
-    if not isinstance(token, str) or not re.fullmatch(r"[!-~]+", token):
-        raise SubjectError("missing or invalid API token")
+def _fetch_metadata(repository_id, number, token):
     request = urllib.request.Request(
         f"https://api.github.com/repositories/{repository_id}/pulls/{number}",
         headers={
@@ -93,8 +88,38 @@ def fetch_pull_request_subject(event, token):
             data = response.read(_MAX_RESPONSE_BYTES + 1)
         if len(data) > _MAX_RESPONSE_BYTES:
             raise SubjectError("pull request API response too large")
-        api_pull = json.loads(data)
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        return data
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        ValueError,
+        http.client.HTTPException,
+        RecursionError,
+    ) as exc:
+        raise SubjectError("pull request API unavailable or invalid") from exc
+
+
+def fetch_pull_request_subject(event, token):
+    """Fetch current PR metadata with a bounded worker, then reconcile it."""
+    try:
+        repository_id = _id(event["repository"]["id"])
+        number = _id(event["number"])
+    except (KeyError, TypeError) as exc:
+        raise SubjectError("incomplete event identity") from exc
+    if not isinstance(token, str) or not re.fullmatch(r"[!-~]{1,4096}", token):
+        raise SubjectError("missing or invalid API token")
+    try:
+        result = subprocess.run(
+            [sys.executable, "-I", __file__, "--fetch-worker"],
+            input=json.dumps([repository_id, number, token]).encode(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=True,
+        )
+        api_pull = json.loads(result.stdout)
+    except (subprocess.SubprocessError, OSError, ValueError, RecursionError) as exc:
         raise SubjectError("pull request API unavailable or invalid") from exc
     return resolve_pull_request(event, api_pull)
 
@@ -117,3 +142,11 @@ def resolve_pull_request(event, api_pull):
     ):
         raise SubjectError("event and current pull request do not match")
     return api_subject
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["--fetch-worker"]:
+    try:
+        repository_id, number, token = json.loads(sys.stdin.buffer.read(8192))
+        sys.stdout.buffer.write(_fetch_metadata(_id(repository_id), _id(number), token))
+    except (SubjectError, ValueError, TypeError):
+        sys.exit(1)

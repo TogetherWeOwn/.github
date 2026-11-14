@@ -60,8 +60,7 @@ class SubjectTest(unittest.TestCase):
         with mock.patch.object(subject.urllib.request, "build_opener") as build:
             build.return_value.open.return_value = response
             self.assertEqual(
-                subject.fetch_pull_request_subject(self.event, "token"),
-                subject.resolve_pull_request(self.event, self.api),
+                subject._fetch_metadata(10, 7, "token"), response.read.return_value
             )
             request = build.return_value.open.call_args.args[0]
             self.assertEqual(
@@ -82,24 +81,20 @@ class SubjectTest(unittest.TestCase):
         response.__enter__.return_value = response
         with mock.patch.object(subject.urllib.request, "build_opener") as build:
             build.return_value.open.return_value = response
-            for data in (
-                b"invalid",
-                b"x" * (subject._MAX_RESPONSE_BYTES + 1),
-                json.dumps({**self.api, "state": "closed"}).encode(),
-            ):
-                response.read.return_value = data
-                with (
-                    self.subTest(length=len(data)),
-                    self.assertRaises(subject.SubjectError),
-                ):
-                    subject.fetch_pull_request_subject(self.event, "token")
+            response.read.return_value = b"x" * (subject._MAX_RESPONSE_BYTES + 1)
+            with self.assertRaises(subject.SubjectError):
+                subject._fetch_metadata(10, 7, "token")
+            response.read.side_effect = subject.http.client.IncompleteRead(b"partial")
+            with self.assertRaises(subject.SubjectError):
+                subject._fetch_metadata(10, 7, "token")
+            response.read.side_effect = None
             response.status = 302
             with self.assertRaises(subject.SubjectError):
-                subject.fetch_pull_request_subject(self.event, "token")
+                subject._fetch_metadata(10, 7, "token")
             for error in (subject.urllib.error.URLError("refused"), TimeoutError()):
                 build.return_value.open.side_effect = error
                 with self.assertRaises(subject.SubjectError):
-                    subject.fetch_pull_request_subject(self.event, "token")
+                    subject._fetch_metadata(10, 7, "token")
         with mock.patch.object(subject.urllib.request, "build_opener") as build:
             for token in ("", "bad\ntoken", None, "é"):
                 with self.subTest(token=token), self.assertRaises(subject.SubjectError):
@@ -109,6 +104,23 @@ class SubjectTest(unittest.TestCase):
                     {"repository": {"id": True}, "number": 7}, "token"
                 )
             build.assert_not_called()
+
+    def test_fetch_supervisor_reconciles_and_refuses_bad_results(self):
+        with mock.patch.object(subject.subprocess, "run") as run:
+            run.return_value.stdout = json.dumps(self.api).encode()
+            self.assertEqual(
+                subject.fetch_pull_request_subject(self.event, "token"),
+                subject.resolve_pull_request(self.event, self.api),
+            )
+            self.assertEqual(run.call_args.kwargs["timeout"], 10)
+            self.assertNotIn("token", run.call_args.args[0])
+            for data in (b"invalid", b"[" * 2000 + b"]" * 2000, b"{}"):
+                run.return_value.stdout = data
+                with self.assertRaises(subject.SubjectError):
+                    subject.fetch_pull_request_subject(self.event, "token")
+            run.side_effect = subprocess.TimeoutExpired("worker", 10)
+            with self.assertRaises(subject.SubjectError):
+                subject.fetch_pull_request_subject(self.event, "token")
 
     def test_stale_or_mismatched_identities_refused(self):
         for path, value in (
