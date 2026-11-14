@@ -5,7 +5,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
 
@@ -29,7 +28,7 @@ class GalleryDiscoveryTest(unittest.TestCase):
             def run():
                 return subprocess.run(
                     ["bash", "-e", "-c", command], cwd=root,
-                    text=True, capture_output=True, timeout=30,
+                    text=True, capture_output=True, timeout=30, check=False,
                 )
 
             result = run()
