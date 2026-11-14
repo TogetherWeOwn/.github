@@ -1,9 +1,19 @@
 """Reconcile PR identity; the caller must independently authenticate API data.
 
-This inert helper does not fetch metadata, launch workloads, or admit evidence.
+The fetch helper is not wired to a caller and does not admit evidence.
 """
 
+import json
 import re
+import urllib.error
+import urllib.request
+
+_MAX_RESPONSE_BYTES = 1024 * 1024
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        del req, fp, code, msg, headers, newurl
 
 
 class SubjectError(ValueError):
@@ -54,6 +64,39 @@ def _identity(pr):
         }
     except (KeyError, TypeError) as exc:
         raise SubjectError("incomplete pull request identity") from exc
+
+
+def fetch_pull_request_subject(event, token):
+    """Fetch current PR metadata, then reconcile it with the event."""
+    try:
+        repository_id = _id(event["repository"]["id"])
+        number = _id(event["number"])
+    except (KeyError, TypeError) as exc:
+        raise SubjectError("incomplete event identity") from exc
+    if not isinstance(token, str) or not re.fullmatch(r"[!-~]+", token):
+        raise SubjectError("missing or invalid API token")
+    request = urllib.request.Request(
+        f"https://api.github.com/repositories/{repository_id}/pulls/{number}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "kit-gallery-subject",
+        },
+    )
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(
+            request, timeout=10
+        ) as response:
+            if response.status != 200:
+                raise SubjectError("pull request API refused")
+            data = response.read(_MAX_RESPONSE_BYTES + 1)
+        if len(data) > _MAX_RESPONSE_BYTES:
+            raise SubjectError("pull request API response too large")
+        api_pull = json.loads(data)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        raise SubjectError("pull request API unavailable or invalid") from exc
+    return resolve_pull_request(event, api_pull)
 
 
 def resolve_pull_request(event, api_pull):
