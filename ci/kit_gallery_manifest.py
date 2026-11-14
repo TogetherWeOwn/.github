@@ -17,7 +17,7 @@ def check_manifest(manifest):
         return type(value) is str and re.fullmatch(pattern, value, re.ASCII) is not None
 
     def repository(value):
-        return matches(value, r"[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*")
+        return matches(value, r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/[A-Za-z0-9_][A-Za-z0-9_.-]*") and len(value.split("/")[0]) <= 39
 
     def path(value):
         return (type(value) is str and bool(value) and
@@ -41,6 +41,6 @@ def check_manifest(manifest):
         pattern = sha if pin["kind"] == "git" else r"sha256:[0-9a-f]{64}"
         if (not matches(pin["digest"], pattern) or
                 set(pin["digest"].removeprefix("sha256:")) == {"0"} or
-                pin["name"] in seen):
+                pin["name"].lower() in seen):
             raise ManifestError("invalid or duplicate transitive pin")
-        seen.add(pin["name"])
+        seen.add(pin["name"].lower())

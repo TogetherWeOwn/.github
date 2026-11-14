@@ -41,7 +41,7 @@ class ManifestTests(unittest.TestCase):
 
     def test_source_identity_refusals(self):
         for key, values in {
-            "repository": [None, "", "owner", "owner/repo/extra", "owner/..", "https://x/y"],
+            "repository": [None, "", "owner", "owner/repo/extra", "owner/..", "https://x/y", "_invalid/repo", "x--y/repo", "a" * 40 + "/repo"],
             "path": [None, "", "/absolute", "../gallery.yml", "a/../b", "a//b", "a\\b"],
             "sha": [None, "main", "a" * 39, "A" * 40, "0" * 40, "a" * 40 + "\n"],
         }.items():
@@ -60,7 +60,8 @@ class ManifestTests(unittest.TestCase):
                         [{**pins[1], "digest": "sha256:" + "0" * 64}],
                         [{**pins[1], "digest": "latest"}],
                         [{**pins[0], "name": "../tool"}],
-                        [pins[0], copy.deepcopy(pins[0])]):
+                        [pins[0], copy.deepcopy(pins[0])],
+                        [pins[0], {**pins[0], "name": "Actions/Checkout", "digest": "d" * 40}]):
             candidate = valid_manifest()
             candidate["pins"] = invalid
             with self.subTest(pins=invalid), self.assertRaises(ManifestError):
