@@ -107,6 +107,43 @@ class SubjectTest(unittest.TestCase):
             subject.resolve_pull_request(self.event, self.api)
 
 
+class MergeGroupEventTest(unittest.TestCase):
+    def setUp(self):
+        self.event = {
+            "action": "checks_requested",
+            "repository": {"id": 10},
+            "merge_group": {
+                "head_sha": "a" * 40,
+                "base_sha": "b" * 40,
+                "head_ref": "refs/heads/gh-readonly-queue/main/example",
+                "base_ref": "refs/heads/main",
+            },
+        }
+
+    def test_event_identity_is_not_membership_proof(self):
+        result = subject.merge_group_event_identity(self.event)
+        self.assertEqual(result["head_sha"], "a" * 40)
+        self.assertEqual(result["repository_id"], 10)
+        self.assertNotIn("members", result)
+
+    def test_invalid_event_is_refused(self):
+        for field, value in (
+            ("head_sha", "a" * 39),
+            ("base_sha", None),
+            ("head_ref", "refs/tags/example"),
+            ("base_ref", "refs/heads/main\nother"),
+        ):
+            with self.subTest(field=field):
+                event = copy.deepcopy(self.event)
+                event["merge_group"][field] = value
+                with self.assertRaises(subject.SubjectError):
+                    subject.merge_group_event_identity(event)
+        event = copy.deepcopy(self.event)
+        event["action"] = "destroyed"
+        with self.assertRaises(subject.SubjectError):
+            subject.merge_group_event_identity(event)
+
+
 class GalleryPreparationTest(unittest.TestCase):
     def test_unimplemented_entry_point_refuses_both_events(self):
         workflow = (
