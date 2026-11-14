@@ -32,6 +32,58 @@ isolation = importlib.util.module_from_spec(isolation_spec)
 isolation_spec.loader.exec_module(isolation)
 
 
+receipt_spec = importlib.util.spec_from_file_location(
+    "kit_gallery_receipt_identity", Path(__file__).with_name("kit_gallery_receipt_identity.py")
+)
+receipt = importlib.util.module_from_spec(receipt_spec)
+receipt_spec.loader.exec_module(receipt)
+
+
+class ReceiptIdentityTest(unittest.TestCase):
+    def setUp(self):
+        self.identity = {
+            "subject_type": "pull_request", "subject_sha": "a" * 40,
+            "checkout_sha": "b" * 40, "supervisor_sha": "c" * 40,
+            "run_id": 1, "attempt": 2, "job_id": 3,
+        }
+
+    def test_identity_projection_accepts_only_matching_values(self):
+        for kind in ("pull_request", "merge_group"):
+            identity = dict(self.identity, subject_type=kind)
+            self.assertIsNone(receipt.check_identity(identity, dict(identity)))
+        for key, replacement in (
+            ("subject_type", "merge_group"), ("subject_sha", "d" * 40),
+            ("checkout_sha", "d" * 40), ("supervisor_sha", "d" * 40),
+            ("run_id", 4), ("attempt", 4), ("job_id", 4),
+        ):
+            with self.subTest(key=key), self.assertRaises(receipt.ReceiptIdentityError):
+                receipt.check_identity(dict(self.identity, **{key: replacement}), self.identity)
+
+    def test_missing_extra_and_malformed_values_refused_on_both_sides(self):
+        for key in self.identity:
+            missing = dict(self.identity)
+            del missing[key]
+            for candidate in (missing, dict(self.identity, extra=1)):
+                for actual, expected in ((candidate, self.identity), (self.identity, candidate)):
+                    with self.subTest(key=key), self.assertRaises(receipt.ReceiptIdentityError):
+                        receipt.check_identity(actual, expected)
+        for key, bad_values in (
+            ("subject_type", (None, [], "pr")),
+            *((key, (None, 1, "a" * 39, "A" * 40, "g" * 40, "a" * 41))
+              for key in ("subject_sha", "checkout_sha", "supervisor_sha")),
+            *((key, (None, True, 0, -1, "1", 1.0))
+              for key in ("run_id", "attempt", "job_id")),
+        ):
+            for bad in bad_values:
+                candidate = dict(self.identity, **{key: bad})
+                for actual, expected in ((candidate, self.identity), (self.identity, candidate)):
+                    with self.subTest(key=key, bad=bad), self.assertRaises(receipt.ReceiptIdentityError):
+                        receipt.check_identity(actual, expected)
+        for candidate in (None, [], "identity"):
+            with self.subTest(candidate=candidate), self.assertRaises(receipt.ReceiptIdentityError):
+                receipt.check_identity(candidate, self.identity)
+
+
 class IsolationProfileTest(unittest.TestCase):
     def setUp(self):
         self.profile = {
