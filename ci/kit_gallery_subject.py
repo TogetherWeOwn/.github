@@ -10,7 +10,9 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
+_WORKER_PATH = str(Path(__file__).resolve())
 _MAX_RESPONSE_BYTES = 1024 * 1024
 
 
@@ -86,6 +88,8 @@ def _fetch_metadata(repository_id, number, token):
             if response.status != 200:
                 raise SubjectError("pull request API refused")
             data = response.read(_MAX_RESPONSE_BYTES + 1)
+            if response.length not in (None, 0):
+                raise SubjectError("incomplete pull request API response")
         if len(data) > _MAX_RESPONSE_BYTES:
             raise SubjectError("pull request API response too large")
         return data
@@ -111,7 +115,7 @@ def fetch_pull_request_subject(event, token):
         raise SubjectError("missing or invalid API token")
     try:
         result = subprocess.run(
-            [sys.executable, "-I", __file__, "--fetch-worker"],
+            [sys.executable, "-I", _WORKER_PATH, "--fetch-worker"],
             input=json.dumps([repository_id, number, token]).encode(),
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
