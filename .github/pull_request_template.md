@@ -24,9 +24,9 @@ Open as draft; mark ready when complete. Batch fixes per review round.
 
 -
 
-## Verification
+## Testing
 
-<!-- Only what you actually ran and observed: exact commands + results. Say what you did not run and why. -->
+<!-- Only what you actually ran and observed: exact-head Actions run/job links + results. Say what you did not run and why. N/A — <reason> is allowed for non-runtime changes. -->
 
 -
 
@@ -55,9 +55,17 @@ risk_tier: <T0|T1|T2>
 - [ ] D7: <failure propagation, non-empty evidence and honest verdicts>
 - [ ] D8: <malformed shapes, Unicode, parsing and host validation>
 
-## Risks
+## Risk
 
-<!-- Blast radius, rollback, follow-ups. "Low" is fine if true. -->
+<!-- Blast radius, failure modes and follow-ups. "Low" is fine if true; N/A needs a reason. -->
+
+## How to revert
+
+<!-- Name the rollback, including data and external side effects, or explain why reverting is unsafe. N/A — <reason> is allowed. -->
+
+## What these checks would miss
+
+<!-- State evidence gaps, untested paths and limits of automated checks. N/A — <reason> is allowed. -->
 
 ## Model Used
 
@@ -66,7 +74,7 @@ risk_tier: <T0|T1|T2>
 ## Checklist
 
 - [ ] I searched existing issues/PRs; duplicates and related PRs are linked above.
-- [ ] Verification records only tests actually run, with results.
+- [ ] Testing records only tests actually run, with results.
 - [ ] Attestation describes actual evidence, including tests not run before the change.
 - [ ] No secrets or private/internal identifiers in title, body, commits or branch name.
 - [ ] Every automated-review finding is answered in its own thread, first line `Fixed in <sha>` / `Rejected: <proof>` / `Duplicate of <link>`.
