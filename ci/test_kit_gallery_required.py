@@ -79,6 +79,83 @@ class IsolationProfileTest(unittest.TestCase):
                 isolation.check_profile(profile)
 
 
+class NetworkPhaseTest(unittest.TestCase):
+    def setUp(self):
+        self.phases = {
+            "preparation": {
+                "network": "registry-only",
+                "database_active": False,
+                "credentials": [],
+                "privileged_shared_cache": False,
+                "timeout_seconds": 900,
+            },
+            "execution": {
+                "network": "attempt-owned-internal",
+                "general_egress": False,
+                "published_database_ports": [],
+            },
+        }
+
+    def test_explicit_controls(self):
+        self.assertIsNone(isolation.check_network_phases(self.phases))
+        self.phases["preparation"]["timeout_seconds"] = 1
+        self.assertIsNone(isolation.check_network_phases(self.phases))
+
+    def test_missing_malformed_and_unsafe_controls_refused(self):
+        for phase, controls in self.phases.items():
+            for key, expected in controls.items():
+                for bad in (None, True, 0, "false", ["endpoint"]):
+                    if type(bad) is type(expected) and bad == expected:
+                        continue
+                    candidate = copy.deepcopy(self.phases)
+                    candidate[phase][key] = bad
+                    with (
+                        self.subTest(phase=phase, key=key, bad=bad),
+                        self.assertRaises(isolation.IsolationError),
+                    ):
+                        isolation.check_network_phases(candidate)
+                candidate = copy.deepcopy(self.phases)
+                del candidate[phase][key]
+                with (
+                    self.subTest(phase=phase, missing=key),
+                    self.assertRaises(isolation.IsolationError),
+                ):
+                    isolation.check_network_phases(candidate)
+        for bad in (0, -1, 901, True, 1.0):
+            candidate = copy.deepcopy(self.phases)
+            candidate["preparation"]["timeout_seconds"] = bad
+            with self.subTest(timeout=bad), self.assertRaises(isolation.IsolationError):
+                isolation.check_network_phases(candidate)
+
+    def test_unknown_phases_and_endpoints_are_not_proof(self):
+        for candidate in (
+            None,
+            {},
+            {**self.phases, "other": {}},
+            {**self.phases, "execution": None},
+            {
+                **self.phases,
+                "execution": {**self.phases["execution"], "endpoint": "db"},
+            },
+            {
+                **self.phases,
+                "preparation": {**self.phases["preparation"], "database_active": True},
+            },
+            {
+                **self.phases,
+                "execution": {
+                    **self.phases["execution"],
+                    "published_database_ports": [5432],
+                },
+            },
+        ):
+            with (
+                self.subTest(candidate=candidate),
+                self.assertRaises(isolation.IsolationError),
+            ):
+                isolation.check_network_phases(candidate)
+
+
 class SubjectTest(unittest.TestCase):
     def setUp(self):
         self.api = {

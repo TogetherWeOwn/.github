@@ -28,3 +28,35 @@ def check_profile(profile):
         value = profile[key]
         if type(value) is not type(expected) or value != expected:
             raise IsolationError("isolation control refused: " + key)
+
+
+def check_network_phases(phases):
+    """Check proposed controls only; this proves neither ownership nor enforcement."""
+    expected = {
+        "preparation": {
+            "network": "registry-only",
+            "database_active": False,
+            "credentials": [],
+            "privileged_shared_cache": False,
+            "timeout_seconds": int,
+        },
+        "execution": {
+            "network": "attempt-owned-internal",
+            "general_egress": False,
+            "published_database_ports": [],
+        },
+    }
+    if type(phases) is not dict or phases.keys() != expected.keys():
+        raise IsolationError("invalid network phases")
+    for phase, controls in expected.items():
+        proposed = phases[phase]
+        if type(proposed) is not dict or proposed.keys() != controls.keys():
+            raise IsolationError("invalid network phase: " + phase)
+        for key, value in controls.items():
+            actual = proposed[key]
+            if key == "timeout_seconds":
+                valid = type(actual) is int and 0 < actual <= 900
+            else:
+                valid = type(actual) is type(value) and actual == value
+            if not valid:
+                raise IsolationError("network control refused: " + phase + "." + key)
