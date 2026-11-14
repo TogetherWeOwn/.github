@@ -106,6 +106,11 @@ class SubjectTest(unittest.TestCase):
                 api = copy.deepcopy(self.api)
                 api["base"]["ref"] = ref
                 subject.resolve_pull_request({**self.event, "pull_request": api}, api)
+        for side in ("base", "head"):
+            with self.subTest(side=side), self.assertRaises(subject.SubjectError):
+                api = copy.deepcopy(self.api)
+                api[side]["ref"] = "HEAD"
+                subject.resolve_pull_request({**self.event, "pull_request": api}, api)
         for event in (None, {}, {**self.event, "pull_request": None}):
             with self.subTest(event=event), self.assertRaises(subject.SubjectError):
                 subject.resolve_pull_request(event, self.api)
