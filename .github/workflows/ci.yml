@@ -239,8 +239,10 @@ jobs:
         run: python3 -I .github/scripts/test_sync_labels.py
       - name: Org standard and ruleset source contracts (read-only)
         run: python3 -I ci/test_org_standard.py
-      - name: Gallery entry point preparation contract
-        run: python3 -I ci/test_kit_gallery_required.py
+      - name: Offline gallery contracts
+        run: test -f ci/test_kit_gallery_required.py && python3 -I -m unittest discover -v -s ci -p 'test_kit_gallery_*.py'
+      - name: Gallery test discovery regression
+        run: python3 -I ci/test_gallery_discovery.py
       - name: Gallery collector inventory contract
         run: python3 -I ci/test_kit_gallery_inventory.py -v
       - name: Gallery disposable database policy contract (offline)
