@@ -11,11 +11,15 @@ def check_inventory(required, outcome):
     Required entries have state and viewport; results additionally have status.
     Callers must obtain required independently of candidate-controlled data.
     """
+
     def identity(entry, keys):
         if type(entry) is not dict or entry.keys() != keys:
             raise InventoryError("malformed inventory entry")
         values = (entry["state"], entry["viewport"])
-        if any(type(value) is not str or not value or value != value.strip() for value in values):
+        if any(
+            type(value) is not str or not value or value != value.strip()
+            for value in values
+        ):
             raise InventoryError("invalid state or viewport")
         return values
 
@@ -28,8 +32,12 @@ def check_inventory(required, outcome):
             raise InventoryError("duplicate required entry")
         expected.add(key)
 
-    if (type(outcome) is not dict or outcome.keys() != {"status", "results"}
-            or outcome["status"] != "success" or type(outcome["results"]) is not list):
+    if (
+        type(outcome) is not dict
+        or outcome.keys() != {"status", "results"}
+        or outcome["status"] != "success"
+        or type(outcome["results"]) is not list
+    ):
         raise InventoryError("incomplete collector outcome")
     seen = set()
     for result in outcome["results"]:
