@@ -1,0 +1,33 @@
+# Proposal only: this is not an admitted builder and must not be dispatched.
+# The job-level false guard is intentionally unconditional. Removing it requires
+# a separately reviewed change; workflow inputs and repository variables cannot
+# enable it. A skipped job supplies no build or provenance evidence.
+#
+# Before any future build, independently review and admit the exact source and
+# immutable recipe, protected witness, runner isolation and teardown, and
+# artifact handling. Verify dispatch authority and current no-new-spend runner,
+# concurrency and retention capacity. Two jobs alone are not a witness.
+# The recipe and witness are not implemented here.
+name: Cargo audit builder proposal
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  disposable-build:
+    # Fail closed even on manual dispatch. The runner label is a placeholder,
+    # not evidence of an admitted runner class or an immutable image.
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [1, 2]
+    steps:
+      # No checkout, cache, source build, artifact, secret, or deployment.
+      - name: Refuse unadmitted execution
+        run: exit 1
