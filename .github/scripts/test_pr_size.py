@@ -9,6 +9,8 @@ import http.client
 import io
 import json
 import os
+import subprocess
+import tempfile
 import unittest
 import urllib.error
 from datetime import datetime, timedelta
@@ -92,6 +94,224 @@ class Sizing(unittest.TestCase):
         ]
         counted, excluded, counted_files = pr_size.count_files(files)
         self.assertEqual((counted, excluded, counted_files), (40, 900, 2))
+
+
+class LandedIdentity(unittest.TestCase):
+    def setUp(self):
+        self.before, self.after = "a" * 40, "b" * 40
+        self.event = {
+            "before": self.before, "after": self.after, "ref": "refs/heads/main",
+            "created": False, "deleted": False, "forced": False,
+            "repository": {"full_name": "owner/repo", "default_branch": "main"},
+        }
+
+    def validate(self, event=None, event_name="push", repo="owner/repo",
+                 default="main", ref="refs/heads/main", run=None, checked=None):
+        return pr_size.landed_endpoints(
+            event_name, self.event if event is None else event, repo, default, ref,
+            self.after if run is None else run, self.after if checked is None else checked,
+        )
+
+    def test_accepts_bound_push(self):
+        self.assertEqual(self.validate(), (self.before, self.after))
+
+    def test_rejects_wrong_event_ref_repository_or_head(self):
+        for kwargs in ({"event_name": "pull_request"}, {"repo": "other/repo"},
+                       {"default": "other"}, {"ref": "refs/heads/other"},
+                       {"run": self.before}, {"checked": self.before}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                self.validate(**kwargs)
+
+    def test_rejects_invalid_endpoints_and_push_states(self):
+        for key, value in (("before", "0" * 40), ("after", "bad"),
+                           ("before", self.after), ("created", True),
+                           ("deleted", True), ("forced", True), ("forced", None)):
+            event = dict(self.event, **{key: value})
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                self.validate(event=event)
+
+
+class LandedNumstat(unittest.TestCase):
+    def test_inventory_counts_rename_destination_binary_and_exclusions(self):
+        data = (b"3\t1\tsrc/new.py\0" b"2\t4\t\0old.py\0fixtures/new.py\0"
+                b"-\t-\timage.bin\0" b"0\t2\tdeleted.py\0")
+        files = pr_size.parse_landed_numstat(data)
+        self.assertEqual([entry["filename"] for entry in files],
+                         ["src/new.py", "fixtures/new.py", "image.bin", "deleted.py"])
+        self.assertEqual(pr_size.count_files(files), (6, 6, 3))
+
+    def test_path_bytes_tabs_and_empty_inventory(self):
+        files = pr_size.parse_landed_numstat(b"1\t0\tfile\t\xff\0")
+        self.assertEqual(files[0]["filename"].encode("utf-8", "surrogateescape"), b"file\t\xff")
+        self.assertEqual(pr_size.parse_landed_numstat(b""), [])
+
+    def test_malformed_inventory_is_rejected(self):
+        for data in (b"1\t0\tfile", b"1\t0\0", b"1\t0\t\0old\0",
+                     b"1\t0\t\0\0new\0", b"-\t1\tfile\0", b"-1\t0\tfile\0",
+                     b"1\t0\tfile\0" b"0\t1\tfile\0"):
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                pr_size.parse_landed_numstat(data)
+
+
+class LandedObjects(unittest.TestCase):
+    def test_addition_deletion_and_excluded_file(self):
+        with tempfile.TemporaryDirectory() as repo:
+            env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                       GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.invalid",
+                       GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.invalid")
+
+            def git(*args):
+                return subprocess.check_output(["git", "-C", repo, *args], env=env,
+                                               stderr=subprocess.DEVNULL).decode().strip()
+
+            git("init", "--quiet")
+            old = os.path.join(repo, "old.txt")
+            with open(old, "w", encoding="utf-8") as handle:
+                handle.write("old one\nold two\n")
+            git("add", ".")
+            git("commit", "-qm", "before")
+            before = git("rev-parse", "HEAD")
+            os.remove(old)
+            with open(os.path.join(repo, "new.txt"), "w", encoding="utf-8") as handle:
+                handle.write("new one\nnew two\nnew three\n")
+            with open(os.path.join(repo, "Cargo.lock"), "w", encoding="utf-8") as handle:
+                handle.write("excluded\n")
+            git("add", "-A")
+            git("commit", "-qm", "after")
+            files = pr_size.read_landed_files(os.path.join(repo, ".git", "objects"),
+                                              before, git("rev-parse", "HEAD"))
+            self.assertEqual(pr_size.count_files(files), (5, 1, 2))
+
+    def test_hostile_caller_diff_configuration_is_not_executed(self):
+        with tempfile.TemporaryDirectory() as repo:
+            env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                       GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.invalid",
+                       GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.invalid")
+
+            def git(*args):
+                return subprocess.check_output(["git", "-C", repo, *args], env=env,
+                                               stderr=subprocess.DEVNULL).decode().strip()
+
+            git("init", "--quiet")
+            with open(os.path.join(repo, ".gitattributes"), "w", encoding="utf-8") as f:
+                f.write("*.txt diff=hostile\n")
+            with open(os.path.join(repo, "source.txt"), "w", encoding="utf-8") as f:
+                f.write("old\n")
+            git("add", ".")
+            git("commit", "-qm", "before")
+            before = git("rev-parse", "HEAD")
+            with open(os.path.join(repo, "source.txt"), "w", encoding="utf-8") as f:
+                f.write("new\n")
+            git("add", ".")
+            git("commit", "-qm", "after")
+            after = git("rev-parse", "HEAD")
+            marker = os.path.join(repo, "executed")
+            git("config", "diff.external", f"touch {marker}")
+            git("config", "diff.hostile.textconv", f"touch {marker}")
+            with mock.patch.dict(os.environ, {"GIT_EXTERNAL_DIFF": f"touch {marker}"}):
+                files = pr_size.read_landed_files(os.path.join(repo, ".git", "objects"),
+                                                  before, after)
+            self.assertEqual(pr_size.count_files(files), (2, 0, 1))
+            self.assertFalse(os.path.exists(marker))
+
+    def test_reads_range_without_caller_config_and_fails_on_missing_endpoint(self):
+        with tempfile.TemporaryDirectory() as repo:
+            env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                       GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.invalid",
+                       GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.invalid")
+
+            def git(*args):
+                return subprocess.check_output(["git", "-C", repo, *args], env=env,
+                                               stderr=subprocess.DEVNULL).decode().strip()
+
+            git("init", "--quiet")
+            with open(os.path.join(repo, "old.txt"), "w", encoding="utf-8") as f:
+                f.write("one\ntwo\n")
+            git("add", ".")
+            git("commit", "-qm", "before")
+            before = git("rev-parse", "HEAD")
+            os.rename(os.path.join(repo, "old.txt"), os.path.join(repo, "new.txt"))
+            with open(os.path.join(repo, "binary"), "wb") as f:
+                f.write(b"\0binary")
+            git("add", "-A")
+            git("commit", "-qm", "after")
+            after = git("rev-parse", "HEAD")
+            git("config", "diff.external", "/nonexistent/should-not-run")
+            files = pr_size.read_landed_files(os.path.join(repo, ".git", "objects"), before, after)
+            self.assertEqual({entry["filename"] for entry in files}, {"new.txt", "binary"})
+            self.assertEqual(pr_size.count_files(files), (0, 0, 2))
+            event = {"before": before, "after": after, "ref": "refs/heads/main",
+                     "created": False, "deleted": False, "forced": False,
+                     "repository": {"full_name": "owner/repo", "default_branch": "main"}}
+            event_path = os.path.join(repo, "event.json")
+            with open(event_path, "w", encoding="utf-8") as f:
+                json.dump(event, f)
+            variables = {"REPO": "owner/repo", "GITHUB_EVENT_NAME": "push",
+                         "GITHUB_EVENT_PATH": event_path, "GITHUB_REF": "refs/heads/main",
+                         "GITHUB_SHA": after, "PR_SIZE_CHECKED_SHA": after,
+                         "PR_SIZE_OBJECTS_DIR": os.path.join(repo, ".git", "objects")}
+            with mock.patch.dict(os.environ, variables, clear=True), \
+                    mock.patch.object(pr_size.GitHubApi, "request", return_value={
+                        "full_name": "owner/repo", "default_branch": "main"}), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(pr_size.main(["pr_size.py", "landed"]), 0)
+            self.assertIn("0 counted lines (2 files)", output.getvalue())
+            for left, right in ((before, "f" * 40), (after, before), (before, before)):
+                with self.subTest(left=left, right=right), self.assertRaises(ValueError):
+                    pr_size.read_landed_files(os.path.join(repo, ".git", "objects"), left, right)
+            blob = git("rev-parse", f"{after}:new.txt")
+            object_path = os.path.join(repo, ".git", "objects", blob[:2], blob[2:])
+            os.remove(object_path)
+            with self.assertRaises(ValueError):
+                pr_size.read_landed_files(os.path.join(repo, ".git", "objects"), before, after)
+            with mock.patch.dict(os.environ, variables, clear=True), \
+                    mock.patch.object(pr_size.GitHubApi, "request", return_value={
+                        "full_name": "owner/repo", "default_branch": "main"}), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(pr_size.main(["pr_size.py", "landed"]), 1)
+
+
+class LandedGate(unittest.TestCase):
+    def test_boundaries_never_use_pr_exception(self):
+        for lines, expected, warning in ((199, True, False), (200, True, True),
+                                          (400, True, True), (401, False, False),
+                                          (999, False, False), (1000, False, False)):
+            logs = []
+            files = [{"filename": "src.py", "additions": lines, "deletions": 0}]
+            with self.subTest(lines=lines):
+                self.assertEqual(pr_size.gate_landed(files, (), log=logs.append), expected)
+                self.assertEqual(any(s.startswith("::warning::") for s in logs), warning)
+        for count in (20, 21):
+            files = [{"filename": f"src/{i}", "additions": 0, "deletions": 0}
+                     for i in range(count)]
+            self.assertEqual(pr_size.gate_landed(files, (), log=lambda _: None), count == 20)
+
+    def test_main_binds_metadata_and_propagates_verdict_and_errors(self):
+        before, after = "a" * 40, "b" * 40
+        event = {"before": before, "after": after, "ref": "refs/heads/main",
+                 "created": False, "deleted": False, "forced": False,
+                 "repository": {"full_name": "owner/repo", "default_branch": "main"}}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "event.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(event, handle)
+            env = {"REPO": "owner/repo", "GITHUB_EVENT_NAME": "push",
+                   "GITHUB_EVENT_PATH": path, "GITHUB_REF": "refs/heads/main",
+                   "GITHUB_SHA": after, "PR_SIZE_CHECKED_SHA": after,
+                   "PR_SIZE_OBJECTS_DIR": "/objects"}
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(pr_size.GitHubApi, "request", return_value={
+                        "full_name": "owner/repo", "default_branch": "main"}), \
+                    mock.patch.object(pr_size, "read_landed_files") as reader, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                reader.return_value = [{"filename": "file", "additions": 401, "deletions": 0}]
+                self.assertEqual(pr_size.main(["pr_size.py", "landed"]), 1)
+                reader.return_value = [{"filename": "file", "additions": 1, "deletions": 0}]
+                self.assertEqual(pr_size.main(["pr_size.py", "landed"]), 0)
+                reader.side_effect = ValueError("missing object")
+                self.assertEqual(pr_size.main(["pr_size.py", "landed"]), 1)
+                os.environ["GITHUB_EVENT_NAME"] = "workflow_dispatch"
+                self.assertEqual(pr_size.main(["pr_size.py", "landed"]), 1)
 
 
 class FakeApi:
