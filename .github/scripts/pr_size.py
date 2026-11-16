@@ -278,7 +278,7 @@ def read_landed_files(objects_dir, before, after):
             try:
                 result = subprocess.run(
                     ["git", "--git-dir", isolated, *args], env=command_env,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
+                    capture_output=True, timeout=120,
                     check=True,
                 )
             except (OSError, subprocess.SubprocessError) as exc:

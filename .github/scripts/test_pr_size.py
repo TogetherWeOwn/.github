@@ -148,7 +148,7 @@ class LandedNumstat(unittest.TestCase):
     def test_malformed_inventory_is_rejected(self):
         for data in (b"1\t0\tfile", b"1\t0\0", b"1\t0\t\0old\0",
                      b"1\t0\t\0\0new\0", b"-\t1\tfile\0", b"-1\t0\tfile\0",
-                     b"1\t0\tfile\0" b"0\t1\tfile\0"):
+                     (b"1\t0\tfile\0" b"0\t1\tfile\0")):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 pr_size.parse_landed_numstat(data)
 
