@@ -63,13 +63,17 @@ def scalars(text, indent):
     """Read direct mapping keys, rejecting duplicates and unfamiliar shapes."""
     result = {}
     key = None
+    scalar_key = None
     for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        line_indent = len(line) - len(line.lstrip())
-        if line_indent != indent:
-            if line_indent > indent and key == "run" and result[key] != "|":
+        depth = len(line) - len(line.lstrip())
+        if depth > indent:
+            if key == "run" and result[key] != "|":
                 raise AssertionError(f"unsupported run continuation: {line!r}")
+            if scalar_key is not None:
+                raise AssertionError(f"unsupported continuation for {scalar_key}")
+        if depth != indent:
             continue
         match = re.fullmatch(r"\s*([\w-]+):(?:\s+(.*))?", line)
         if not match:
@@ -78,6 +82,8 @@ def scalars(text, indent):
         if key in result:
             raise AssertionError(f"duplicate mapping key: {key}")
         value = re.sub(r"\s+#.*$", "", value or "").strip()
+        block_scalar = re.fullmatch(r"[|>][+-]?[1-9]?|[|>][1-9][+-]?", value)
+        scalar_key = key if key != "run" and value and not block_scalar else None
         if value.startswith(("'", '"')) and value.endswith(value[0]):
             value = value[1:-1]
         result[key] = value
@@ -265,6 +271,24 @@ class CentralSourceContract(unittest.TestCase):
 
 
 class SourceNegativeControls(unittest.TestCase):
+    def test_nested_mappings_and_block_scalars_remain_supported(self):
+        text = '  nested:\n    key: value\n  description: >-\n    some text\n  literal: |\n    more text\n  plain: value\n'
+        self.assertEqual(scalars(text, 2), {
+            "nested": "", "description": ">-", "literal": "|", "plain": "value",
+        })
+
+    def test_non_run_scalar_continuations_are_rejected(self):
+        text = (WORKFLOWS / "pr-size-gate.yml").read_text()
+        for old, new in (
+            ("if: github.event_name != 'push'", "if: github.event_name != 'push'\n          || true"),
+            ("persist-credentials: false", "persist-credentials: false\n            true"),
+            ('PR_SIZE_GATE_THRESHOLD: "400"', 'PR_SIZE_GATE_THRESHOLD: "400"\n            0'),
+        ):
+            mutated = text.replace(old, new, 1)
+            self.assertNotEqual(mutated, text)
+            with self.subTest(mutation=new), self.assertRaises(AssertionError):
+                CentralSourceContract().assert_landed_wiring(mutated)
+
     def test_continued_run_scalar_is_rejected(self):
         for filename, mode in MODES.items():
             with self.subTest(workflow=filename):
