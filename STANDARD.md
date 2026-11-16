@@ -532,17 +532,18 @@ exclusion - only the script's exclusions, per repo config, count.
   then observe the genuine gate on a PR and discover its exact emitted check
   context and source App. One observed caller emitted `pr-size-gate / gate`
   from GitHub Actions App `15368`; verify both per adopter. A PR result does
-  not satisfy rule 25's default-branch reporting prerequisite: the current
-  caller does not establish a meaningful gate result on a default-branch
-  commit. Stop before adding or enabling the requirement until a separately
-  admitted, independently reviewed producer/evidence approach establishes
-  that prerequisite and genuine PR enforcement is qualified. When eligible,
+  not satisfy rule 25's default-branch reporting prerequisite. The caller's
+  default-push gate audits the immutable landed before-to-after range, not a
+  PR approval: it inherits no PR exception, so an excepted PR can land red.
+  Observe a genuine green changed default-branch range for each adopter; the
+  template or a diagnostic dispatch is not evidence. Stop before adding or
+  enabling the requirement until that prerequisite and independent genuine PR
+  enforcement qualification are satisfied. When eligible,
   require the status check with the expected App, not a ruleset-required
   workflow or the advisory labeller or weekly tally.
-  The template selects `c9d36db5b08703a3d7c8cd2112256f8768be44ce`, whose
-  immutable reusable gate header contains obsolete required-workflow guidance;
-  follow this current contract and enforcement hold instead. A later repin
-  requires the normal reviewed pin chain.
+  The template selects the reviewed reusable at `26c506700b46a96601d69de7308698748c1cabcb`;
+  its header predates the caller route and contains obsolete installation
+  guidance. Follow this contract; later repins require the reviewed pin chain.
   App pinning does not bind a particular workflow: another same-App job can
   reuse the context. Protect caller changes independently, and verify that
   skipped or neutral results and missing events cannot satisfy the intended

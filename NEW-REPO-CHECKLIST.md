@@ -74,7 +74,8 @@ property defaults alone do not prove that live protections are installed.
       emitted context and expected GitHub Actions App for each repository; do
       not infer the context from the caller job ID. STOP before adding or enabling
       a requirement: PR observation does not satisfy rule 25's default-branch
-      reporting prerequisite, which the current caller does not establish. See
+      reporting prerequisite. Observe a genuine green changed default-branch
+      landed range in this repository; it inherits no PR exception. See
       STANDARD.md "PR size gate" for the prerequisite and qualification hold.
 - [ ] Record exact-head GitHub Actions run/job evidence. No local full-suite or
       CI-mirror substitute. Prove docs-only skipping and full-run dependency paths.
