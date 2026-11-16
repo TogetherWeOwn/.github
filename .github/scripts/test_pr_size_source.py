@@ -83,6 +83,9 @@ def scalars(text, indent):
 def steps(text, mode):
     job = block(block(text, 0, "jobs"), 2, mode)
     raw = block(job, 4, "steps")
+    # Reject YAML sequence forms that the limited reader cannot split safely.
+    if re.search(r"(?m)^      -(?:\s*(?:#.*)?$|\t)", raw):
+        raise AssertionError("unsupported step sequence shape")
     # Normalize the first '- key:' line to the following keys' indentation.
     result = ["        " + part for part in re.split(r"(?m)^      - ", raw)[1:]]
     if mode in {"label", "weekly"} and len(result) != 2:
@@ -271,6 +274,18 @@ class SourceNegativeControls(unittest.TestCase):
                 AssertionError, "expected exactly two"
             ):
                 steps(mutated, mode)
+
+    def test_unsupported_step_sequence_shape_is_rejected(self):
+        for filename, mode in MODES.items():
+            text = (WORKFLOWS / filename).read_text()
+            position = text.rfind("      - name: ")
+            self.assertGreater(position, 0)
+            for step in ("      -\n          run: true\n", "      -\trun: true\n"):
+                mutated = text[:position] + step + text[position:]
+                with self.subTest(workflow=filename, step=step), self.assertRaisesRegex(
+                    AssertionError, "unsupported step sequence shape"
+                ):
+                    steps(mutated, mode)
 
     def test_reviewed_source_fixture_is_accepted(self):
         for filename, mode in MODES.items():
