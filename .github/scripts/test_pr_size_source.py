@@ -62,13 +62,17 @@ def block(text, indent, key):
 def scalars(text, indent):
     """Read direct mapping keys, rejecting duplicates and unfamiliar shapes."""
     result = {}
+    key = None
     scalar_key = None
     for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         depth = len(line) - len(line.lstrip())
-        if depth > indent and scalar_key is not None:
-            raise AssertionError(f"unsupported continuation for {scalar_key}")
+        if depth > indent:
+            if key == "run" and result[key] != "|":
+                raise AssertionError(f"unsupported run continuation: {line!r}")
+            if scalar_key is not None:
+                raise AssertionError(f"unsupported continuation for {scalar_key}")
         if depth != indent:
             continue
         match = re.fullmatch(r"\s*([\w-]+):(?:\s+(.*))?", line)
@@ -267,6 +271,7 @@ class CentralSourceContract(unittest.TestCase):
 
 
 class SourceNegativeControls(unittest.TestCase):
+<<<<<<< HEAD
     def test_nested_mappings_and_block_scalars_remain_supported(self):
         text = '  nested:\n    key: value\n  description: >-\n    some text\n  literal: |\n    more text\n  plain: value\n'
         self.assertEqual(scalars(text, 2), {
@@ -284,6 +289,18 @@ class SourceNegativeControls(unittest.TestCase):
             self.assertNotEqual(mutated, text)
             with self.subTest(mutation=new), self.assertRaises(AssertionError):
                 CentralSourceContract().assert_landed_wiring(mutated)
+=======
+    def test_continued_run_scalar_is_rejected(self):
+        for filename, mode in MODES.items():
+            with self.subTest(workflow=filename):
+                text = (WORKFLOWS / filename).read_text()
+                command = f"run: python3 .pr-size-central/{SCRIPT} {mode}"
+                self.assertEqual(text.count(command), 1)
+                bad = text.replace(command, command + "\n          unexpected-argument")
+                execution = steps(bad, mode)[-1]
+                with self.assertRaises(AssertionError):
+                    scalars(execution, 8)
+>>>>>>> origin/main
 
     def test_label_and_weekly_reject_intermediate_executable_step(self):
         for filename, mode in MODES.items():
