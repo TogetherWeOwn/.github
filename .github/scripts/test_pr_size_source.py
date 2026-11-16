@@ -62,10 +62,14 @@ def block(text, indent, key):
 def scalars(text, indent):
     """Read direct mapping keys, rejecting duplicates and unfamiliar shapes."""
     result = {}
+    key = None
     for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        if len(line) - len(line.lstrip()) != indent:
+        line_indent = len(line) - len(line.lstrip())
+        if line_indent != indent:
+            if line_indent > indent and key == "run" and result[key] != "|":
+                raise AssertionError(f"unsupported run continuation: {line!r}")
             continue
         match = re.fullmatch(r"\s*([\w-]+):(?:\s+(.*))?", line)
         if not match:
@@ -261,6 +265,17 @@ class CentralSourceContract(unittest.TestCase):
 
 
 class SourceNegativeControls(unittest.TestCase):
+    def test_continued_run_scalar_is_rejected(self):
+        for filename, mode in MODES.items():
+            with self.subTest(workflow=filename):
+                text = (WORKFLOWS / filename).read_text()
+                command = f"run: python3 .pr-size-central/{SCRIPT} {mode}"
+                self.assertEqual(text.count(command), 1)
+                bad = text.replace(command, command + "\n          unexpected-argument")
+                execution = steps(bad, mode)[-1]
+                with self.assertRaises(AssertionError):
+                    scalars(execution, 8)
+
     def test_label_and_weekly_reject_intermediate_executable_step(self):
         for filename, mode in MODES.items():
             if mode == "gate":
