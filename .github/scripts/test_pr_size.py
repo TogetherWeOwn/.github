@@ -153,12 +153,34 @@ class LandedNumstat(unittest.TestCase):
                 pr_size.parse_landed_numstat(data)
 
 
+def fixture_git_env():
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+               GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.invalid",
+               GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.invalid")
+    return env
+
+
 class LandedObjects(unittest.TestCase):
+    def test_fixtures_ignore_inherited_git_overrides(self):
+        with tempfile.TemporaryDirectory() as external:
+            index = os.path.join(external, "index")
+            objects = os.path.join(external, "objects")
+            os.mkdir(objects)
+            overrides = {"GIT_INDEX_FILE": index, "GIT_OBJECT_DIRECTORY": objects,
+                         "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.bare",
+                         "GIT_CONFIG_VALUE_0": "true"}
+            for name in ("test_addition_deletion_and_excluded_file",
+                         "test_hostile_caller_diff_configuration_is_not_executed",
+                         "test_reads_range_without_caller_config_and_fails_on_missing_endpoint"):
+                with self.subTest(fixture=name), mock.patch.dict(os.environ, overrides):
+                    getattr(self, name)()
+                self.assertFalse(os.path.exists(index))
+                self.assertEqual(os.listdir(objects), [])
+
     def test_addition_deletion_and_excluded_file(self):
         with tempfile.TemporaryDirectory() as repo:
-            env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
-                       GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.invalid",
-                       GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.invalid")
+            env = fixture_git_env()
 
             def git(*args):
                 return subprocess.check_output(["git", "-C", repo, *args], env=env,
@@ -184,9 +206,7 @@ class LandedObjects(unittest.TestCase):
 
     def test_hostile_caller_diff_configuration_is_not_executed(self):
         with tempfile.TemporaryDirectory() as repo:
-            env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
-                       GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.invalid",
-                       GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.invalid")
+            env = fixture_git_env()
 
             def git(*args):
                 return subprocess.check_output(["git", "-C", repo, *args], env=env,
@@ -216,9 +236,7 @@ class LandedObjects(unittest.TestCase):
 
     def test_reads_range_without_caller_config_and_fails_on_missing_endpoint(self):
         with tempfile.TemporaryDirectory() as repo:
-            env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
-                       GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.invalid",
-                       GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.invalid")
+            env = fixture_git_env()
 
             def git(*args):
                 return subprocess.check_output(["git", "-C", repo, *args], env=env,
@@ -310,8 +328,10 @@ class LandedGate(unittest.TestCase):
                 self.assertEqual(pr_size.main(["pr_size.py", "landed"]), 0)
                 reader.side_effect = ValueError("missing object")
                 self.assertEqual(pr_size.main(["pr_size.py", "landed"]), 1)
+                reader.reset_mock(side_effect=True)
                 os.environ["GITHUB_EVENT_NAME"] = "workflow_dispatch"
                 self.assertEqual(pr_size.main(["pr_size.py", "landed"]), 1)
+                reader.assert_not_called()
 
 
 class FakeApi:
