@@ -39,6 +39,7 @@ repository config, never the viewer's.
 Modes (first argument):
   label   Label one pull request and keep one advisory comment when the
           counted size is over the threshold (default: this mode).
+  landed Audit an immutable default-branch push range; no PR exception applies.
   weekly  Count pull requests merged in the last 7 days by size label and
           print the tally (also appended to $GITHUB_STEP_SUMMARY when set).
   gate    Required check: exit 1 when the counted size exceeds
@@ -61,6 +62,10 @@ Environment contract (every value is a plain string):
   PR_SIZE_WARN_THRESHOLD gate mode: counted lines from which the passing
                          gate warns (default 200)
   PR_SIZE_EXCLUDE_EXTRA  comma-separated extra exclusion globs for this repo
+  GITHUB_EVENT_NAME, GITHUB_EVENT_PATH, GITHUB_REF, GITHUB_SHA
+                         landed mode: original push identity
+  PR_SIZE_OBJECTS_DIR     landed mode: absolute caller Git object directory
+  PR_SIZE_CHECKED_SHA     landed mode: independently resolved checked commit
   GITHUB_API_URL         API base (default https://api.github.com)
   GITHUB_STEP_SUMMARY    optional path the weekly tally is appended to
 
@@ -76,7 +81,10 @@ import fnmatch
 import http.client
 import json
 import os
+import re
+import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -188,6 +196,112 @@ def count_files(files, extra_globs=()):
             counted += lines
             counted_files += 1
     return counted, excluded, counted_files
+
+
+def landed_endpoints(event_name, event, repository, default_branch, ref, run_sha, checked_sha):
+    """Validate push identity before reading any caller-owned Git objects.
+
+    The repository and default branch must come from an independent repository
+    metadata lookup; checked_sha must be resolved from the checked repository.
+    """
+    if event_name != "push" or not isinstance(event, dict):
+        raise ValueError("landed range requires a push event")
+    repo = event.get("repository")
+    if (not isinstance(repo, dict) or not isinstance(repository, str)
+            or not repository or repo.get("full_name") != repository
+            or not isinstance(default_branch, str) or not default_branch
+            or repo.get("default_branch") != default_branch
+            or ref != f"refs/heads/{default_branch}" or event.get("ref") != ref
+            or event.get("deleted") is not False or event.get("created") is not False
+            or event.get("forced") is not False):
+        raise ValueError("push repository, default ref or event state mismatch")
+    before, after = event.get("before"), event.get("after")
+    for sha in (before, after, run_sha, checked_sha):
+        if (not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha)
+                or sha == "0" * 40):
+            raise ValueError("invalid landed-range SHA")
+    if before == after or after != run_sha or after != checked_sha:
+        raise ValueError("landed-range endpoints or head mismatch")
+    return before, after
+
+
+def parse_landed_numstat(data):
+    """Parse a complete NUL-delimited Git numstat inventory, including renames."""
+    if not isinstance(data, bytes) or (data and not data.endswith(b"\0")):
+        raise ValueError("truncated landed-range inventory")
+    fields = iter(data.split(b"\0")[:-1])
+    files = []
+    names = set()
+    for record in fields:
+        parts = record.split(b"\t", 2)
+        if len(parts) != 3:
+            raise ValueError("malformed landed-range inventory")
+        additions, deletions, name = parts
+        if not name:
+            try:
+                old_name, name = next(fields), next(fields)
+            except StopIteration as exc:
+                raise ValueError("truncated landed-range rename") from exc
+            if not old_name or not name:
+                raise ValueError("invalid landed-range rename")
+        if additions == b"-" and deletions == b"-":
+            added, deleted = 0, 0
+        elif re.fullmatch(rb"[0-9]+", additions) and re.fullmatch(rb"[0-9]+", deletions):
+            added, deleted = int(additions), int(deletions)
+        else:
+            raise ValueError("invalid landed-range line counts")
+        filename = name.decode("utf-8", "surrogateescape")
+        if filename in names:
+            raise ValueError("duplicate landed-range filename")
+        names.add(filename)
+        files.append({"filename": filename, "additions": added, "deletions": deleted})
+    return files
+
+
+def read_landed_files(objects_dir, before, after):
+    """Measure immutable objects without loading the caller's repository config."""
+    for sha in (before, after):
+        if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha) or sha == "0" * 40:
+            raise ValueError("invalid landed-range SHA")
+    if before == after or not os.path.isabs(objects_dir):
+        raise ValueError("invalid landed range or object directory")
+    with tempfile.TemporaryDirectory(prefix="pr-size-git-") as isolated:
+        env = {"PATH": os.defpath, "HOME": isolated, "LC_ALL": "C",
+               "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+               "GIT_ATTR_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1",
+               "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0"}
+
+        def git(*args, object_dir=True):
+            command_env = dict(env)
+            if object_dir:
+                command_env["GIT_OBJECT_DIRECTORY"] = objects_dir
+            try:
+                result = subprocess.run(
+                    ["git", "--git-dir", isolated, *args], env=command_env,
+                    capture_output=True, timeout=120,
+                    check=True,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise ValueError("unable to verify landed-range Git objects") from exc
+            return result.stdout
+
+        git("init", "--bare", "--quiet", isolated, object_dir=False)
+        for sha in (before, after):
+            if git("cat-file", "-t", sha) != b"commit\n":
+                raise ValueError("landed endpoint is not a commit")
+        git("merge-base", "--is-ancestor", before, after)
+        # Validate reachable object contents, not just the changed-file listing:
+        # a missing unchanged blob or parent must not produce a green audit.
+        git("fsck", "--full", "--no-reflogs", "--no-dangling", before, after)
+        options = ("--no-ext-diff", "--no-textconv", "--no-color", "--find-renames", "-z")
+        files = parse_landed_numstat(git("diff", *options, "--numstat", before, after, "--"))
+        raw_names = git("diff", *options, "--name-only", before, after, "--")
+        if raw_names and not raw_names.endswith(b"\0"):
+            raise ValueError("truncated landed-range name inventory")
+        names = [name.decode("utf-8", "surrogateescape") for name in raw_names.split(b"\0")[:-1]]
+        if names != [entry["filename"] for entry in files]:
+            raise ValueError("landed-range inventories disagree")
+        return files
 
 
 def comment_body(counted, excluded, counted_files, threshold):
@@ -692,6 +806,25 @@ def gate_pr(api, number, threshold, extra_globs,
     return False
 
 
+def gate_landed(files, extra_globs, threshold=DEFAULT_GATE_THRESHOLD,
+                file_threshold=DEFAULT_GATE_FILE_THRESHOLD,
+                hard_stop=DEFAULT_HARD_STOP_THRESHOLD,
+                warn=DEFAULT_WARN_THRESHOLD, log=print):
+    """Audit a landed range without inheriting any pull-request exception."""
+    counted, excluded, counted_files = count_files(files, extra_globs)
+    log(f"Landed range: {counted} counted lines ({counted_files} files), "
+        f"raw diff {counted + excluded} lines ({excluded} excluded)")
+    for entry in files:
+        if is_excluded(entry["filename"], extra_globs):
+            log(f"Excluded: {entry['filename']!r}")
+    if counted > threshold or counted_files > file_threshold or counted >= hard_stop:
+        log("::error::pr_size landed range exceeds the budget; no PR exception applies")
+        return False
+    if counted >= warn:
+        log(f"::warning::pr_size landed range reaches the {warn}-line review target")
+    return True
+
+
 def _extra_globs():
     return [
         glob.strip()
@@ -708,6 +841,33 @@ def main(argv):
         repo,
         os.environ.get("GITHUB_API_URL", "https://api.github.com"),
     )
+    if mode == "landed":
+        try:
+            if not repo or not re.fullmatch(r"[^/\s]+/[^/\s]+", repo):
+                raise ValueError("invalid repository identity")
+            metadata = api.request("GET", f"/repos/{repo}")
+            if not isinstance(metadata, dict) or metadata.get("full_name") != repo:
+                raise ValueError("repository metadata mismatch")
+            with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as handle:
+                event = json.load(handle)
+            before, after = landed_endpoints(
+                os.environ["GITHUB_EVENT_NAME"], event, repo,
+                metadata.get("default_branch"), os.environ["GITHUB_REF"],
+                os.environ["GITHUB_SHA"], os.environ["PR_SIZE_CHECKED_SHA"],
+            )
+            files = read_landed_files(os.environ["PR_SIZE_OBJECTS_DIR"], before, after)
+            print(f"Landed range: {before} -> {after}")
+            ok = gate_landed(
+                files, _extra_globs(),
+                int(os.environ.get("PR_SIZE_GATE_THRESHOLD", DEFAULT_GATE_THRESHOLD)),
+                int(os.environ.get("PR_SIZE_GATE_FILES", DEFAULT_GATE_FILE_THRESHOLD)),
+                int(os.environ.get("PR_SIZE_HARD_STOP", DEFAULT_HARD_STOP_THRESHOLD)),
+                int(os.environ.get("PR_SIZE_WARN_THRESHOLD", DEFAULT_WARN_THRESHOLD)),
+            )
+            return 0 if ok else 1
+        except (ApiError, KeyError, ValueError, OSError) as exc:
+            print(f"::error::pr_size landed range could not be verified: {exc}")
+            return 1
     if mode == "gate":
         # The gate is a required check and fails CLOSED: an unmeasurable
         # size or a failed API call is an error, never a silent pass.
