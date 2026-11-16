@@ -271,7 +271,6 @@ class CentralSourceContract(unittest.TestCase):
 
 
 class SourceNegativeControls(unittest.TestCase):
-<<<<<<< HEAD
     def test_nested_mappings_and_block_scalars_remain_supported(self):
         text = '  nested:\n    key: value\n  description: >-\n    some text\n  literal: |\n    more text\n  plain: value\n'
         self.assertEqual(scalars(text, 2), {
@@ -289,7 +288,7 @@ class SourceNegativeControls(unittest.TestCase):
             self.assertNotEqual(mutated, text)
             with self.subTest(mutation=new), self.assertRaises(AssertionError):
                 CentralSourceContract().assert_landed_wiring(mutated)
-=======
+
     def test_continued_run_scalar_is_rejected(self):
         for filename, mode in MODES.items():
             with self.subTest(workflow=filename):
@@ -300,7 +299,6 @@ class SourceNegativeControls(unittest.TestCase):
                 execution = steps(bad, mode)[-1]
                 with self.assertRaises(AssertionError):
                     scalars(execution, 8)
->>>>>>> origin/main
 
     def test_label_and_weekly_reject_intermediate_executable_step(self):
         for filename, mode in MODES.items():
