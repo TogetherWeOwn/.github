@@ -18,11 +18,10 @@
 # invariant - it FAILS pull requests too large for the automated reviewer
 # and is intended as a required status check, not a required workflow.
 # Merge the caller and discover its genuine PR context and GitHub Actions App.
-# STOP before adding or enabling a requirement: this caller does not establish
-# rule 25's meaningful default-branch result; PR observation is not a substitute.
-# See STANDARD.md for the prerequisite and independent qualification hold.
-# The selected c9d36db5b08703a3d7c8cd2112256f8768be44ce reusable gate header
-# contains obsolete required-workflow guidance; follow the current contract.
+# STOP before adding or enabling a requirement: a PR observation is not a
+# substitute for a genuine green default-branch landed-range result in this
+# repository. See STANDARD.md for that prerequisite and the qualification hold.
+# The landed audit grants no PR exception, including one approved before merge.
 # Qualify event refresh and enforcement before promotion; pinning the App
 # does not bind a workflow or prevent another job using the same context.
 # A skipped or neutral check may satisfy a requirement. Events are async:
@@ -46,6 +45,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
   pull_request_review:
     types: [submitted, dismissed]
+  push:
   schedule:
     - cron: '17 7 * * 1'
   workflow_dispatch:
@@ -83,12 +83,12 @@ jobs:
   # check and expected App before requiring it (STANDARD.md).
   pr-size-gate:
     name: pr-size-gate
-    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''
+    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != '' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     permissions:
       contents: read
       issues: write
       pull-requests: write
-    uses: TogetherWeOwn/.github/.github/workflows/pr-size-gate.yml@c9d36db5b08703a3d7c8cd2112256f8768be44ce
+    uses: TogetherWeOwn/.github/.github/workflows/pr-size-gate.yml@26c506700b46a96601d69de7308698748c1cabcb
     with:
       pr-number: ${{ inputs.pr_number || '' }}
       exclude-extra: ""

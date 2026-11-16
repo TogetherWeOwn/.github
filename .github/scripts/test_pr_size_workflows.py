@@ -104,13 +104,15 @@ class TemplatePermissionContract(unittest.TestCase):
         reviewed_sha = "c9d36db5b08703a3d7c8cd2112256f8768be44ce"
         _, jobs = parse_workflow(TEMPLATE)
         callers = {name: job["uses"] for name, job in jobs.items() if job["uses"]}
-        self.assertEqual(
-            callers,
-            {
-                name: f"TogetherWeOwn/.github/.github/workflows/{name}.yml@{reviewed_sha}"
-                for name in ("pr-size", "pr-size-weekly", "pr-size-gate")
-            },
+        expected = {
+            name: f"TogetherWeOwn/.github/.github/workflows/{name}.yml@{reviewed_sha}"
+            for name in ("pr-size", "pr-size-weekly")
+        }
+        expected["pr-size-gate"] = (
+            "TogetherWeOwn/.github/.github/workflows/pr-size-gate.yml@"
+            "26c506700b46a96601d69de7308698748c1cabcb"
         )
+        self.assertEqual(callers, expected)
 
     def test_every_template_caller_grants_what_its_reusable_requests(self):
         top, jobs = parse_workflow(TEMPLATE)
@@ -151,8 +153,11 @@ class TemplatePermissionContract(unittest.TestCase):
                     ["git", "show", f"{match.group('ref')}:.github/workflows/{filename}"],
                     cwd=ROOT, text=True,
                 )
-                test_pr_size_source.assert_trusted_source(self, text, mode, "6523ade876de30dfc71e4bdfe0821dd22ff9404c")
-                checkout, execution = test_pr_size_source.steps(text, mode)
+                helper_sha = ("28785b592a572ddd430d22574f26ace1d8580b3f" if mode == "gate"
+                              else "6523ade876de30dfc71e4bdfe0821dd22ff9404c")
+                test_pr_size_source.assert_trusted_source(self, text, mode, helper_sha)
+                steps = test_pr_size_source.steps(text, mode)
+                checkout, execution = steps[0], steps[-1]
                 options = test_pr_size_source.checkout_options(text, mode)
                 self.assertRegex(test_pr_size_source.scalars(checkout, 8)["uses"], r"^actions/checkout@[0-9a-f]{40}$")
                 self.assertEqual(options["persist-credentials"], "false")
@@ -205,9 +210,12 @@ class TemplatePermissionContract(unittest.TestCase):
             attrs = test_pr_size_source.scalars(test_pr_size_source.block(events, 2, event), 4)
             self.assertEqual(attrs, {"types": expected})
         steps = test_pr_size_source.steps(gate, "gate")
-        self.assertEqual(len(steps), 2)
-        for step in steps:
-            self.assertNotIn("if", test_pr_size_source.scalars(step, 8))
+        self.assertEqual(len(steps), 4)
+        self.assertEqual([test_pr_size_source.scalars(step, 8).get("if") for step in steps],
+                         [None, "github.event_name == 'push'", "github.event_name == 'push'",
+                          "github.event_name != 'push'"])
+        test_pr_size_source.CentralSourceContract().assert_landed_wiring(gate)
+        self.assertEqual(test_pr_size_source.scalars(events, 2).get("push"), "")
         concurrency = test_pr_size_source.scalars(test_pr_size_source.block(template, 0, "concurrency"), 2)
         self.assertEqual(concurrency, {
             "group": "${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.event_name }}${{ github.event_name == 'workflow_dispatch' && '-dispatch' || '' }}",
@@ -217,7 +225,8 @@ class TemplatePermissionContract(unittest.TestCase):
         self.assertEqual(
             test_pr_size_source.scalars(caller, 4).get("if"),
             "github.event_name == 'pull_request' || "
-            "github.event_name == 'pull_request_review' || inputs.pr_number != ''",
+            "github.event_name == 'pull_request_review' || inputs.pr_number != '' || "
+            "(github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))",
         )
         self.assertNotIn("needs", test_pr_size_source.scalars(caller, 4))
         self.assertNotIn("continue-on-error:", caller)
@@ -257,6 +266,8 @@ class TemplatePermissionContract(unittest.TestCase):
              "  group: shared\n# github.event_name == 'workflow_dispatch' && '-dispatch'"),
             ("  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
              "  cancel-in-progress: true\n# cancel-in-progress: ${{ github.event_name == 'pull_request' }}"),
+            ("  push:\n", ""),
+            ("github.ref == format('refs/heads/{0}', github.event.repository.default_branch)", "true"),
             ("    types: [submitted, dismissed]", "    types: [submitted, dismissed]\n    paths: ['src/**']"),
             ("  pr-size-gate:\n    name: pr-size-gate\n    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != ''",
              "  pr-size-gate:\n    name: pr-size-gate\n    if: (github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != '') && false"),
@@ -277,7 +288,8 @@ class TemplatePermissionContract(unittest.TestCase):
         item = " ".join(item.split())
         self.assertIn("STOP before adding or enabling a requirement", item)
         self.assertIn("PR observation does not satisfy rule 25's default-branch reporting prerequisite", item)
-        self.assertIn("current caller does not establish", item)
+        self.assertIn("genuine green changed default-branch landed range", item)
+        self.assertIn("inherits no PR exception", item)
         self.assertIn("expected GitHub Actions App for each repository", item)
         self.assertIn("not infer the context from the caller job ID", item)
         self.assertNotIn("required-workflows", item)
@@ -293,8 +305,6 @@ class TemplatePermissionContract(unittest.TestCase):
     def assert_install_guidance(self, text):
         self.assertIn("default-branch", text)
         self.assertIn("prerequisite", text)
-        self.assertIn("c9d36db5b08703a3d7c8cd2112256f8768be44ce", text)
-        self.assertIn("obsolete required-workflow", text)
         self.assertRegex(text, r"(?i)stop before adding or enabling")
         self.assertRegex(text, r"(?i)PR (result|observation) (does not|is not)")
 
@@ -309,11 +319,26 @@ class TemplatePermissionContract(unittest.TestCase):
             normalized = " ".join(line.lstrip("# ") for line in text.splitlines())
             with self.subTest(path=path):
                 self.assert_install_guidance(normalized)
-                for phrase in ("stop before adding or enabling", "obsolete required-workflow"):
+                for phrase in ("stop before adding or enabling",):
                     mutated = re.sub(phrase, "removed", normalized, flags=re.IGNORECASE)
                     self.assertNotEqual(mutated, normalized)
                     with self.assertRaises(AssertionError):
                         self.assert_install_guidance(mutated)
+
+    def test_gate_only_caller_matches_template_contract(self):
+        caller_path = WORKFLOWS / "pr-size-caller.yml"
+        caller = caller_path.read_text(encoding="utf-8")
+        template = TEMPLATE.read_text(encoding="utf-8")
+        top, jobs = parse_workflow(caller_path)
+        template_top, template_jobs = parse_workflow(TEMPLATE)
+        self.assertEqual(set(jobs), {"pr-size-gate"})
+        self.assertEqual(jobs["pr-size-gate"], template_jobs["pr-size-gate"])
+        self.assertEqual(top, template_top)
+        for section in ("concurrency", "jobs"):
+            self.assertTrue(test_pr_size_source.block(caller, 0, section))
+        self.assertEqual(test_pr_size_source.block(caller, 0, "concurrency"),
+                         test_pr_size_source.block(template, 0, "concurrency"))
+        self.assert_gate_event_and_failure_contract(caller, (WORKFLOWS / "pr-size-gate.yml").read_text())
 
     def test_weekly_reusable_requests_read_only(self):
         # CI-STANDARD promises the weekly tally runs read-only; that is only

@@ -1,0 +1,36 @@
+# Gate-only caller; the advisory reusable remains in pr-size.yml.
+# Do not require this check until STANDARD.md's qualification hold is cleared.
+name: pr-size-caller
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
+  pull_request_review:
+    types: [submitted, dismissed]
+  push:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Optional PR number to evaluate; diagnostic only"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.event_name }}${{ github.event_name == 'workflow_dispatch' && '-dispatch' || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pr-size-gate:
+    name: pr-size-gate
+    if: github.event_name == 'pull_request' || github.event_name == 'pull_request_review' || inputs.pr_number != '' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    uses: TogetherWeOwn/.github/.github/workflows/pr-size-gate.yml@26c506700b46a96601d69de7308698748c1cabcb
+    with:
+      pr-number: ${{ inputs.pr_number || '' }}
+      exclude-extra: ""
