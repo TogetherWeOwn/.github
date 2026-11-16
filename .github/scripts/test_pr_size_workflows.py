@@ -218,7 +218,7 @@ class TemplatePermissionContract(unittest.TestCase):
         self.assertEqual(test_pr_size_source.scalars(events, 2).get("push"), "")
         concurrency = test_pr_size_source.scalars(test_pr_size_source.block(template, 0, "concurrency"), 2)
         self.assertEqual(concurrency, {
-            "group": "${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.event_name }}${{ github.event_name == 'workflow_dispatch' && '-dispatch' || '' }}",
+            "group": "${{ github.workflow }}-${{ github.event_name == 'push' && github.run_id || github.event.pull_request.number || inputs.pr_number || github.event_name }}${{ github.event_name == 'workflow_dispatch' && '-dispatch' || '' }}",
             "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
         })
         caller = template.split("  pr-size-gate:\n", 1)[1].split("\n  pr-size-weekly:", 1)[0]
@@ -262,8 +262,8 @@ class TemplatePermissionContract(unittest.TestCase):
         mutations = (
             ("  pr-size-gate:\n    name: pr-size-gate\n",
              "  pr-size-gate:\n    name: pr-size-gate\n    needs: failing-job\n"),
-            ("  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.event_name }}${{ github.event_name == 'workflow_dispatch' && '-dispatch' || '' }}",
-             "  group: shared\n# github.event_name == 'workflow_dispatch' && '-dispatch'"),
+            ("github.event_name == 'push' && github.run_id || ", ""),
+            ("${{ github.event_name == 'workflow_dispatch' && '-dispatch' || '' }}", ""),
             ("  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
              "  cancel-in-progress: true\n# cancel-in-progress: ${{ github.event_name == 'pull_request' }}"),
             ("  push:\n", ""),
