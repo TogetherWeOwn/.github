@@ -151,7 +151,7 @@ class TemplatePermissionContract(unittest.TestCase):
                     ["git", "show", f"{match.group('ref')}:.github/workflows/{filename}"],
                     cwd=ROOT, text=True,
                 )
-                test_pr_size_source.assert_trusted_source(self, text, mode)
+                test_pr_size_source.assert_trusted_source(self, text, mode, "6523ade876de30dfc71e4bdfe0821dd22ff9404c")
                 checkout, execution = test_pr_size_source.steps(text, mode)
                 options = test_pr_size_source.checkout_options(text, mode)
                 self.assertRegex(test_pr_size_source.scalars(checkout, 8)["uses"], r"^actions/checkout@[0-9a-f]{40}$")
