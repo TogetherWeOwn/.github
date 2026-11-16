@@ -13,9 +13,14 @@
 # over-limit pull request fails here instead of wasting a review cycle on
 # a refusal (or a superficial review) later. The gate fails closed: if
 # the size cannot be measured, the run errors instead of passing silently.
-# Adopters add this check to their ruleset's required-workflows list once
-# the caller workflow is on their default branch (STANDARD.md rule: never
-# require a check before its workflow exists there).
+# Adopters can install the caller and discover its PR check and expected App.
+# STOP before adding or enabling a requirement: the current caller does not
+# establish rule 25's meaningful default-branch result; PR observation is not
+# a substitute. See STANDARD.md for the prerequisite and qualification hold.
+# The caller-selected c9d36db5b08703a3d7c8cd2112256f8768be44ce snapshot has
+# obsolete required-workflow header guidance; follow the current contract.
+# App pinning does not bind a workflow, and asynchronous events and skipped
+# checks require separate enforcement qualification.
 #
 # Thresholds: fixed at the org standard inside this workflow (there are
 # no threshold inputs, so a caller cannot weaken the gate; do not raise
@@ -61,8 +66,8 @@
 # `size-exception` label AND an APPROVED review from someone other than
 # the author, and only below the 1,000-line hard stop. Even then, Devin
 # must still be satisfied via review slices for the over-limit diff
-# (STANDARD.md "PR size gate"). The script ensures the label exists so
-# authors can apply it themselves.
+# (STANDARD.md "PR size gate"). When the label is absent, the script
+# attempts to create it; an already-applied label needs no label write.
 #
 # The gating logic lives ONCE in `.github/scripts/pr_size.py` next to this
 # file. The job checks out THIS repository at an explicit, reviewed

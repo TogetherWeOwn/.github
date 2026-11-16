@@ -456,8 +456,9 @@ labeller or silence its own label by deleting a local copy.
   appear in a ruleset's required-workflows list. The labeller exits 0 on
   any API failure (and fork PRs, whose token is read-only, warn and skip),
   so labelling can never turn a run red. The exception is `pr-size-gate`
-  (next section): a separate reusable workflow whose whole purpose is to
-  block, and which therefore MUST be required. Org-level inheritance
+  (next section): a separate reusable workflow intended to block once the
+  enforcement prerequisites and qualification in that section are met. Do
+  not add or enable its requirement before then. Org-level inheritance
   happens through the template and repo bootstrap, not merge blocking.
 - **Token**: callers grant job-level `issues: write` + `pull-requests:
   write` to call the label reusable and read-only to call the weekly one.
@@ -519,19 +520,33 @@ exclusion - only the script's exclusions, per repo config, count.
 - **Fails closed**: if the size cannot be measured, the check errors
   instead of passing silently. Passing-path comments are best-effort,
   so a fork PR (read-only token) within the budget passes on that
-  token; a fork PR over the gate still errors (it cannot post the
-  failure comment, ensure the exception label, or complete the
-  exception approval) - intentional.
+  token. An over-budget fork PR without a valid exception can error
+  when its read-only token cannot create the exception label or post the
+  failure comment; an otherwise valid exception does not require a label
+  write. Treat fork behavior as part of adopter qualification.
 - **Devin success is not proof of review**: merge-conflict skips also
   report `success` (two-web-next#2064). Whether Devin actually reviewed
   is decided by the review rules, which check the status description,
   not just its state - not by this gate.
-- **Ship in two steps** (the "never require a check before its workflow
-  exists on the default branch" rule above): merge the caller workflow,
-  confirm the gate reports on the default branch, then require the
-  caller's `pr-size-gate` job in the ruleset (the check the caller
-  workflow reports; the reusable workflow itself is never required
-  standalone).
+- **Prepare, then stop before enforcement**: merge the caller workflow,
+  then observe the genuine gate on a PR and discover its exact emitted check
+  context and source App. One observed caller emitted `pr-size-gate / gate`
+  from GitHub Actions App `15368`; verify both per adopter. A PR result does
+  not satisfy rule 25's default-branch reporting prerequisite: the current
+  caller does not establish a meaningful gate result on a default-branch
+  commit. Stop before adding or enabling the requirement until a separately
+  admitted, independently reviewed producer/evidence approach establishes
+  that prerequisite and genuine PR enforcement is qualified. When eligible,
+  require the status check with the expected App, not a ruleset-required
+  workflow or the advisory labeller or weekly tally.
+  The template selects `c9d36db5b08703a3d7c8cd2112256f8768be44ce`, whose
+  immutable reusable gate header contains obsolete required-workflow guidance;
+  follow this current contract and enforcement hold instead. A later repin
+  requires the normal reviewed pin chain.
+  App pinning does not bind a particular workflow: another same-App job can
+  reuse the context. Protect caller changes independently, and verify that
+  skipped or neutral results and missing events cannot satisfy the intended
+  gate. Manual dispatch is diagnostic and does not refresh the PR check.
 - **Split procedure** (the gate's failure comment links here): split an
   over-gate pull request as **stacked pull requests** (independently
   mergeable pieces, each landing on the previous one's branch),
@@ -553,15 +568,16 @@ exclusion - only the script's exclusions, per repo config, count.
   administer this repository** (association is not authorization - a read-only
   organization member cannot grant the exception) - the gate then
   passes, but Devin must still be satisfied via review slices for the
-  over-limit diff. The gate script ensures the label exists so authors
-  can apply it themselves. The gate re-evaluates when the label is
-  applied or removed or a review is submitted or dismissed, so
-  granting the exception needs no manual re-run and revoking it
-  re-runs and fails the gate instead of leaving a stale passing check.
-  At or above the hard stop there is no exception: split
-  it. The gate, its comment and this section are the whole contract;
-  there is no per-repo override and no way to skip the gate without the
-  exception.
+  over-limit diff. When the exception label is absent, the gate attempts
+  to create it; it does not write the label when already applied. The gate
+  re-evaluates when the label is
+  applied or removed or a review is submitted or dismissed. These events
+  are asynchronous, not an atomic change to the required check: an old
+  success can remain visible until a new result arrives. Qualify actual
+  enforcement, including revocations, overlapping events, re-runs and
+  skipped results, before promotion; hold if a stale result satisfies the
+  requirement contrary to current state. At or above the hard stop there is
+  no exception: split it. There is no per-repo threshold override.
 
 ### Banned
 
