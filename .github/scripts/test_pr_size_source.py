@@ -84,7 +84,10 @@ def steps(text, mode):
     job = block(block(text, 0, "jobs"), 2, mode)
     raw = block(job, 4, "steps")
     # Normalize the first '- key:' line to the following keys' indentation.
-    return ["        " + part for part in re.split(r"(?m)^      - ", raw)[1:]]
+    result = ["        " + part for part in re.split(r"(?m)^      - ", raw)[1:]]
+    if mode in {"label", "weekly"} and len(result) != 2:
+        raise AssertionError(f"expected exactly two {mode} steps")
+    return result
 
 
 def checkout_options(text, mode):
@@ -255,6 +258,20 @@ class CentralSourceContract(unittest.TestCase):
 
 
 class SourceNegativeControls(unittest.TestCase):
+    def test_label_and_weekly_reject_intermediate_executable_step(self):
+        for filename, mode in MODES.items():
+            if mode == "gate":
+                continue
+            text = (WORKFLOWS / filename).read_text()
+            marker = "      - name: "
+            position = text.rfind(marker)
+            self.assertGreater(position, 0)
+            mutated = text[:position] + "      - run: true\n" + text[position:]
+            with self.subTest(workflow=filename), self.assertRaisesRegex(
+                AssertionError, "expected exactly two"
+            ):
+                steps(mutated, mode)
+
     def test_reviewed_source_fixture_is_accepted(self):
         for filename, mode in MODES.items():
             with self.subTest(workflow=filename):
