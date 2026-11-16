@@ -167,7 +167,8 @@ jobs:
           PR_SIZE_EXCLUDE_EXTRA: ${{ inputs.exclude-extra }}
         run: |
           export PR_SIZE_OBJECTS_DIR="$GITHUB_WORKSPACE/.pr-size-caller/.git/objects"
-          export PR_SIZE_CHECKED_SHA="$(git -C "$GITHUB_WORKSPACE/.pr-size-caller" rev-parse --verify HEAD^{commit})"
+          PR_SIZE_CHECKED_SHA="$(git -C "$GITHUB_WORKSPACE/.pr-size-caller" rev-parse --verify 'HEAD^{commit}')"
+          export PR_SIZE_CHECKED_SHA
           python3 .pr-size-central/.github/scripts/pr_size.py landed
 
       - name: Gate the pull request size (required)

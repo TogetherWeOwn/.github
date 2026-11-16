@@ -177,7 +177,7 @@ class CentralSourceContract(unittest.TestCase):
         self.assertNotIn("if", scalars(job, 4))
         self.assertNotIn("continue-on-error", text)
         self.assertNotRegex(text, r"(?m)^\s+secrets:")
-        source, checkout, audit, pr = steps(text, "gate")
+        _source, checkout, audit, pr = steps(text, "gate")
         assert_trusted_source(self, text, "gate")
         self.assertEqual(checkout_options(text, "gate")["persist-credentials"], "false")
         self.assertEqual(scalars(checkout, 8), {
@@ -198,11 +198,12 @@ class CentralSourceContract(unittest.TestCase):
             "PR_SIZE_GATE_THRESHOLD": "400", "PR_SIZE_GATE_FILES": "20",
             "PR_SIZE_HARD_STOP": "1000", "PR_SIZE_EXCLUDE_EXTRA": "${{ inputs.exclude-extra }}",
         })
-        self.assertEqual(audit.split("        run: |\n", 1)[1].rstrip(), '\n'.join((
-            '          export PR_SIZE_OBJECTS_DIR="$GITHUB_WORKSPACE/.pr-size-caller/.git/objects"',
-            '          export PR_SIZE_CHECKED_SHA="$(git -C "$GITHUB_WORKSPACE/.pr-size-caller" rev-parse --verify HEAD^{commit})"',
-            '          python3 .pr-size-central/.github/scripts/pr_size.py landed',
-        )))
+        self.assertEqual(audit.split("        run: |\n", 1)[1].rstrip(), (
+            '          export PR_SIZE_OBJECTS_DIR="$GITHUB_WORKSPACE/.pr-size-caller/.git/objects"\n'
+            '          PR_SIZE_CHECKED_SHA="$(git -C "$GITHUB_WORKSPACE/.pr-size-caller" rev-parse --verify \'HEAD^{commit}\')"\n'
+            '          export PR_SIZE_CHECKED_SHA\n'
+            '          python3 .pr-size-central/.github/scripts/pr_size.py landed'
+        ))
         self.assertEqual(scalars(pr, 8)["if"], "github.event_name != 'push'")
 
     def test_landed_wiring_and_negative_controls(self):
@@ -212,8 +213,9 @@ class CentralSourceContract(unittest.TestCase):
             ("ref: ${{ github.sha }}", "ref: main"),
             ("fetch-depth: 0", "fetch-depth: 1"),
             ("github.event_name == 'push'", "false"),
-            ('export PR_SIZE_CHECKED_SHA="$(git -C "$GITHUB_WORKSPACE/.pr-size-caller" rev-parse --verify HEAD^{commit})"',
-             'export PR_SIZE_CHECKED_SHA="$GITHUB_SHA"'),
+            ('PR_SIZE_CHECKED_SHA="$(git -C "$GITHUB_WORKSPACE/.pr-size-caller" rev-parse --verify \'HEAD^{commit}\')"',
+             'PR_SIZE_CHECKED_SHA="$GITHUB_SHA"'),
+            ('PR_SIZE_CHECKED_SHA="$(git -C', 'export PR_SIZE_CHECKED_SHA="$(git -C'),
             ("pr_size.py landed", "pr_size.py gate"),
             ("pr_size.py landed", "pr_size.py landed || true"),
             ("persist-credentials: false", "persist-credentials: true"),
