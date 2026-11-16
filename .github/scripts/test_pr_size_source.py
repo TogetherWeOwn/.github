@@ -31,10 +31,10 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 CENTRAL_REPOSITORY = "TogetherWeOwn/.github"
 REVIEWED_SHAS = dict.fromkeys(("label", "weekly", "gate"),
-                              "6523ade876de30dfc71e4bdfe0821dd22ff9404c")
+                              "28785b592a572ddd430d22574f26ace1d8580b3f")
 SCRIPT = ".github/scripts/pr_size.py"
 SCRIPT_SHA256 = dict.fromkeys(REVIEWED_SHAS,
-                              "ffaf044922d01171f7a851ca9c9249cc9c09c4d5d577c30c0276c46e100875a5")
+                              "0325f46e76f948b66d1a4e78e14824138251f06b5da80bddf28efc0ddccd242d")
 MODES = {
     "pr-size.yml": "label",
     "pr-size-weekly.yml": "weekly",
@@ -83,19 +83,25 @@ def scalars(text, indent):
 def steps(text, mode):
     job = block(block(text, 0, "jobs"), 2, mode)
     raw = block(job, 4, "steps")
+    # Reject YAML sequence forms that the limited reader cannot split safely.
+    if re.search(r"(?m)^      -(?:\s*(?:#.*)?$|\t)", raw):
+        raise AssertionError("unsupported step sequence shape")
     # Normalize the first '- key:' line to the following keys' indentation.
-    return ["        " + part for part in re.split(r"(?m)^      - ", raw)[1:]]
+    result = ["        " + part for part in re.split(r"(?m)^      - ", raw)[1:]]
+    if mode in {"label", "weekly"} and len(result) != 2:
+        raise AssertionError(f"expected exactly two {mode} steps")
+    return result
 
 
 def checkout_options(text, mode):
     return scalars(block(steps(text, mode)[0], 8, "with"), 10)
 
 
-def assert_trusted_source(test, text, mode):
+def assert_trusted_source(test, text, mode, reviewed_sha=None):
     options = checkout_options(text, mode)
     # Full identity, not merely a 40-hex shape: an unreviewed commit or a
     # caller's otherwise-valid SHA is not an approved script snapshot.
-    for field, expected in (("repository", CENTRAL_REPOSITORY), ("ref", REVIEWED_SHAS[mode])):
+    for field, expected in (("repository", CENTRAL_REPOSITORY), ("ref", reviewed_sha or REVIEWED_SHAS[mode])):
         with test.subTest(field=field):
             test.assertEqual(options.get(field), expected)
 
@@ -104,7 +110,7 @@ def source_fixture(text, mode):
     """Known-good source fields for controls, even before the fix is present."""
     for field, value in (("repository", CENTRAL_REPOSITORY), ("ref", REVIEWED_SHAS[mode])):
         text, count = re.subn(
-            rf"(?m)^          {field}: .*$", f"          {field}: {value}", text
+            rf"(?m)^          {field}: .*$", f"          {field}: {value}", text, count=1
         )
         if count != 1:
             raise AssertionError(f"expected one checkout {field}")
@@ -121,7 +127,8 @@ class CentralSourceContract(unittest.TestCase):
         for filename, mode in MODES.items():
             with self.subTest(workflow=filename):
                 text = (WORKFLOWS / filename).read_text()
-                checkout, execution = steps(text, mode)
+                all_steps = steps(text, mode)
+                checkout, execution = all_steps[0], all_steps[-1]
                 attributes = scalars(checkout, 8)
                 self.assertRegex(attributes["uses"], r"^actions/checkout@[0-9a-f]{40}$")
                 self.assertLessEqual(set(attributes), {"name", "uses", "with"})
@@ -134,14 +141,16 @@ class CentralSourceContract(unittest.TestCase):
                     {"repository", "ref", "path", "sparse-checkout", "persist-credentials"},
                 )
                 attributes = scalars(execution, 8)
-                self.assertEqual(set(attributes), {"name", "env", "run"})
+                self.assertEqual(set(attributes), {"name", "env", "run"} | ({"if"} if mode == "gate" else set()))
+                if mode == "gate":
+                    self.assertEqual(attributes["if"], "github.event_name != 'push'")
                 self.assertEqual(attributes["run"], f"python3 .pr-size-central/{SCRIPT} {mode}")
 
     def test_caller_context_is_data_for_the_api_not_a_script_selector(self):
         for filename, mode in MODES.items():
             with self.subTest(workflow=filename):
                 text = (WORKFLOWS / filename).read_text()
-                env = scalars(block(steps(text, mode)[1], 8, "env"), 10)
+                env = scalars(block(steps(text, mode)[-1], 8, "env"), 10)
                 expected = {"GH_TOKEN": "${{ github.token }}", "REPO": "${{ github.repository }}"}
                 if mode == "label":
                     expected.update({
@@ -168,6 +177,59 @@ class CentralSourceContract(unittest.TestCase):
                     "weekly": {"runs-on"},
                 }[mode]
                 self.assertEqual(set(inputs), allowed)
+
+    def assert_landed_wiring(self, text):
+        job = block(block(text, 0, "jobs"), 2, "gate")
+        self.assertNotIn("if", scalars(job, 4))
+        self.assertNotIn("continue-on-error", text)
+        self.assertNotRegex(text, r"(?m)^\s+secrets:")
+        _source, checkout, audit, pr = steps(text, "gate")
+        assert_trusted_source(self, text, "gate")
+        self.assertEqual(checkout_options(text, "gate")["persist-credentials"], "false")
+        self.assertEqual(scalars(checkout, 8), {
+            "name": "Fetch caller objects", "if": "github.event_name == 'push'",
+            "uses": "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+            "with": "",
+        })
+        self.assertEqual(scalars(block(checkout, 8, "with"), 10), {
+            "repository": "${{ github.repository }}", "ref": "${{ github.sha }}",
+            "path": ".pr-size-caller", "fetch-depth": "0", "persist-credentials": "false",
+        })
+        self.assertEqual(scalars(audit, 8), {
+            "name": "Audit the landed range (required)", "if": "github.event_name == 'push'",
+            "env": "", "run": "|",
+        })
+        self.assertEqual(scalars(block(audit, 8, "env"), 10), {
+            "GH_TOKEN": "${{ github.token }}", "REPO": "${{ github.repository }}",
+            "PR_SIZE_GATE_THRESHOLD": "400", "PR_SIZE_GATE_FILES": "20",
+            "PR_SIZE_HARD_STOP": "1000", "PR_SIZE_EXCLUDE_EXTRA": "${{ inputs.exclude-extra }}",
+        })
+        self.assertEqual(audit.split("        run: |\n", 1)[1].rstrip(), (
+            '          export PR_SIZE_OBJECTS_DIR="$GITHUB_WORKSPACE/.pr-size-caller/.git/objects"\n'
+            '          PR_SIZE_CHECKED_SHA="$(git -C "$GITHUB_WORKSPACE/.pr-size-caller" rev-parse --verify \'HEAD^{commit}\')"\n'
+            '          export PR_SIZE_CHECKED_SHA\n'
+            '          python3 .pr-size-central/.github/scripts/pr_size.py landed'
+        ))
+        self.assertEqual(scalars(pr, 8)["if"], "github.event_name != 'push'")
+
+    def test_landed_wiring_and_negative_controls(self):
+        text = (WORKFLOWS / "pr-size-gate.yml").read_text()
+        self.assert_landed_wiring(text)
+        for old, new in (
+            ("ref: ${{ github.sha }}", "ref: main"),
+            ("fetch-depth: 0", "fetch-depth: 1"),
+            ("github.event_name == 'push'", "false"),
+            ('PR_SIZE_CHECKED_SHA="$(git -C "$GITHUB_WORKSPACE/.pr-size-caller" rev-parse --verify \'HEAD^{commit}\')"',
+             'PR_SIZE_CHECKED_SHA="$GITHUB_SHA"'),
+            ('PR_SIZE_CHECKED_SHA="$(git -C', 'export PR_SIZE_CHECKED_SHA="$(git -C'),
+            ("pr_size.py landed", "pr_size.py gate"),
+            ("pr_size.py landed", "pr_size.py landed || true"),
+            ("persist-credentials: false", "persist-credentials: true"),
+        ):
+            mutated = text.replace(old, new, 1)
+            self.assertNotEqual(mutated, text)
+            with self.subTest(mutation=new), self.assertRaises(AssertionError):
+                self.assert_landed_wiring(mutated)
 
     def test_write_and_read_only_scopes_remain_separate(self):
         # The label and gate jobs comment/short-write on PRs; the weekly
@@ -199,6 +261,32 @@ class CentralSourceContract(unittest.TestCase):
 
 
 class SourceNegativeControls(unittest.TestCase):
+    def test_label_and_weekly_reject_intermediate_executable_step(self):
+        for filename, mode in MODES.items():
+            if mode == "gate":
+                continue
+            text = (WORKFLOWS / filename).read_text()
+            marker = "      - name: "
+            position = text.rfind(marker)
+            self.assertGreater(position, 0)
+            mutated = text[:position] + "      - run: true\n" + text[position:]
+            with self.subTest(workflow=filename), self.assertRaisesRegex(
+                AssertionError, "expected exactly two"
+            ):
+                steps(mutated, mode)
+
+    def test_unsupported_step_sequence_shape_is_rejected(self):
+        for filename, mode in MODES.items():
+            text = (WORKFLOWS / filename).read_text()
+            position = text.rfind("      - name: ")
+            self.assertGreater(position, 0)
+            for step in ("      -\n          run: true\n", "      -\trun: true\n"):
+                mutated = text[:position] + step + text[position:]
+                with self.subTest(workflow=filename, step=step), self.assertRaisesRegex(
+                    AssertionError, "unsupported step sequence shape"
+                ):
+                    steps(mutated, mode)
+
     def test_reviewed_source_fixture_is_accepted(self):
         for filename, mode in MODES.items():
             with self.subTest(workflow=filename):
@@ -264,6 +352,7 @@ class SourceNegativeControls(unittest.TestCase):
 # Include the historical negative controls as well as the reviewed pin.
 # Never execute a ref selected solely by a proposed workflow change.
 SOURCE_HASHES = {
+    "28785b592a572ddd430d22574f26ace1d8580b3f": "0325f46e76f948b66d1a4e78e14824138251f06b5da80bddf28efc0ddccd242d",
     "6523ade876de30dfc71e4bdfe0821dd22ff9404c": "ffaf044922d01171f7a851ca9c9249cc9c09c4d5d577c30c0276c46e100875a5",
     "e79d9ecbd94620b0f103edcbe5d705d47a0edceb": "6f1945a60713dabbd4fbf168243077a4d461409be91ce3c09a4e226b98df3e15",
     "86aec407d4fccc8b30ed9f9e484661f5d258239d": "3d20e0d175bbe5957548a8993f6a2bcbe1987d99544f338ca4f474a24f6e545a",
