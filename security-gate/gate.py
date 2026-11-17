@@ -46,6 +46,7 @@ db-urls = ["https://github.com/RustSec/advisory-db"]
 ignore = [
     { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained (informational, no known vulnerability) and is required by the Cloudflare workers-rs worker crate with no maintained alternative; review by 2027-02-17" },
 ]
+unused-ignored-advisory = "allow"
 yanked = "deny"
 '''
 

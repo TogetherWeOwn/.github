@@ -489,6 +489,7 @@ class DenyPolicyCase(unittest.TestCase):
         self.assertEqual([entry["id"] for entry in advisories["ignore"]], ["RUSTSEC-2026-0543"])
         self.assertTrue(all(entry.get("reason") for entry in advisories["ignore"]))
         self.assertEqual(advisories["yanked"], "deny")
+        self.assertEqual(advisories["unused-ignored-advisory"], "allow")
         self.assertNotIn("unmaintained", advisories)
 
 
