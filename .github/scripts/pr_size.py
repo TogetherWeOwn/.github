@@ -100,6 +100,12 @@ DEFAULT_GATE_FILE_THRESHOLD = 20
 DEFAULT_HARD_STOP_THRESHOLD = 1000
 DEFAULT_WARN_THRESHOLD = 200
 EXCEPTION_LABEL = "size-exception"
+# GitHub App identities that may grant a size exception. Every agent PR is
+# authored by the organization's single user account, so no human reviewer
+# other than the author exists; the company's own App reviews on the owner's
+# behalf. App reviews report author_association NONE/CONTRIBUTOR and no
+# repository permission, so they are matched by exact bot login and user type.
+TRUSTED_APP_APPROVERS = frozenset({"togetherweown[bot]"})
 EXCEPTION_LABEL_COLOR = "5319E7"
 # The split procedure for over-gate pull requests, published once in the
 # org standard so every repository's gate posts the same procedure.
@@ -703,11 +709,20 @@ def approved_by_non_author(reviews, author, head_sha, permission_of):
         except ApiError:
             return False
 
+    def trusted_app(login, review):
+        user = review.get("user") or {}
+        return login in TRUSTED_APP_APPROVERS and user.get("type") == "Bot"
+
     return any(
         review.get("state") == "APPROVED"
         and review.get("commit_id") == head_sha
-        and review.get("author_association") in ("OWNER", "MEMBER", "COLLABORATOR")
-        and authorized(login)
+        and (
+            trusted_app(login, review)
+            or (
+                review.get("author_association") in ("OWNER", "MEMBER", "COLLABORATOR")
+                and authorized(login)
+            )
+        )
         for login, review in latest.items()
         if login != author
     )

@@ -855,6 +855,53 @@ class Gate(unittest.TestCase):
         )
         self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
 
+    def test_trusted_app_approval_unlocks_the_exception(self):
+        # The company App reviews on the owner's behalf; GitHub reports it
+        # with no repository permission, so it is trusted by exact login.
+        api = FakeApi(
+            self._over(),
+            labels=[pr_size.EXCEPTION_LABEL],
+            author="author",
+            reviews=[self._approved(login="togetherweown[bot]", author_association="NONE",
+                                    user={"login": "togetherweown[bot]", "type": "Bot"})],
+            permissions={"togetherweown[bot]": "none"},
+        )
+        self.assertTrue(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+
+    def test_trusted_app_needs_bot_type_and_current_head(self):
+        bot = {"login": "togetherweown[bot]", "type": "Bot"}
+        for review in (
+            self._approved(login="togetherweown[bot]", author_association="NONE",
+                           user={"login": "togetherweown[bot]", "type": "User"}),
+            self._approved(login="togetherweown[bot]", author_association="NONE",
+                           user=bot, commit_id="older-head"),
+        ):
+            api = FakeApi(self._over(), labels=[pr_size.EXCEPTION_LABEL], author="author",
+                          reviews=[review], permissions={"togetherweown[bot]": "none"})
+            self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+
+    def test_untrusted_app_cannot_unlock_the_exception(self):
+        api = FakeApi(
+            self._over(),
+            labels=[pr_size.EXCEPTION_LABEL],
+            author="author",
+            reviews=[self._approved(login="other-app[bot]", author_association="NONE",
+                                    user={"login": "other-app[bot]", "type": "Bot"})],
+            permissions={"other-app[bot]": "none"},
+        )
+        self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+
+    def test_trusted_app_cannot_pass_the_hard_stop(self):
+        api = FakeApi(
+            self._over(pr_size.DEFAULT_HARD_STOP_THRESHOLD),
+            labels=[pr_size.EXCEPTION_LABEL],
+            author="author",
+            reviews=[self._approved(login="togetherweown[bot]", author_association="NONE",
+                                    user={"login": "togetherweown[bot]", "type": "Bot"})],
+            permissions={"togetherweown[bot]": "none"},
+        )
+        self.assertFalse(pr_size.gate_pr(api, 7, self.GATE, (), log=lambda *_: None))
+
     def test_read_only_member_cannot_unlock_the_exception(self):
         # author_association is MEMBER for an organization member with
         # only read access to this repository: association is not
