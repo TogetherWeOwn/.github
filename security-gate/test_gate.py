@@ -482,5 +482,16 @@ class ShapeTests(unittest.TestCase):
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
 
+class DenyPolicyCase(unittest.TestCase):
+    def test_central_advisory_exceptions_are_exactly_the_reviewed_set(self):
+        import tomllib
+        advisories = tomllib.loads(gate.DENY_CONFIG)["advisories"]
+        self.assertEqual([entry["id"] for entry in advisories["ignore"]], ["RUSTSEC-2026-0543"])
+        self.assertTrue(all(entry.get("reason") for entry in advisories["ignore"]))
+        self.assertEqual(advisories["yanked"], "deny")
+        self.assertEqual(advisories["unused-ignored-advisory"], "allow")
+        self.assertNotIn("unmaintained", advisories)
+
+
 if __name__ == "__main__":
     unittest.main()
