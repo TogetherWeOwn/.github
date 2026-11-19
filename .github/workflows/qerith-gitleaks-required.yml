@@ -1,0 +1,192 @@
+name: Qerith trusted history scan
+
+on:
+  pull_request: {types: [opened, synchronize, reopened, ready_for_review, edited]}
+  merge_group: {types: [checks_requested]}
+permissions: {contents: read}
+# No shared concurrency: retrying an older candidate must not cancel another scan.
+jobs:
+  gitleaks-required:
+    name: gitleaks-required
+    if: github.repository_id != '1403503756' # Source repo runs the exact driver in fixture CI.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Scan the exact candidate history
+        run: |
+          python3 -I - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess as sp
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          VERSION = "8.30.1"
+          SHA256 = "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+          # Qerith's reviewed baseline: the pinned binary's built-ins and zero ignores.
+          POLICY = "[extend]\nuseDefault = true\n"
+          GIT = "/usr/bin/git"
+
+          class Rejected(Exception):
+              pass
+
+          def candidate(env, event):
+              try:
+                  repo = env["GITHUB_REPOSITORY"]
+                  repo_id = event["repository"]["id"]
+                  if (
+                      not re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", repo)
+                      or repo.rsplit("/", 1)[1] in {".", ".."}
+                      or type(repo_id) is not int
+                      or repo_id <= 0
+                      or str(repo_id) != env["GITHUB_REPOSITORY_ID"]
+                      or event["repository"]["full_name"] != repo
+                  ):
+                      raise ValueError
+                  kind = env["GITHUB_EVENT_NAME"]
+                  if kind == "pull_request":
+                      pr = event["pull_request"]
+                      if (
+                          event["action"] not in {"opened", "synchronize", "reopened", "ready_for_review", "edited"}
+                          or pr["base"]["repo"]["id"] != repo_id
+                          or pr["base"]["repo"]["full_name"] != repo
+                          or pr["base"]["ref"] != "main"
+                      ):
+                          raise ValueError
+                      # github.sha is the PR merge ref, not the PR head.
+                      head, base = pr["head"]["sha"], pr["base"]["sha"]
+                  elif kind == "merge_group":
+                      group = event["merge_group"]
+                      head, base = group["head_sha"], group["base_sha"]
+                      if (
+                          event["action"] != "checks_requested"
+                          or head != env["GITHUB_SHA"]
+                          or group["head_ref"] != env["GITHUB_REF"]
+                          or not group["head_ref"].startswith("refs/heads/")
+                          or group["head_ref"] == group["base_ref"]
+                          or group["base_ref"] != "refs/heads/main"
+                      ):
+                          raise ValueError
+                  else:
+                      raise ValueError
+                  if head == base or not all(re.fullmatch(r"[0-9a-f]{40}", sha) for sha in (head, base)):
+                      raise ValueError
+              except (KeyError, TypeError, ValueError, AttributeError):
+                  raise Rejected("Missing, mismatched or unsupported candidate identity") from None
+              return kind, repo, head, base
+
+          def tool_env(work):
+              return {
+                  "PATH": os.defpath,
+                  "HOME": str(work),
+                  "GIT_CONFIG_NOSYSTEM": "1",
+                  "GIT_CONFIG_GLOBAL": "/dev/null",
+                  "GIT_NO_REPLACE_OBJECTS": "1",
+                  "GIT_TERMINAL_PROMPT": "0",
+              }
+
+          def run(work, *args):
+              return sp.check_output(args, cwd=work, env=tool_env(work), stderr=sp.DEVNULL).strip()
+
+          def download(work):
+              asset = f"gitleaks_{VERSION}_linux_x64.tar.gz"
+              archive = work / asset
+              run(work, "curl", "-qfsSL", "--proto", "=https", "--proto-redir", "=https",
+                  "--connect-timeout", "10", "--max-time", "30", "--retry", "2",
+                  "-o", archive, f"https://github.com/gitleaks/gitleaks/releases/download/v{VERSION}/{asset}")
+              with archive.open("rb") as source:
+                  if hashlib.file_digest(source, "sha256").hexdigest() != SHA256:
+                      raise Rejected("Scanner archive checksum did not match")
+              run(work, "tar", "-xzf", archive, "gitleaks")
+              return work / "gitleaks"
+
+          def fetch(work, url, kind, head, base):
+              repo = work / "history.git"
+
+              def git(*args):
+                  return run(work, GIT, "-C", repo, *args)
+
+              # No credentials, shallow boundary, worktree, tags or submodules.
+              run(work, GIT, "init", "--bare", "--template=", "--initial-branch=scan", repo)
+              git("fetch", "--no-tags", "--no-recurse-submodules", "--", url,
+                  f"{head}:refs/heads/scan", f"{base}:refs/heads/base")
+              if (
+                  git("rev-parse", "--verify", "HEAD^{commit}").decode() != head
+                  or git("rev-parse", "--verify", "refs/heads/base^{commit}").decode() != base
+                  or git("rev-parse", "--is-shallow-repository") != b"false"
+              ):
+                  raise Rejected("Incomplete or mismatched candidate history")
+              if kind == "merge_group":
+                  git("merge-base", "--is-ancestor", base, head)
+              return repo
+
+          def scan(work, repo, scanner, policy, ignore):
+              if not policy.is_file() or not ignore.is_file():
+                  raise Rejected("Trusted scan policy is missing")
+              history = ("--root", "--diff-merges=first-parent", "--no-renames", "--no-ext-diff", "--no-textconv")
+              # The pinned parser can drop quoted paths ending in a literal backslash.
+              if b"\\\0" in run(work, GIT, "-C", repo, "log", "--format=", "--name-only", "-z", *history, "HEAD", "--"):
+                  raise Rejected("Unsupported historical path; diagnostics withheld")
+              common = ("--config", policy, "--gitleaks-ignore-path", ignore,
+                        "--redact=100", "--no-banner", "--log-level", "error")
+              empty, rules = work / "empty", work / "rules.sarif"
+              empty.mkdir()
+              run(work, scanner, "dir", empty, *common, "--report-format", "sarif", "--report-path", rules)
+              if not any(r["tool"]["driver"].get("rules") for r in json.loads(rules.read_text())["runs"]):
+                  raise Rejected("Trusted scan policy has no effective rules")
+
+              # Gitleaks can swallow a git log failure. Check the exit status
+              # of the child supplying its actual patch stream, not a second log.
+              shim = work / "bin"
+              shim.mkdir()
+              git = shim / "git"
+              git.write_text(
+                  '#!/bin/bash\n'
+                  'if [[ ${1:-} == -C && ${3:-} == log ]]; then\n'
+                  '  /usr/bin/git "$@" && : > "$SCAN_GIT_DONE"\n'
+                  'else\n  exec /usr/bin/git "$@"\nfi\n'
+              )
+              git.chmod(0o700)
+              done = work / "git-done"
+              report, diagnostics = work / "history.json", work / "history.log"
+              env = tool_env(work) | {"PATH": f"{shim}:{os.defpath}", "SCAN_GIT_DONE": str(done)}
+              with diagnostics.open("wb") as log:
+                  result = sp.run(
+                      [scanner, "git", repo, *common, "--exit-code", "1", "--ignore-gitleaks-allow",
+                       f"--log-opts=--text {' '.join(history)} HEAD --",
+                       "--report-format", "json", "--report-path", report],
+                      cwd=work, env=env, check=False, stdout=log, stderr=sp.STDOUT,
+                  )
+              if not done.is_file() or diagnostics.stat().st_size:
+                  raise Rejected("Incomplete history scan; diagnostics withheld")
+              findings = json.loads(report.read_text())
+              if result.returncode == 0 and findings == []:
+                  return
+              if result.returncode == 1 and isinstance(findings, list) and findings:
+                  raise Rejected("Gitleaks reported findings; share only the run link and candidate/base SHAs with Security")
+              raise Rejected("Scanner did not produce a valid verdict; diagnostics withheld")
+
+          def main():
+              try:
+                  event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+                  kind, repo, head, base = candidate(os.environ, event)
+                  print(f"event={kind} candidate={head} base={base} scanner={VERSION}", flush=True)
+                  with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as tmp:
+                      work = Path(tmp)
+                      history = fetch(work, f"https://github.com/{repo}.git", kind, head, base)
+                      policy, ignore = work / "policy.toml", work / "empty.ignore"
+                      policy.write_text(POLICY)
+                      ignore.touch()
+                      scan(work, history, download(work), policy, ignore)
+              except Rejected as error:
+                  sys.exit(str(error))
+              except (OSError, ValueError, KeyError, TypeError, sp.SubprocessError):
+                  sys.exit("Gitleaks setup or scan failed; diagnostics withheld")
+              print("Gitleaks history scan passed; no findings reported")
+
+          if __name__ == "__main__":
+              main()
+          PY
