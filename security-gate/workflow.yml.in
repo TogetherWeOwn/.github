@@ -113,10 +113,11 @@ jobs:
     permissions:
       actions: read
     steps:
-      - name: Download base scan from this run
+      - name: Download base scan from this run (absent when the base has no lockfile)
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: old-json-results
+          pattern: old-json-results
+          merge-multiple: true
           path: ${{ runner.temp }}/gate-work/osv-old/
       - name: Download current scan from this run
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0

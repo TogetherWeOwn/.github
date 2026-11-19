@@ -300,11 +300,33 @@ def sarif_clean(data):
         require(not results, "scanner reported findings")
 
 
+def osv_findings(data):
+    findings = set()
+    for result in data["results"]:
+        for package in result["packages"]:
+            vulnerabilities = package.get("vulnerabilities", [])
+            require(isinstance(vulnerabilities, list), "incomplete OSV new vulnerabilities")
+            for vulnerability in vulnerabilities:
+                require(isinstance(vulnerability, dict) and isinstance(vulnerability.get("id"), str) and
+                        vulnerability["id"] and isinstance(vulnerability.get("aliases", []), list),
+                        "incomplete OSV new vulnerability")
+                findings.add(f'{package["package"]["name"]} {vulnerability["id"]}')
+    return findings
+
+
 def osv_evidence(work):
     documents = {}
+    # Upstream writes no base results when the base branch has no lockfile; its
+    # reporter then compares the PR scan against an empty baseline. Accept the
+    # missing base file only in that shape, and fail on any raw PR-scan finding too.
+    empty_baseline = not (work / "osv-old/old-results.json").exists()
+    if empty_baseline:
+        documents["old"] = {"results": []}
     for name, relative in (("old", "osv-old/old-results.json"),
                            ("new", "osv-new/new-results.json"),
                            ("sarif", "osv-sarif/results.sarif")):
+        if name in documents:
+            continue
         path = work / relative
         require(path.is_file() and not path.is_symlink() and 0 < path.stat().st_size <= MAX_FILE_BYTES,
                 f"missing or oversized OSV {name} evidence")
@@ -320,6 +342,10 @@ def osv_evidence(work):
                 require(isinstance(package, dict) and isinstance(package.get("package"), dict) and
                         package["package"].get("name"), f"incomplete OSV {name} package")
     sarif_clean(documents["sarif"])
+    if empty_baseline:
+        found = sorted(osv_findings(documents["new"]))
+        require(not found, "OSV findings with no base results: " + ", ".join(found[:20]))
+        return {"scanner": "osv-evidence", "status": "passed", "baseline": "empty"}
     return {"scanner": "osv-evidence", "status": "passed"}
 
 
