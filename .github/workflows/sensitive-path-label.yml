@@ -1,0 +1,98 @@
+# Advisory only. Pilot callers pin this workflow after its reviewed merge.
+# No checkout or PR-code execution, even with a write-scoped label token.
+name: Sensitive path label (advisory)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_call: {}
+
+permissions:
+  pull-requests: write
+
+concurrency:
+  group: sensitive-path-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  sensitive-path:
+    name: sensitive-path (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Label sensitive changes without executing PR code
+        env:
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |-
+          python3 -I - <<'LABEL_PY'
+          import fnmatch, json, os, sys, urllib.request
+
+          PILOTS = {"TogetherWeOwn/paperclip-plugin-sandbox-boat"}
+          PATTERNS = (".github/workflows/*", ".coderabbit*", ".devin*", "review-rules/*",
+                      "rulesets/*", "drizzle/*", "wrangler*.toml", "install*", "release.yml")
+
+          def sensitive(path):
+              parts = path.split("/")
+              return (any(fnmatch.fnmatchcase(path, pattern) for pattern in PATTERNS)
+                      or any(part == "CODEOWNERS" or part in ("auth", "migrations")
+                             or "secret" in part.lower() or "token" in part.lower()
+                             or part.startswith(("deploy", "install", "wrangler"))
+                             or part == "release.yml" for part in parts))
+
+          def api(suffix, payload=None):
+              data = json.dumps(payload).encode() if payload is not None else None
+              req = urllib.request.Request(
+                  f"https://api.github.com/repos/{os.environ['REPO']}/{suffix}", data=data,
+                  headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                           "Accept": "application/vnd.github+json", "Content-Type": "application/json",
+                           "User-Agent": "sensitive-path-label"})
+              with urllib.request.urlopen(req, timeout=20) as response:
+                  return json.load(response)
+
+          def run():
+              if os.environ.get("EVENT") != "pull_request":
+                  print("Not a pull_request event; no label action.")
+                  return
+              if "FILES_JSON" in os.environ:  # offline fixture, never workflow input
+                  changed = json.loads(os.environ["FILES_JSON"])
+              else:
+                  number = os.environ["PR_NUMBER"]
+                  before = api(f"pulls/{number}")
+                  if before["head"]["sha"] != os.environ["HEAD_SHA"]:
+                      raise ValueError("stale head")
+                  changed = []
+                  for page in range(1, 31):
+                      batch = api(f"pulls/{number}/files?per_page=100&page={page}")
+                      changed.extend(batch)
+                      if len(batch) < 100:
+                          break
+                  after = api(f"pulls/{number}")
+                  if (after["head"]["sha"] != before["head"]["sha"]
+                          or after["base"]["sha"] != before["base"]["sha"]
+                          or len(changed) != after["changed_files"]):
+                      raise ValueError("incomplete or changed diff")
+              touched = any(sensitive(file["filename"]) or sensitive(file.get("previous_filename", ""))
+                            for file in changed)
+              if not touched:
+                  print("No sensitive-path match; existing labels are never removed.")
+                  return
+              if os.environ.get("REPO") not in PILOTS or os.environ.get("HEAD_REPO") != os.environ.get("REPO"):
+                  print("::warning title=Sensitive path (advisory)::Sensitive paths changed; fork/non-pilot context, no label write. Independent review is still required.")
+                  return
+              if "FILES_JSON" not in os.environ:
+                  result = api(f"issues/{os.environ['PR_NUMBER']}/labels", {"labels": ["sensitive-path"]})
+                  if not any(label["name"] == "sensitive-path" for label in result):
+                      raise ValueError("label missing in readback")
+              print("sensitive-path label applied (advisory, not a permission boundary).")
+
+          try:
+              run()
+          except Exception:
+              # Never expose response bodies, paths or credential-bearing errors.
+              print("::warning title=Sensitive path (advisory)::Could not apply or verify label; inspect access/diff and retain independent review. This is not a required check.")
+          LABEL_PY
