@@ -8,6 +8,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
@@ -183,26 +184,45 @@ class Hosted(History):
         driver["scan"](self.work, self.fetch("pull_request"), self.scanner, *self.policy())
         self.assertEqual((self.work / "parse-done").read_bytes(), b"complete\n")
 
-    def test_reader_fault_after_successful_git_producer(self):
-        self.commit_after_edit()
-        history = self.fetch("pull_request")
+    def faulting_scanner(self, reader):
         git_source = self.src / "sources/git.go"
         original = git_source.read_text()
         self.addCleanup(git_source.write_text, original)
         injected = driver["replace_once"](
-            original, "gitdiff.ParseGitLog(ctx, stdout)",
-            "gitdiff.ParseGitLog(ctx, io.MultiReader(stdout, syntheticParserFault{}))",
+            original, "gitdiff.ParseGitLog(ctx, stdout,",
+            f"gitdiff.ParseGitLog(ctx, io.MultiReader({reader}, syntheticParserFault{{}}),",
         )
         git_source.write_text(injected + '''
           type syntheticParserFault struct{}
           func (syntheticParserFault) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
         ''')
-        scanner = driver["build_scanner"](self.build, self.src, "gitleaks-fixture-fault")
+        return driver["build_scanner"](self.build, self.src, "gitleaks-fixture-fault")
+
+    def test_reader_fault_after_successful_git_producer(self):
+        self.commit_after_edit()
+        history = self.fetch("pull_request")
         with self.assertRaisesRegex(driver["Rejected"], "parser did not complete"):
-            driver["scan"](self.work, history, scanner, *self.policy())
+            driver["scan"](self.work, history, self.faulting_scanner("stdout"), *self.policy())
         self.assertTrue((self.work / "git-done").is_file())
         self.assertFalse((self.work / "parse-done").exists())
         self.assertIn(b"Git log parsing did not complete", (self.work / "history.log").read_bytes())
+
+    def test_reader_fault_stops_active_git_producer(self):
+        # More ordinary output than the pipe can hold, with the fault in the first read.
+        (self.source / "fixture.txt").write_text("ordinary content\n" * 150_000)
+        self.commit("Add ordinary fixture content")
+        history = self.fetch("pull_request")
+        scanner = self.faulting_scanner("io.LimitReader(stdout, 32)")
+        with (
+            patch.object(subprocess, "run", side_effect=partial(subprocess.run, timeout=15)),
+            self.assertRaisesRegex(driver["Rejected"], "Git producer did not complete"),
+        ):
+            driver["scan"](self.work, history, scanner, *self.policy())
+        self.assertFalse((self.work / "parse-done").exists())
+
+    def test_long_commit_message_keeps_following_patch(self):
+        self.fake_value()
+        self.assert_finding("pull_request", self.commit("ordinary text " * 5500))
 
     def test_no_diff_finding_in_pr_history(self):
         (self.source / ".gitattributes").write_text("fixture.txt -diff\n")

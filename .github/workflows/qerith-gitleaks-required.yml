@@ -47,12 +47,17 @@ jobs:
               "strings"
           )
 
-          func ParseGitLog(ctx context.Context, r io.Reader) (<-chan *File, <-chan error) {
+          func ParseGitLog(ctx context.Context, r io.Reader, stop func()) (<-chan *File, <-chan error) {
               files := make(chan *File)
               verdict := make(chan error, 1)
               go func() {
                   defer close(files)
-                  verdict <- parseGitLog(ctx, r, files)
+                  err := parseGitLog(ctx, r, files)
+                  if err != nil {
+                      // Release a writer blocked on stdout before the caller waits for stderr.
+                      stop()
+                  }
+                  verdict <- err
                   close(verdict)
               }()
               return files, verdict
@@ -207,6 +212,14 @@ jobs:
               toolchain = download(work, f"https://go.dev/dl/{GO_ARCHIVE}", GO_ARCHIVE, GO_SHA256)
               run(work, "tar", "-xzf", toolchain)
               (parser / "gitdiff/strict_log.go").write_text(STRICT_PARSER)
+              # Preserve full metadata without the Scanner default line limit; the header is already buffered.
+              patch_header = parser / "gitdiff/patch_header.go"
+              text = replace_once(patch_header.read_text(), "parseHeaderPretty(line, r)", "parseHeaderPretty(line, r, len(s))")
+              text = replace_once(text, "parseHeaderPretty(prettyLine string, r io.Reader)",
+                                  "parseHeaderPretty(prettyLine string, r io.Reader, size int)")
+              text = replace_once(text, "s := bufio.NewScanner(r)\n\tfor s.Scan()",
+                                  "s := bufio.NewScanner(r)\n\ts.Buffer(nil, size)\n\tfor s.Scan()")
+              patch_header.write_text(text)
               git_source = src / "sources/git.go"
               text = replace_once(git_source.read_text(), '"net/url"', '"net/url"\n\t"os"')
               text = replace_once(text, "repoPath    string", "repoPath string\n\tparseVerdict <-chan error")
@@ -215,7 +228,7 @@ jobs:
                   "gitdiffFiles, err := gitdiff.Parse(stdout)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\n"
                   "\treturn &GitCmd{\n\t\tcmd:         cmd,\n\t\tdiffFilesCh: gitdiffFiles,\n\t\terrCh:       errCh,\n"
                   "\t\trepoPath:    sourceClean,\n\t}, nil\n}\n\n// NewGitDiffCmd",
-                  "gitdiffFiles, verdict := gitdiff.ParseGitLog(ctx, stdout)\n\n"
+                  "gitdiffFiles, verdict := gitdiff.ParseGitLog(ctx, stdout, func() { _ = stdout.Close() })\n\n"
                   "\treturn &GitCmd{\n\t\tcmd: cmd, diffFilesCh: gitdiffFiles, errCh: errCh,\n"
                   "\t\trepoPath: sourceClean, parseVerdict: verdict,\n\t}, nil\n}\n\n// NewGitDiffCmd",
               )
@@ -223,8 +236,6 @@ jobs:
                   if s.Cmd.parseVerdict != nil {
                       verdict, ok := <-s.Cmd.parseVerdict
                       if !ok || verdict != nil || ctx.Err() != nil {
-                          // Stop a producer that may still be blocked on an unread pipe.
-                          _ = s.Cmd.cmd.Process.Kill()
                           return errors.New("Git log parsing did not complete")
                       }
                       return os.WriteFile(os.Getenv("SCAN_PARSE_DONE"), []byte("complete\\n"), 0600)
@@ -247,7 +258,9 @@ jobs:
               # Do not allow a build to add a dependency hash outside the pinned go.sum.
               sums = src / "go.sum"
               expected = sums.read_bytes()
-              go(work, src, "build", "-p=4", "-mod=readonly", "-trimpath", "-buildvcs=false", "-o", binary, ".")
+              # Match the pinned upstream release's regex engine.
+              go(work, src, "build", "-p=4", "-mod=readonly", "-trimpath", "-buildvcs=false",
+                 "-tags=gore2regex", "-o", binary, ".")
               if sums.read_bytes() != expected:
                   raise Rejected("Scanner dependency lock changed during build")
               return binary
