@@ -109,7 +109,7 @@ tree removes that tree from the current inventory; deleting only its metadata fa
   with no token passed to subprocesses. They inspect a regular-file snapshot with
   executable bits removed, `.cargo` config omitted and PR-selected Rust toolchain
   files omitted; no PR build scripts, `go generate`, Makefiles or package scripts
-  run. Cargo metadata does not build crates. Go uses version-pinned Go 1.26.10;
+  run. Cargo metadata does not build crates. Go uses version-pinned Go 1.26.11;
   Cargo uses Rust 1.93.0. Unsupported minimum toolchains fail, rather than skip.
 - Scanner archives are version-pinned and SHA-256 checked before extracting only
   the expected regular binary (no archive path extraction). Govulncheck is installed

@@ -105,7 +105,7 @@ class WorkflowTests(unittest.TestCase):
         steps = self.jobs["dependencies"]["steps"]
         go_setup = next(s for s in steps if "setup-go@" in s.get("uses", ""))
         self.assertEqual(go_setup["if"], "needs.inspect.outputs.go == 'true'")
-        self.assertEqual(go_setup["with"], {"go-version": "1.26.10", "cache": "false"})
+        self.assertEqual(go_setup["with"], {"go-version": "1.26.11", "cache": "false"})
         gov = next(s for s in steps if "go install " in s.get("run", ""))
         self.assertIn("govulncheck@v1.9.0", gov["run"])
         self.assertEqual(gov["env"]["GOSUMDB"], "sum.golang.org")
