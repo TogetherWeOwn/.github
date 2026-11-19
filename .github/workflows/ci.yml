@@ -116,6 +116,9 @@ jobs:
         with:
           persist-credentials: false
       - run: echo "bot tests go here"
+      - name: Trusted gitleaks driver regressions (disposable Git fixtures)
+        if: needs.full_run.outputs.force == 'true' || fromJSON(needs.changes.outputs.areas).qerith_scan
+        run: python3 -I .github/scripts/test_qerith_gitleaks_required.py --hosted -v
 
   secret-scan:
     name: secret scan
@@ -213,7 +216,6 @@ jobs:
   # Light (~30s) and always-on so gate changes can never merge red.
   gate-selftest:
     name: gate selftest
-    needs: [changes]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -232,9 +234,6 @@ jobs:
         run: python3 -I .github/scripts/test_checkout_credentials.py
       - name: Required reusable pincheck regressions
         run: python3 -I .github/scripts/test_changes_pins.py
-      - name: Trusted gitleaks driver regressions (disposable Git fixtures)
-        if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || fromJSON(needs.changes.outputs.areas).qerith_scan
-        run: python3 -I .github/scripts/test_qerith_gitleaks_required.py --hosted -v
       - name: Public PR security gate regressions (offline fixtures, no target scans)
         run: |
           python3 -I security-gate/test_gate.py

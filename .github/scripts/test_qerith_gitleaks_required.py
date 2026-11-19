@@ -32,27 +32,24 @@ def event_inputs(kind, head=HEAD, base=BASE):
         "GITHUB_SHA": head if kind == "merge_group" else "c" * 40,
     }
     if kind == "merge_group":
-        return env, {
-            "action": "checks_requested", "repository": REPO,
-            "merge_group": {"head_sha": head, "base_sha": base,
-                            "head_ref": QUEUE, "base_ref": "refs/heads/main"},
-        }
-    return env, {
-        "action": "synchronize", "repository": REPO,
-        "pull_request": {"head": {"sha": head}, "base": {"sha": base, "ref": "main", "repo": REPO}},
-    }
+        group = {"head_sha": head, "base_sha": base, "head_ref": QUEUE, "base_ref": "refs/heads/main"}
+        return env, {"action": "checks_requested", "repository": REPO, "merge_group": group}
+    pr = {"head": {"sha": head}, "base": {"sha": base, "ref": "main", "repo": REPO}}
+    return env, {"action": "synchronize", "repository": REPO, "pull_request": pr}
 
 
 class Candidate(unittest.TestCase):
     def test_event_identity(self):
-        for kind in ("pull_request", "merge_group"):
-            with self.subTest(kind=kind):
-                self.assertEqual(driver["candidate"](*event_inputs(kind)), (kind, REPO["full_name"], HEAD, BASE))
+        for kind, action in (("pull_request", "synchronize"), ("pull_request", "edited"),
+                             ("merge_group", "checks_requested")):
+            env, event = event_inputs(kind)
+            self.assertEqual(driver["candidate"](env, event | {"action": action}), (kind, REPO["full_name"], HEAD, BASE))
 
     def test_rejects_incomplete_mismatched_or_unsupported_identity(self):
         for kind, mutation in (
             ("pull_request", lambda e, p: p["pull_request"]["head"].clear()),
             ("pull_request", lambda e, p: p["pull_request"]["base"].update(sha="main")),
+            ("pull_request", lambda e, p: p["pull_request"]["base"].update(ref="develop")),
             ("pull_request", lambda e, p: e.update(GITHUB_REPOSITORY_ID="321")),
             ("pull_request", lambda e, p: p["pull_request"]["base"].update(repo={"id": 456})),
             ("merge_group", lambda e, p: e.update(GITHUB_SHA=BASE)),
@@ -121,6 +118,15 @@ class Offline(History):
         self.commit_after_edit()
         with self.assertRaises(subprocess.CalledProcessError):
             self.fetch("merge_group")
+
+    def test_rejects_unsupported_path_even_after_removal(self):
+        path = self.source / "fixture\\"
+        path.write_text("ordinary content\n")
+        self.commit("Add fixture")
+        path.unlink()
+        self.commit("Remove fixture")
+        with self.assertRaisesRegex(driver["Rejected"], "Unsupported historical path"):
+            driver["scan"](self.work, self.fetch("pull_request"), self.work / "missing", *self.policy())
 
     def test_success_requires_completed_patch_stream(self):
         policy, ignore = self.policy()

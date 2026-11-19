@@ -1,7 +1,7 @@
 name: Qerith trusted history scan
 
 on:
-  pull_request: {types: [opened, synchronize, reopened, ready_for_review]}
+  pull_request: {types: [opened, synchronize, reopened, ready_for_review, edited]}
   merge_group: {types: [checks_requested]}
 permissions: {contents: read}
 concurrency:
@@ -32,10 +32,8 @@ jobs:
           POLICY = "[extend]\nuseDefault = true\n"
           GIT = "/usr/bin/git"
 
-
           class Rejected(Exception):
               pass
-
 
           def candidate(env, event):
               try:
@@ -54,7 +52,7 @@ jobs:
                   if kind == "pull_request":
                       pr = event["pull_request"]
                       if (
-                          event["action"] not in {"opened", "synchronize", "reopened", "ready_for_review"}
+                          event["action"] not in {"opened", "synchronize", "reopened", "ready_for_review", "edited"}
                           or pr["base"]["repo"]["id"] != repo_id
                           or pr["base"]["repo"]["full_name"] != repo
                           or pr["base"]["ref"] != "main"
@@ -82,7 +80,6 @@ jobs:
                   raise Rejected("Missing, mismatched or unsupported candidate identity") from None
               return kind, repo, head, base
 
-
           def tool_env(work):
               return {
                   "PATH": os.defpath,
@@ -93,10 +90,8 @@ jobs:
                   "GIT_TERMINAL_PROMPT": "0",
               }
 
-
           def run(work, *args):
               return sp.check_output(args, cwd=work, env=tool_env(work), stderr=sp.DEVNULL).strip()
-
 
           def download(work):
               asset = f"gitleaks_{VERSION}_linux_x64.tar.gz"
@@ -109,7 +104,6 @@ jobs:
                       raise Rejected("Scanner archive checksum did not match")
               run(work, "tar", "-xzf", archive, "gitleaks")
               return work / "gitleaks"
-
 
           def fetch(work, url, kind, head, base):
               repo = work / "history.git"
@@ -131,15 +125,17 @@ jobs:
                   git("merge-base", "--is-ancestor", base, head)
               return repo
 
-
           def scan(work, repo, scanner, policy, ignore):
               if not policy.is_file() or not ignore.is_file():
                   raise Rejected("Trusted scan policy is missing")
+              history = ("--root", "--diff-merges=first-parent", "--no-renames", "--no-ext-diff", "--no-textconv")
+              # The pinned parser can drop quoted paths ending in a literal backslash.
+              if b"\\\0" in run(work, GIT, "-C", repo, "log", "--format=", "--name-only", "-z", *history, "HEAD", "--"):
+                  raise Rejected("Unsupported historical path; diagnostics withheld")
               common = ("--config", policy, "--gitleaks-ignore-path", ignore,
                         "--redact=100", "--no-banner", "--log-level", "error")
-              empty = work / "empty"
+              empty, rules = work / "empty", work / "rules.sarif"
               empty.mkdir()
-              rules = work / "rules.sarif"
               run(work, scanner, "dir", empty, *common, "--report-format", "sarif", "--report-path", rules)
               if not any(r["tool"]["driver"].get("rules") for r in json.loads(rules.read_text())["runs"]):
                   raise Rejected("Trusted scan policy has no effective rules")
@@ -162,7 +158,7 @@ jobs:
               with diagnostics.open("wb") as log:
                   result = sp.run(
                       [scanner, "git", repo, *common, "--exit-code", "1", "--ignore-gitleaks-allow",
-                       "--log-opts=--text --diff-merges=first-parent --no-renames --no-ext-diff --no-textconv HEAD --",
+                       f"--log-opts=--text {' '.join(history)} HEAD --",
                        "--report-format", "json", "--report-path", report],
                       cwd=work, env=env, check=False, stdout=log, stderr=sp.STDOUT,
                   )
@@ -174,7 +170,6 @@ jobs:
               if result.returncode == 1 and isinstance(findings, list) and findings:
                   raise Rejected("Gitleaks reported findings; share only the run link and candidate/base SHAs with Security")
               raise Rejected("Scanner did not produce a valid verdict; diagnostics withheld")
-
 
           def main():
               try:
@@ -193,7 +188,6 @@ jobs:
               except (OSError, ValueError, KeyError, TypeError, sp.SubprocessError):
                   sys.exit("Gitleaks setup or scan failed; diagnostics withheld")
               print("Gitleaks history scan passed; no findings reported")
-
 
           if __name__ == "__main__":
               main()
