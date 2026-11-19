@@ -1,14 +1,12 @@
 name: Qerith trusted history scan
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-  merge_group:
-    types: [checks_requested]
-
-permissions:
-  contents: read
-
+  pull_request: {types: [opened, synchronize, reopened, ready_for_review]}
+  merge_group: {types: [checks_requested]}
+permissions: {contents: read}
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   gitleaks-required:
     name: gitleaks-required
@@ -171,11 +169,10 @@ jobs:
               if not done.is_file() or diagnostics.stat().st_size:
                   raise Rejected("Incomplete history scan; diagnostics withheld")
               findings = json.loads(report.read_text())
-              if isinstance(findings, list):
-                  if result.returncode == 0 and not findings:
-                      return
-                  if result.returncode == 1 and findings:
-                      raise Rejected("Gitleaks reported findings; share only the run link and candidate/base SHAs with Security")
+              if result.returncode == 0 and findings == []:
+                  return
+              if result.returncode == 1 and isinstance(findings, list) and findings:
+                  raise Rejected("Gitleaks reported findings; share only the run link and candidate/base SHAs with Security")
               raise Rejected("Scanner did not produce a valid verdict; diagnostics withheld")
 
 
@@ -187,11 +184,10 @@ jobs:
                   with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as tmp:
                       work = Path(tmp)
                       history = fetch(work, f"https://github.com/{repo}.git", kind, head, base)
-                      scanner = download(work)
                       policy, ignore = work / "policy.toml", work / "empty.ignore"
                       policy.write_text(POLICY)
                       ignore.touch()
-                      scan(work, history, scanner, policy, ignore)
+                      scan(work, history, download(work), policy, ignore)
               except Rejected as error:
                   sys.exit(str(error))
               except (OSError, ValueError, KeyError, TypeError, sp.SubprocessError):

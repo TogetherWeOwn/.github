@@ -70,7 +70,9 @@ class Candidate(unittest.TestCase):
 
 class History(unittest.TestCase):
     def setUp(self):
-        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
         self.source = self.root / "source"
         self.work = self.root / "work"
         self.work.mkdir()
@@ -189,6 +191,4 @@ class Hosted(History):
 
 
 if __name__ == "__main__":
-    if HOSTED:
-        sys.argv.remove("--hosted")
-    unittest.main()
+    unittest.main(argv=[arg for arg in sys.argv if arg != "--hosted"])

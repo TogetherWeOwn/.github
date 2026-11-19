@@ -61,7 +61,7 @@ jobs:
     name: changes
     uses: TogetherWeOwn/.github/.github/workflows/changes.yml@773ee91a904b9e1b65eddaaad4400d36e05fa717
     with:
-      areas-json: '{"web":["workflow-templates/**"],"bot":[".github/scripts/**"],"docs":["**.md","docs/**"]}'
+      areas-json: '{"web":["workflow-templates/**"],"bot":[".github/scripts/**"],"docs":["**.md","docs/**"],"qerith_scan":[".github/workflows/qerith-gitleaks-required.yml",".github/scripts/test_qerith_gitleaks_required.py",".github/workflows/ci.yml"]}'
       full-run-globs-json: '["package.json","**/package.json","package-lock.json","**/package-lock.json","npm-shrinkwrap.json","**/npm-shrinkwrap.json","pnpm-lock.yaml","**/pnpm-lock.yaml","yarn.lock","**/yarn.lock","Gemfile","**/Gemfile","Gemfile.lock","**/Gemfile.lock","Cargo.toml","**/Cargo.toml","Cargo.lock","**/Cargo.lock","go.mod","**/go.mod","go.sum","**/go.sum","pyproject.toml","**/pyproject.toml","poetry.lock","**/poetry.lock","uv.lock","**/uv.lock","requirements*.txt","**/requirements*.txt","requirements*.in","**/requirements*.in","setup.py","**/setup.py","setup.cfg","**/setup.cfg","Pipfile","**/Pipfile","Pipfile.lock","**/Pipfile.lock","composer.json","**/composer.json","composer.lock","**/composer.lock","pnpm-workspace.yaml","**/pnpm-workspace.yaml","go.work","**/go.work","go.work.sum","**/go.work.sum","tsconfig*.json","**/tsconfig*.json","jsconfig*.json","**/jsconfig*.json",".cargo/**","**/.cargo/**","rust-toolchain*","**/rust-toolchain*",".npmrc","**/.npmrc",".yarnrc*","**/.yarnrc*","Makefile*","**/Makefile*","CMakeLists.txt","**/CMakeLists.txt",".github/**","shared/**","common/**","build/**","Dockerfile*","**/Dockerfile*","docker-compose*.yml","**/docker-compose*.yml"]'
       docs-areas-json: '["docs"]'
 
@@ -213,6 +213,7 @@ jobs:
   # Light (~30s) and always-on so gate changes can never merge red.
   gate-selftest:
     name: gate selftest
+    needs: [changes]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -232,6 +233,7 @@ jobs:
       - name: Required reusable pincheck regressions
         run: python3 -I .github/scripts/test_changes_pins.py
       - name: Trusted gitleaks driver regressions (disposable Git fixtures)
+        if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || fromJSON(needs.changes.outputs.areas).qerith_scan
         run: python3 -I .github/scripts/test_qerith_gitleaks_required.py --hosted -v
       - name: Public PR security gate regressions (offline fixtures, no target scans)
         run: |
