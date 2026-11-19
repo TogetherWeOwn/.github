@@ -300,11 +300,40 @@ def sarif_clean(data):
         require(not results, "scanner reported findings")
 
 
+def central_advisory_exceptions():
+    import tomllib
+    return {entry["id"] for entry in tomllib.loads(DENY_CONFIG)["advisories"]["ignore"]}
+
+
+def osv_findings(data):
+    findings = set()
+    for result in data["results"]:
+        for package in result["packages"]:
+            vulnerabilities = package.get("vulnerabilities", [])
+            require(isinstance(vulnerabilities, list), "incomplete OSV new vulnerabilities")
+            for vulnerability in vulnerabilities:
+                require(isinstance(vulnerability, dict) and isinstance(vulnerability.get("id"), str) and
+                        vulnerability["id"] and isinstance(vulnerability.get("aliases", []), list),
+                        "incomplete OSV new vulnerability")
+                ids = {vulnerability["id"], *vulnerability.get("aliases", [])}
+                findings.add((package["package"].get("ecosystem"), package["package"]["name"],
+                              vulnerability["id"], frozenset(ids)))
+    return findings
+
+
 def osv_evidence(work):
     documents = {}
+    # Upstream writes no base results when the base branch has no lockfile, and its
+    # reporter then reports nothing. Treat that as an empty baseline: every finding
+    # in the PR scan is new and is judged here instead.
+    empty_baseline = not (work / "osv-old/old-results.json").exists()
+    if empty_baseline:
+        documents["old"] = {"results": []}
     for name, relative in (("old", "osv-old/old-results.json"),
                            ("new", "osv-new/new-results.json"),
                            ("sarif", "osv-sarif/results.sarif")):
+        if name in documents:
+            continue
         path = work / relative
         require(path.is_file() and not path.is_symlink() and 0 < path.stat().st_size <= MAX_FILE_BYTES,
                 f"missing or oversized OSV {name} evidence")
@@ -320,6 +349,12 @@ def osv_evidence(work):
                 require(isinstance(package, dict) and isinstance(package.get("package"), dict) and
                         package["package"].get("name"), f"incomplete OSV {name} package")
     sarif_clean(documents["sarif"])
+    if empty_baseline:
+        accepted = central_advisory_exceptions()
+        found = sorted(f"{name} {vid}" for ecosystem, name, vid, ids in osv_findings(documents["new"])
+                       if not (ecosystem == "crates.io" and ids & accepted))
+        require(not found, "OSV findings with no base results: " + ", ".join(found[:20]))
+        return {"scanner": "osv-evidence", "status": "passed", "baseline": "empty"}
     return {"scanner": "osv-evidence", "status": "passed"}
 
 

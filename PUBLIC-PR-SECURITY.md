@@ -132,6 +132,11 @@ tree removes that tree from the current inventory; deleting only its metadata fa
   because the process returned zero. Upstream OSV separately preserves old/new
   JSON and SARIF; `osv-evidence` must download all three artifacts from this run
   and validate their completeness and the clean diff before aggregation succeeds.
+  The one exception is the base scan when the base branch has no lockfile (a new
+  repository's first dependency PR): upstream then writes no old results and its
+  reporter reports nothing. `osv-evidence` treats that as an empty baseline and
+  fails on every finding in the PR scan itself, except the central `crates.io`
+  advisory exceptions in `DENY_CONFIG` (same reviewed set as cargo-deny).
 - `security-ok` uses `always()` and accepts skipped conditional jobs **only** when
   successful change detection proved a docs-only path skip, or successful inspection
   proved that scanner's inventory was absent. Both cheap jobs must succeed even for

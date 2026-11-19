@@ -378,8 +378,11 @@ class RepoCase(unittest.TestCase):
             with self.subTest(path=path):
                 target = self.work / path
                 target.unlink()
-                with self.assertRaises(gate.GateError):
-                    gate.osv_evidence(self.work)
+                if path.startswith("osv-old/"):
+                    self.assertEqual(gate.osv_evidence(self.work)["baseline"], "empty")
+                else:
+                    with self.assertRaises(gate.GateError):
+                        gate.osv_evidence(self.work)
                 target.write_text('{}')
                 with self.assertRaises(gate.GateError):
                     gate.osv_evidence(self.work)
@@ -394,6 +397,53 @@ class RepoCase(unittest.TestCase):
             target.write_text(json.dumps(data))
         with self.assertRaisesRegex(gate.GateError, "incomplete OSV new package"):
             gate.osv_evidence(self.work)
+
+    def write_osv(self, new, old=None):
+        files = {"osv-new/new-results.json": new, "osv-sarif/results.sarif": SARIF}
+        if old is not None:
+            files["osv-old/old-results.json"] = old
+        for path, data in files.items():
+            target = self.work / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(data))
+
+    @staticmethod
+    def osv_scan(*packages):
+        return {"results": [{"source": {"path": "/w/Cargo.lock", "type": "lockfile"}, "packages": [
+            {"package": {"name": name, "version": "1.0.0", "ecosystem": ecosystem},
+             "vulnerabilities": [{"id": vid, "aliases": aliases} for vid, aliases in vulns]}
+            for name, ecosystem, vulns in packages]}]}
+
+    def test_osv_empty_baseline_judges_every_new_finding(self):
+        self.write_osv(self.osv_scan(("openssl", "crates.io", [("RUSTSEC-2099-0001", ["GHSA-xxxx"])])))
+        with self.assertRaisesRegex(gate.GateError, "no base results: openssl RUSTSEC-2099-0001"):
+            gate.osv_evidence(self.work)
+
+    def test_osv_empty_baseline_applies_only_central_crates_exceptions(self):
+        self.write_osv(self.osv_scan(("chrono", "crates.io", [("RUSTSEC-2026-0543", [])])))
+        self.assertEqual(gate.osv_evidence(self.work)["baseline"], "empty")
+        self.write_osv(self.osv_scan(("chrono", "crates.io", [("GHSA-chrono", ["RUSTSEC-2026-0543"])])))
+        self.assertEqual(gate.osv_evidence(self.work)["baseline"], "empty")
+        self.write_osv(self.osv_scan(("chrono", "npm", [("RUSTSEC-2026-0543", [])])))
+        with self.assertRaisesRegex(gate.GateError, "chrono RUSTSEC-2026-0543"):
+            gate.osv_evidence(self.work)
+        self.write_osv(self.osv_scan(("chrono", "crates.io", [("RUSTSEC-2026-0543", [])]),
+                                     ("time", "crates.io", [("RUSTSEC-2020-0071", [])])))
+        with self.assertRaisesRegex(gate.GateError, "no base results: time RUSTSEC-2020-0071$"):
+            gate.osv_evidence(self.work)
+
+    def test_osv_empty_baseline_malformed_vulnerabilities_fail(self):
+        for vulns in ("bad", [{"aliases": []}], [{"id": "X", "aliases": "bad"}]):
+            with self.subTest(vulns=vulns):
+                self.write_osv({"results": [{"source": {}, "packages": [
+                    {"package": {"name": "p", "ecosystem": "npm"}, "vulnerabilities": vulns}]}]})
+                with self.assertRaisesRegex(gate.GateError, "incomplete OSV new vulnerab"):
+                    gate.osv_evidence(self.work)
+
+    def test_osv_with_base_results_leaves_diff_to_upstream_reporter(self):
+        scan = self.osv_scan(("openssl", "crates.io", [("RUSTSEC-2099-0001", [])]))
+        self.write_osv(scan, old=scan)
+        self.assertEqual(gate.osv_evidence(self.work), {"scanner": "osv-evidence", "status": "passed"})
 
     def test_cli_inspection_outputs_preserve_all_boolean_lines(self):
         self.put("README.md")
