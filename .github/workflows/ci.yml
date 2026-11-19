@@ -231,6 +231,8 @@ jobs:
         run: python3 -I .github/scripts/test_checkout_credentials.py
       - name: Required reusable pincheck regressions
         run: python3 -I .github/scripts/test_changes_pins.py
+      - name: Trusted gitleaks driver regressions (disposable Git fixtures)
+        run: python3 -I .github/scripts/test_qerith_gitleaks_required.py --hosted -v
       - name: Public PR security gate regressions (offline fixtures, no target scans)
         run: |
           python3 -I security-gate/test_gate.py
