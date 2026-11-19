@@ -12,8 +12,7 @@ permissions:
 jobs:
   gitleaks-required:
     name: gitleaks-required
-    # The source repo's own CI tests this exact driver without a ruleset.
-    if: github.repository_id != '1403503756'
+    if: github.repository_id != '1403503756' # Source repo runs the exact driver in fixture CI.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
