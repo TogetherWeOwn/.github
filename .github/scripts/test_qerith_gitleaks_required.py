@@ -1,5 +1,6 @@
 """Exercise the exact inline trusted workflow, without a provider binding."""
 
+import hashlib
 import json
 import runpy
 import subprocess
@@ -138,19 +139,70 @@ class Offline(History):
         (self.work / "history.json").write_text("[]")
         with patch.object(subprocess, "check_output", return_value=b""), patch.object(subprocess, "run") as scanner:
             scanner.return_value.returncode = 0
-            with self.assertRaisesRegex(driver["Rejected"], "Incomplete history scan"):
+            with self.assertRaisesRegex(driver["Rejected"], "Git producer did not complete"):
                 driver["scan"](self.work, self.source, "fake-scanner", policy, ignore)
+
+    def test_prior_clean_verdict_is_insufficient_without_parser_receipt(self):
+        # This is all the old driver required at the scanner seam, without a malformed commit.
+        (self.work / "git-done").touch()
+        (self.work / "history.json").write_text("[]")
+        (self.work / "rules.sarif").write_text(json.dumps({
+            "runs": [{"tool": {"driver": {"rules": [{"id": "synthetic"}]}}}],
+        }))
+        with patch.object(subprocess, "check_output", return_value=b""), patch.object(subprocess, "run") as scanner:
+            scanner.return_value.returncode = 0
+            with self.assertRaisesRegex(driver["Rejected"], "parser did not complete"):
+                driver["scan"](self.work, self.source, "fake-scanner", *self.policy())
+        self.assertEqual((self.work / "history.log").read_bytes(), b"")
+
 
 class Hosted(History):
     @classmethod
     def setUpClass(cls):
         if not HOSTED:
-            raise unittest.SkipTest("requires the hosted pinned scanner download")
-        cls.scanner = driver["download"](Path(cls.enterClassContext(tempfile.TemporaryDirectory())))
+            raise unittest.SkipTest("requires the hosted pinned scanner build")
+        cls.build = Path(cls.enterClassContext(tempfile.TemporaryDirectory()))
+        try:
+            cls.src = driver["prepare_scanner"](cls.build)
+            cls.scanner = driver["build_scanner"](cls.build, cls.src)
+        except subprocess.CalledProcessError as error:
+            # Build output contains only pinned sources, before any fixture Git fetch.
+            print(error.output.decode(errors="replace"), file=sys.stderr)
+            raise
+        with cls.scanner.open("rb") as binary:
+            print(f"hosted scanner sha256={hashlib.file_digest(binary, 'sha256').hexdigest()}", flush=True)
 
     def test_clean_pr_history(self):
         self.commit_after_edit()
+        self.git("commit", "--allow-empty", "-qm", "Empty commit")
+        path = self.source / "fixture.txt"
+        path.write_text("ordinary content with no final newline")
+        self.commit("Edit without final newline")
+        path.chmod(0o755)
+        self.commit("Mode-only change")
         driver["scan"](self.work, self.fetch("pull_request"), self.scanner, *self.policy())
+        self.assertEqual((self.work / "parse-done").read_bytes(), b"complete\n")
+
+    def test_reader_fault_after_successful_git_producer(self):
+        self.commit_after_edit()
+        history = self.fetch("pull_request")
+        git_source = self.src / "sources/git.go"
+        original = git_source.read_text()
+        self.addCleanup(git_source.write_text, original)
+        injected = driver["replace_once"](
+            original, "gitdiff.ParseGitLog(ctx, stdout)",
+            "gitdiff.ParseGitLog(ctx, io.MultiReader(stdout, syntheticParserFault{}))",
+        )
+        git_source.write_text(injected + '''
+          type syntheticParserFault struct{}
+          func (syntheticParserFault) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+        ''')
+        scanner = driver["build_scanner"](self.build, self.src, "gitleaks-fixture-fault")
+        with self.assertRaisesRegex(driver["Rejected"], "parser did not complete"):
+            driver["scan"](self.work, history, scanner, *self.policy())
+        self.assertTrue((self.work / "git-done").is_file())
+        self.assertFalse((self.work / "parse-done").exists())
+        self.assertIn(b"Git log parsing did not complete", (self.work / "history.log").read_bytes())
 
     def test_no_diff_finding_in_pr_history(self):
         (self.source / ".gitattributes").write_text("fixture.txt -diff\n")

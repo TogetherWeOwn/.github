@@ -22,10 +22,98 @@ jobs:
           import subprocess as sp
           import sys
           import tempfile
+          import zipfile
           from pathlib import Path
 
           VERSION = "8.30.1"
-          SHA256 = "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+          SCANNER = f"github.com/zricethezav/gitleaks/v8@v{VERSION}"  # 83d9cd684c87d95d656c1458ef04895a7f1cbd8e
+          SCANNER_SHA256 = "4fd70631c0f6159e38fdb99ad126e3ba60d4212420062029d3dc5f510f6f2961"
+          PARSER = "github.com/gitleaks/go-gitdiff@v0.9.1"  # 7765724e69ab7954ccf71b4d45ff5d82446e952e
+          PARSER_SHA256 = "8b6369317c580540df0504ebce72a5f0347e1ed34e0d9e08601884ecf2cb61ba"
+          GO_ARCHIVE = "go1.26.10.linux-amd64.tar.gz"
+          GO_SHA256 = "ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5"
+          HISTORY = ("--root", "--diff-merges=first-parent", "--no-renames", "--no-ext-diff", "--no-textconv")
+          PATCH = ("--text", "--format=medium", "--no-color", "--no-decorate", "--no-notes", "--no-show-signature",
+                   "--src-prefix=a/", "--dst-prefix=b/", *HISTORY)
+
+          # Same pinned parser primitives, but only accept Git's configured log grammar.
+          # The permissive Parse API drops late errors and may resynchronize past a bad file.
+          STRICT_PARSER = '''package gitdiff
+
+          import (
+              "context"
+              "fmt"
+              "io"
+              "strings"
+          )
+
+          func ParseGitLog(ctx context.Context, r io.Reader) (<-chan *File, <-chan error) {
+              files := make(chan *File)
+              verdict := make(chan error, 1)
+              go func() {
+                  defer close(files)
+                  verdict <- parseGitLog(ctx, r, files)
+                  close(verdict)
+              }()
+              return files, verdict
+          }
+
+          func parseGitLog(ctx context.Context, r io.Reader, files chan<- *File) error {
+              p := newParser(r)
+              var header *PatchHeader
+              for err := p.Next(); ; {
+                  if err == io.EOF || (err == nil && p.Line(0) == "") {
+                      if header == nil {
+                          return fmt.Errorf("Git log ended before any commit")
+                      }
+                      return nil
+                  }
+                  if err != nil {
+                      return err
+                  }
+                  line := p.Line(0)
+                  switch {
+                  case line == "\\n":
+                      err = p.Next()
+                  case strings.HasPrefix(line, "commit "):
+                      var meta strings.Builder
+                      for {
+                          meta.WriteString(p.Line(0))
+                          err = p.Next()
+                          if err != nil {
+                              break
+                          }
+                          next := p.Line(0)
+                          if next != "\\n" && !strings.HasPrefix(next, "    ") && !strings.HasPrefix(next, "Author: ") &&
+                              !strings.HasPrefix(next, "Date: ") && !strings.HasPrefix(next, "Merge: ") {
+                              break
+                          }
+                      }
+                      var headerErr error
+                      header, headerErr = ParsePatchHeader(meta.String())
+                      if headerErr != nil || header == nil || len(header.SHA) != 40 {
+                          return fmt.Errorf("invalid Git log commit header")
+                      }
+                  case header != nil && strings.HasPrefix(line, "diff --git "):
+                      file, fileErr := p.ParseGitFileHeader()
+                      if fileErr != nil {
+                          return fileErr
+                      }
+                      if _, fileErr = p.ParseTextFragments(file); fileErr != nil {
+                          return fileErr
+                      }
+                      file.PatchHeader = header
+                      select {
+                      case files <- file:
+                      case <-ctx.Done():
+                          return ctx.Err()
+                      }
+                  default:
+                      return fmt.Errorf("unexpected Git log record")
+                  }
+              }
+          }
+          '''
           # Qerith's reviewed baseline: the pinned binary's built-ins and zero ignores.
           POLICY = "[extend]\nuseDefault = true\n"
           GIT = "/usr/bin/git"
@@ -91,17 +179,78 @@ jobs:
           def run(work, *args):
               return sp.check_output(args, cwd=work, env=tool_env(work), stderr=sp.DEVNULL).strip()
 
-          def download(work):
-              asset = f"gitleaks_{VERSION}_linux_x64.tar.gz"
-              archive = work / asset
+          def download(work, url, name, sha256):
+              archive = work / name
               run(work, "curl", "-qfsSL", "--proto", "=https", "--proto-redir", "=https",
-                  "--connect-timeout", "10", "--max-time", "30", "--retry", "2",
-                  "-o", archive, f"https://github.com/gitleaks/gitleaks/releases/download/v{VERSION}/{asset}")
+                  "--connect-timeout", "10", "--max-time", "60", "--retry", "2", "-o", archive, url)
               with archive.open("rb") as source:
-                  if hashlib.file_digest(source, "sha256").hexdigest() != SHA256:
-                      raise Rejected("Scanner archive checksum did not match")
-              run(work, "tar", "-xzf", archive, "gitleaks")
-              return work / "gitleaks"
+                  if hashlib.file_digest(source, "sha256").hexdigest() != sha256:
+                      raise Rejected("Scanner build input checksum did not match")
+              return archive
+
+          def module(work, pin, sha256, name):
+              path, version = pin.split("@")
+              archive = download(work, f"https://proxy.golang.org/{path}/@v/{version}.zip", name, sha256)
+              # Extraction runs only after verifying the fixed archive digest.
+              with zipfile.ZipFile(archive) as source:
+                  source.extractall(work)
+              return work / pin
+
+          def replace_once(text, old, new):
+              if text.count(old) != 1:
+                  raise Rejected("Scanner source did not match the reviewed patch")
+              return text.replace(old, new)
+
+          def prepare_scanner(work):
+              src = module(work, SCANNER, SCANNER_SHA256, "scanner.zip")
+              parser = module(work, PARSER, PARSER_SHA256, "parser.zip").rename(work / "parser-source")
+              toolchain = download(work, f"https://go.dev/dl/{GO_ARCHIVE}", GO_ARCHIVE, GO_SHA256)
+              run(work, "tar", "-xzf", toolchain)
+              (parser / "gitdiff/strict_log.go").write_text(STRICT_PARSER)
+              git_source = src / "sources/git.go"
+              text = replace_once(git_source.read_text(), '"net/url"', '"net/url"\n\t"os"')
+              text = replace_once(text, "repoPath    string", "repoPath string\n\tparseVerdict <-chan error")
+              text = replace_once(
+                  text,
+                  "gitdiffFiles, err := gitdiff.Parse(stdout)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\n"
+                  "\treturn &GitCmd{\n\t\tcmd:         cmd,\n\t\tdiffFilesCh: gitdiffFiles,\n\t\terrCh:       errCh,\n"
+                  "\t\trepoPath:    sourceClean,\n\t}, nil\n}\n\n// NewGitDiffCmd",
+                  "gitdiffFiles, verdict := gitdiff.ParseGitLog(ctx, stdout)\n\n"
+                  "\treturn &GitCmd{\n\t\tcmd: cmd, diffFilesCh: gitdiffFiles, errCh: errCh,\n"
+                  "\t\trepoPath: sourceClean, parseVerdict: verdict,\n\t}, nil\n}\n\n// NewGitDiffCmd",
+              )
+              text = replace_once(text, "wg.Wait()\n\t\treturn nil", '''wg.Wait()
+                  if s.Cmd.parseVerdict != nil {
+                      verdict, ok := <-s.Cmd.parseVerdict
+                      if !ok || verdict != nil || ctx.Err() != nil {
+                          // Stop a producer that may still be blocked on an unread pipe.
+                          _ = s.Cmd.cmd.Process.Kill()
+                          return errors.New("Git log parsing did not complete")
+                      }
+                      return os.WriteFile(os.Getenv("SCAN_PARSE_DONE"), []byte("complete\\n"), 0600)
+                  }
+                  return nil''')
+              git_source.write_text(text)
+              go(work, src, "mod", "edit", f"-replace={PARSER.split('@')[0]}={parser}")
+              return src
+
+          def go(work, src, *args):
+              env = tool_env(work) | {
+                  "GOPATH": str(work / "gopath"), "GOCACHE": str(work / "go-cache"), "GOENV": "off",
+                  "GOWORK": "off", "GOTOOLCHAIN": "local", "CGO_ENABLED": "0",
+                  "GOPROXY": "https://proxy.golang.org", "GOSUMDB": "sum.golang.org",
+              }
+              return sp.check_output([work / "go/bin/go", *args], cwd=src, env=env, stderr=sp.STDOUT)
+
+          def build_scanner(work, src, name="gitleaks"):
+              binary = work / name
+              # Do not allow a build to add a dependency hash outside the pinned go.sum.
+              sums = src / "go.sum"
+              expected = sums.read_bytes()
+              go(work, src, "build", "-p=4", "-mod=readonly", "-trimpath", "-buildvcs=false", "-o", binary, ".")
+              if sums.read_bytes() != expected:
+                  raise Rejected("Scanner dependency lock changed during build")
+              return binary
 
           def fetch(work, url, kind, head, base):
               repo = work / "history.git"
@@ -126,9 +275,8 @@ jobs:
           def scan(work, repo, scanner, policy, ignore):
               if not policy.is_file() or not ignore.is_file():
                   raise Rejected("Trusted scan policy is missing")
-              history = ("--root", "--diff-merges=first-parent", "--no-renames", "--no-ext-diff", "--no-textconv")
-              # The pinned parser can drop quoted paths ending in a literal backslash.
-              if b"\\\0" in run(work, GIT, "-C", repo, "log", "--format=", "--name-only", "-z", *history, "HEAD", "--"):
+              # Quoted paths ending in a literal backslash are unsupported by the pinned parser.
+              if b"\\\0" in run(work, GIT, "-C", repo, "log", "--format=", "--name-only", "-z", *HISTORY, "HEAD", "--"):
                   raise Rejected("Unsupported historical path; diagnostics withheld")
               common = ("--config", policy, "--gitleaks-ignore-path", ignore,
                         "--redact=100", "--no-banner", "--log-level", "error")
@@ -150,17 +298,23 @@ jobs:
                   'else\n  exec /usr/bin/git "$@"\nfi\n'
               )
               git.chmod(0o700)
-              done = work / "git-done"
+              git_done, parse_done = work / "git-done", work / "parse-done"
               report, diagnostics = work / "history.json", work / "history.log"
-              env = tool_env(work) | {"PATH": f"{shim}:{os.defpath}", "SCAN_GIT_DONE": str(done)}
+              env = tool_env(work) | {
+                  "PATH": f"{shim}:{os.defpath}", "SCAN_GIT_DONE": str(git_done), "SCAN_PARSE_DONE": str(parse_done),
+              }
               with diagnostics.open("wb") as log:
                   result = sp.run(
                       [scanner, "git", repo, *common, "--exit-code", "1", "--ignore-gitleaks-allow",
-                       f"--log-opts=--text {' '.join(history)} HEAD --",
+                       f"--log-opts={' '.join(PATCH)} HEAD --",
                        "--report-format", "json", "--report-path", report],
                       cwd=work, env=env, check=False, stdout=log, stderr=sp.STDOUT,
                   )
-              if not done.is_file() or diagnostics.stat().st_size:
+              if not git_done.is_file():
+                  raise Rejected("Incomplete history scan: Git producer did not complete; diagnostics withheld")
+              if not parse_done.is_file() or parse_done.read_bytes() != b"complete\n":
+                  raise Rejected("Incomplete history scan: parser did not complete; diagnostics withheld")
+              if diagnostics.stat().st_size:
                   raise Rejected("Incomplete history scan; diagnostics withheld")
               findings = json.loads(report.read_text())
               if result.returncode == 0 and findings == []:
@@ -176,14 +330,15 @@ jobs:
                   print(f"event={kind} candidate={head} base={base} scanner={VERSION}", flush=True)
                   with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as tmp:
                       work = Path(tmp)
+                      scanner = build_scanner(work, prepare_scanner(work))
                       history = fetch(work, f"https://github.com/{repo}.git", kind, head, base)
                       policy, ignore = work / "policy.toml", work / "empty.ignore"
                       policy.write_text(POLICY)
                       ignore.touch()
-                      scan(work, history, download(work), policy, ignore)
+                      scan(work, history, scanner, policy, ignore)
               except Rejected as error:
                   sys.exit(str(error))
-              except (OSError, ValueError, KeyError, TypeError, sp.SubprocessError):
+              except (OSError, ValueError, KeyError, TypeError, sp.SubprocessError, zipfile.BadZipFile):
                   sys.exit("Gitleaks setup or scan failed; diagnostics withheld")
               print("Gitleaks history scan passed; no findings reported")
 
