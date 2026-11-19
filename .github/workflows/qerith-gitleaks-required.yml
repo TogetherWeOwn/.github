@@ -30,8 +30,8 @@ jobs:
           SCANNER_SHA256 = "4fd70631c0f6159e38fdb99ad126e3ba60d4212420062029d3dc5f510f6f2961"
           PARSER = "github.com/gitleaks/go-gitdiff@v0.9.1"  # 7765724e69ab7954ccf71b4d45ff5d82446e952e
           PARSER_SHA256 = "8b6369317c580540df0504ebce72a5f0347e1ed34e0d9e08601884ecf2cb61ba"
-          GO_ARCHIVE = "go1.26.10.linux-amd64.tar.gz"
-          GO_SHA256 = "ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5"
+          GO_ARCHIVE = "go1.26.11.linux-amd64.tar.gz"
+          GO_SHA256 = "9849f4e04ee35303714e34fbc3ac8ab44ea3e448a95aa182f91e3b9b79c710ec"
           HISTORY = ("--root", "--diff-merges=first-parent", "--no-renames", "--no-ext-diff", "--no-textconv")
           PATCH = ("--text", "--full-index", "--format=medium", "--date=unix", "--no-color", "--no-decorate",
                    "--no-notes", "--no-show-signature", "--src-prefix=a/", "--dst-prefix=b/", *HISTORY)
