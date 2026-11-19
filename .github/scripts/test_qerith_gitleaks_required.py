@@ -140,10 +140,12 @@ class Offline(History):
         (self.work / "history.json").write_text("[]")
         with patch.object(subprocess, "check_output", return_value=b""), patch.object(subprocess, "run") as scanner:
             scanner.return_value.returncode = 0
-            for receipt, message in (("git-done", "Git producer"), ("parse-done", "parser")):
-                with self.subTest(receipt=receipt), self.assertRaisesRegex(driver["Rejected"], f"{message} did not complete"):
+            for receipt, missing in (("parse-done", "Git producer"), ("git-done", "parser")):
+                marker = self.work / receipt
+                marker.write_text("complete\n")
+                with self.subTest(receipt=receipt), self.assertRaisesRegex(driver["Rejected"], f"{missing} did not complete"):
                     driver["scan"](self.work, self.source, "fake-scanner", policy, ignore)
-                (self.work / receipt).write_text("complete\n")
+                marker.unlink()
                 (self.work / "empty").rmdir()
         self.assertEqual((self.work / "history.log").read_bytes(), b"")
 
@@ -237,10 +239,10 @@ class Hosted(History):
         source = self.src / "sources/git.go"
         original = source.read_text()
         self.addCleanup(source.write_text, original)
-        # An inert stand-in for the child emits a diagnostic but keeps its pipes open.
+        # Emit ordinary Git output before the inert diagnostic and keep the pipes open.
         injected = driver["replace_once"](original, 'cmd = exec.CommandContext(ctx, "git", args...)',
-                                           'cmd = exec.CommandContext(ctx, "/bin/sh", "-c", '
-                                           '`printf "fixture diagnostic\\n" >&2; exec /bin/sleep 30`)')
+                                           'cmd = exec.CommandContext(ctx, "/bin/sh", append([]string{"-c", '
+                                           '`git "$@" || exit; printf "fixture diagnostic\\n" >&2; exec /bin/sleep 30`, "fixture"}, args...)...)')
         injected = driver["replace_once"](injected, 'logging.Debug().Err(err).Str("cmd", s.Cmd.String()).Msg("command aborted")',
                                            'if s.Cmd.cmd.ProcessState != nil {\n'
                                            '    _ = os.WriteFile(os.Getenv("SCAN_GIT_DONE")+"-reaped", nil, 0600)\n}\n'

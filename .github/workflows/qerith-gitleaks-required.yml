@@ -226,8 +226,7 @@ jobs:
           def prepare_scanner(work):
               src = module(work, SCANNER, SCANNER_SHA256, "scanner.zip")
               parser = module(work, PARSER, PARSER_SHA256, "parser.zip").rename(work / "parser-source")
-              toolchain = download(work, f"https://go.dev/dl/{GO_ARCHIVE}", GO_ARCHIVE, GO_SHA256)
-              run(work, "tar", "-xzf", toolchain)
+              run(work, "tar", "-xzf", download(work, f"https://go.dev/dl/{GO_ARCHIVE}", GO_ARCHIVE, GO_SHA256))
               (parser / "gitdiff/strict_log.go").write_text(STRICT_PARSER)
               # Preserve full metadata without the Scanner default line limit; the header is already buffered.
               patch_header = parser / "gitdiff/patch_header.go"
@@ -282,6 +281,10 @@ jobs:
 
               // NewGitDiffCmd''',
               )
+              text = replace_once(text, "yield FragmentsFunc) error {\n\tdefer func() {",
+                                  "yield FragmentsFunc) error {\n\tvar wg sync.WaitGroup\n"
+                                  "\tdefer wg.Wait() // Reap Git before joining detector workers.\n\tdefer func() {")
+              text = replace_once(text, "\n\t\twg          sync.WaitGroup", "")
               text = replace_once(text, 'if err := s.Cmd.Wait(); err != nil {', '''if s.Cmd.cancelParse != nil {
                       defer s.Cmd.cancelParse()
                   }
@@ -291,8 +294,7 @@ jobs:
                       _ = os.WriteFile(os.Getenv("SCAN_GIT_DONE"), []byte("complete\\n"), 0600)
                   }
               }()''')
-              text = replace_once(text, "wg.Wait()\n\t\treturn nil", '''wg.Wait()
-                  if s.Cmd.parseVerdict != nil {
+              text = replace_once(text, "wg.Wait()\n\t\treturn nil", '''if s.Cmd.parseVerdict != nil {
                       verdict, ok := <-s.Cmd.parseVerdict
                       if !ok || verdict != nil || s.Cmd.parseCtx.Err() != nil {
                           return errors.New("Git log parsing did not complete")
@@ -314,10 +316,8 @@ jobs:
 
           def build_scanner(work, src, name="gitleaks"):
               binary = work / name
-              # Do not allow a build to add a dependency hash outside the pinned go.sum.
               sums = src / "go.sum"
               expected = sums.read_bytes()
-              # Match the pinned upstream release's regex engine and version behavior.
               go(work, src, "build", "-p=4", "-mod=readonly", "-trimpath", "-buildvcs=false",
                  "-tags=gore2regex", f"-ldflags=-X=github.com/zricethezav/gitleaks/v8/version.Version={VERSION}",
                  "-o", binary, ".")
@@ -348,7 +348,7 @@ jobs:
           def scan(work, repo, scanner, policy, ignore):
               if not policy.is_file() or not ignore.is_file():
                   raise Rejected("Trusted scan policy is missing")
-              # Quoted paths ending in a literal backslash are unsupported by the pinned parser.
+              # The pinned parser can drop quoted paths ending in a literal backslash.
               if b"\\\0" in run(work, GIT, "-C", repo, "log", "--format=", "--name-only", "-z", *HISTORY, "HEAD", "--"):
                   raise Rejected("Unsupported historical path; diagnostics withheld")
               common = ("--config", policy, "--gitleaks-ignore-path", ignore,
