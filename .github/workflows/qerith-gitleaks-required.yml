@@ -33,11 +33,10 @@ jobs:
           GO_ARCHIVE = "go1.26.10.linux-amd64.tar.gz"
           GO_SHA256 = "ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5"
           HISTORY = ("--root", "--diff-merges=first-parent", "--no-renames", "--no-ext-diff", "--no-textconv")
-          PATCH = ("--text", "--format=medium", "--date=unix", "--no-color", "--no-decorate", "--no-notes",
-                   "--no-show-signature", "--src-prefix=a/", "--dst-prefix=b/", *HISTORY)
+          PATCH = ("--text", "--full-index", "--format=medium", "--date=unix", "--no-color", "--no-decorate",
+                   "--no-notes", "--no-show-signature", "--src-prefix=a/", "--dst-prefix=b/", *HISTORY)
 
-          # Same pinned parser primitives, but only accept Git's configured log grammar.
-          # The permissive Parse API drops late errors and may resynchronize past a bad file.
+          # The permissive Parse API can drop late errors; require Git's configured log grammar.
           STRICT_PARSER = '''package gitdiff
 
           import (
@@ -54,7 +53,6 @@ jobs:
                   defer close(files)
                   err := parseGitLog(ctx, r, files)
                   if err != nil {
-                      // Stop the producer before the caller waits for stderr.
                       stop()
                   }
                   verdict <- err
@@ -104,8 +102,12 @@ jobs:
                       if fileErr != nil {
                           return fileErr
                       }
-                      if _, fileErr = p.ParseTextFragments(file); fileErr != nil {
+                      count, fileErr := p.ParseTextFragments(file)
+                      if fileErr != nil {
                           return fileErr
+                      }
+                      if count == 0 && !validWithoutHunks(file) {
+                          return fmt.Errorf("Git log file is missing text hunks")
                       }
                       file.PatchHeader = header
                       select {
@@ -116,6 +118,22 @@ jobs:
                   default:
                       return fmt.Errorf("unexpected Git log record")
                   }
+              }
+          }
+
+          // --no-renames and --text leave only mode changes and empty blob creation/deletion.
+          // Require whole object IDs (--full-index), not an abbreviation of the empty blob.
+          func validWithoutHunks(f *File) bool {
+              const emptyBlob = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+              const missing = "0000000000000000000000000000000000000000"
+              switch {
+              case f.IsNew:
+                  return f.OldOIDPrefix == missing && f.NewOIDPrefix == emptyBlob
+              case f.IsDelete:
+                  return f.OldOIDPrefix == emptyBlob && f.NewOIDPrefix == missing
+              default:
+                  return f.OldOIDPrefix == "" && f.NewOIDPrefix == "" &&
+                      f.OldMode != 0 && f.NewMode != 0 && f.OldMode != f.NewMode
               }
           }
           '''
@@ -196,7 +214,6 @@ jobs:
           def module(work, pin, sha256, name):
               path, version = pin.split("@")
               archive = download(work, f"https://proxy.golang.org/{path}/@v/{version}.zip", name, sha256)
-              # Extraction runs only after verifying the fixed archive digest.
               with zipfile.ZipFile(archive) as source:
                   source.extractall(work)
               return work / pin
@@ -222,20 +239,33 @@ jobs:
               patch_header.write_text(text)
               git_source = src / "sources/git.go"
               text = replace_once(git_source.read_text(), '"net/url"', '"net/url"\n\t"os"')
-              text = replace_once(text, "repoPath    string", "repoPath string\n\tparseVerdict <-chan error")
+              text = replace_once(text, "repoPath    string", "repoPath string\n\tparseVerdict <-chan error\n"
+                                  "\tparseCtx context.Context\n\tcancelParse context.CancelFunc")
               text = replace_once(
                   text,
-                  "gitdiffFiles, err := gitdiff.Parse(stdout)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\n"
+                  "errCh := make(chan error)\n\tgo listenForStdErr(stderr, errCh)\n\n"
+                  "\tgitdiffFiles, err := gitdiff.Parse(stdout)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\n"
                   "\treturn &GitCmd{\n\t\tcmd:         cmd,\n\t\tdiffFilesCh: gitdiffFiles,\n\t\terrCh:       errCh,\n"
                   "\t\trepoPath:    sourceClean,\n\t}, nil\n}\n\n// NewGitDiffCmd",
-                  '''output := &gitLogOutput{Reader: stdout}
-                  gitdiffFiles, verdict := gitdiff.ParseGitLog(ctx, output, func() {
+                  '''parseCtx, cancel := context.WithCancel(ctx)
+                  errCh := make(chan error)
+                  go func() {
+                      defer close(errCh)
+                      var first [1]byte
+                      if _, err := io.ReadFull(stderr, first[:]); err != io.EOF {
+                          // Cancel on the first diagnostic, without logging it or returning early from the consumer.
+                          cancel()
+                          _ = cmd.Process.Kill()
+                      }
+                  }()
+                  output := &gitLogOutput{Reader: stdout}
+                  gitdiffFiles, verdict := gitdiff.ParseGitLog(parseCtx, output, func() {
                       // Kill the actual Git child even if it is not writing to stdout.
                       if !output.eof { _ = cmd.Process.Kill() }
                   })
                   return &GitCmd{
                       cmd: cmd, diffFilesCh: gitdiffFiles, errCh: errCh,
-                      repoPath: sourceClean, parseVerdict: verdict,
+                      repoPath: sourceClean, parseVerdict: verdict, parseCtx: parseCtx, cancelParse: cancel,
                   }, nil
               }
 
@@ -252,17 +282,19 @@ jobs:
 
               // NewGitDiffCmd''',
               )
+              text = replace_once(text, 'if err := s.Cmd.Wait(); err != nil {', '''if s.Cmd.cancelParse != nil {
+                      defer s.Cmd.cancelParse()
+                  }
+                  if err := s.Cmd.Wait(); err != nil {''')
               text = replace_once(text, '.Msg("command aborted")\n\t\t}\n\t}()', '''.Msg("command aborted")
                   } else if s.Cmd.parseVerdict != nil {
-                      // Wait has reaped the actual Git child and confirmed its exit status.
-                      // If this write fails, the driver rejects the missing receipt.
                       _ = os.WriteFile(os.Getenv("SCAN_GIT_DONE"), []byte("complete\\n"), 0600)
                   }
               }()''')
               text = replace_once(text, "wg.Wait()\n\t\treturn nil", '''wg.Wait()
                   if s.Cmd.parseVerdict != nil {
                       verdict, ok := <-s.Cmd.parseVerdict
-                      if !ok || verdict != nil || ctx.Err() != nil {
+                      if !ok || verdict != nil || s.Cmd.parseCtx.Err() != nil {
                           return errors.New("Git log parsing did not complete")
                       }
                       return os.WriteFile(os.Getenv("SCAN_PARSE_DONE"), []byte("complete\\n"), 0600)
