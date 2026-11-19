@@ -39,6 +39,9 @@ def event_inputs(kind, head=HEAD, base=BASE):
 
 
 class Candidate(unittest.TestCase):
+    def test_scan_attempts_do_not_share_concurrency(self):
+        self.assertNotRegex(SOURCE.read_text(), r"(?m)^ *concurrency *:")
+
     def test_event_identity(self):
         for kind, action in (("pull_request", "synchronize"), ("pull_request", "edited"),
                              ("merge_group", "checks_requested")):

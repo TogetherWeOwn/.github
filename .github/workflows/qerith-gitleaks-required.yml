@@ -4,9 +4,7 @@ on:
   pull_request: {types: [opened, synchronize, reopened, ready_for_review, edited]}
   merge_group: {types: [checks_requested]}
 permissions: {contents: read}
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# No shared concurrency: retrying an older candidate must not cancel another scan.
 jobs:
   gitleaks-required:
     name: gitleaks-required
