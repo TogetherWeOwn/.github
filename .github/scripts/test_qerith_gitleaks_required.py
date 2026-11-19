@@ -90,9 +90,9 @@ class History(unittest.TestCase):
             "-c", "user.email=fixture@example.invalid", *args,
         ).decode()
 
-    def commit(self, message):
+    def commit(self, message, *args):
         self.git("add", "--all")
-        self.git("commit", "-qm", message)
+        self.git("commit", "-qm", message, *args)
         return self.git("rev-parse", "HEAD")
 
     def fetch(self, kind):
@@ -145,7 +145,7 @@ class Offline(History):
 
     def test_prior_clean_verdict_is_insufficient_without_parser_receipt(self):
         # This is all the old driver required at the scanner seam, without a malformed commit.
-        (self.work / "git-done").touch()
+        (self.work / "git-done").write_text("complete\n")
         (self.work / "history.json").write_text("[]")
         (self.work / "rules.sarif").write_text(json.dumps({
             "runs": [{"tool": {"driver": {"rules": [{"id": "synthetic"}]}}}],
@@ -173,6 +173,9 @@ class Hosted(History):
         with cls.scanner.open("rb") as binary:
             print(f"hosted scanner sha256={hashlib.file_digest(binary, 'sha256').hexdigest()}", flush=True)
 
+    def test_scanner_reports_pinned_release_version(self):
+        self.assertEqual(driver["run"](self.work, self.scanner, "version").decode(), driver["VERSION"])
+
     def test_clean_pr_history(self):
         self.commit_after_edit()
         self.git("commit", "--allow-empty", "-qm", "Empty commit")
@@ -189,7 +192,7 @@ class Hosted(History):
         original = git_source.read_text()
         self.addCleanup(git_source.write_text, original)
         injected = driver["replace_once"](
-            original, "gitdiff.ParseGitLog(ctx, stdout,",
+            original, "gitdiff.ParseGitLog(ctx, output,",
             f"gitdiff.ParseGitLog(ctx, io.MultiReader({reader}, syntheticParserFault{{}}),",
         )
         git_source.write_text(injected + '''
@@ -202,8 +205,8 @@ class Hosted(History):
         self.commit_after_edit()
         history = self.fetch("pull_request")
         with self.assertRaisesRegex(driver["Rejected"], "parser did not complete"):
-            driver["scan"](self.work, history, self.faulting_scanner("stdout"), *self.policy())
-        self.assertTrue((self.work / "git-done").is_file())
+            driver["scan"](self.work, history, self.faulting_scanner("output"), *self.policy())
+        self.assertEqual((self.work / "git-done").read_bytes(), b"complete\n")
         self.assertFalse((self.work / "parse-done").exists())
         self.assertIn(b"Git log parsing did not complete", (self.work / "history.log").read_bytes())
 
@@ -212,13 +215,21 @@ class Hosted(History):
         (self.source / "fixture.txt").write_text("ordinary content\n" * 150_000)
         self.commit("Add ordinary fixture content")
         history = self.fetch("pull_request")
-        scanner = self.faulting_scanner("io.LimitReader(stdout, 32)")
+        scanner = self.faulting_scanner("io.LimitReader(output, 32)")
         with (
             patch.object(subprocess, "run", side_effect=partial(subprocess.run, timeout=15)),
             self.assertRaisesRegex(driver["Rejected"], "Git producer did not complete"),
         ):
             driver["scan"](self.work, history, scanner, *self.policy())
         self.assertFalse((self.work / "parse-done").exists())
+        self.assertIn(b"Git log parsing did not complete", (self.work / "history.log").read_bytes())
+
+    def test_unix_git_date_keeps_following_patch(self):
+        self.fake_value()
+        commit = self.commit("Use a wide Git author date", "--date=@253402300800 +0000")
+        self.assert_finding("pull_request", commit)
+        finding, = json.loads((self.work / "history.json").read_text())
+        self.assertEqual(finding["Date"], "10000-01-01T00:00:00Z")
 
     def test_long_commit_message_keeps_following_patch(self):
         self.fake_value()
