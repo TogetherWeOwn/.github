@@ -419,17 +419,9 @@ class RepoCase(unittest.TestCase):
         with self.assertRaisesRegex(gate.GateError, "no base results: openssl RUSTSEC-2099-0001"):
             gate.osv_evidence(self.work)
 
-    def test_osv_empty_baseline_applies_only_central_crates_exceptions(self):
+    def test_osv_empty_baseline_has_no_advisory_exceptions(self):
         self.write_osv(self.osv_scan(("chrono", "crates.io", [("RUSTSEC-2026-0543", [])])))
-        self.assertEqual(gate.osv_evidence(self.work)["baseline"], "empty")
-        self.write_osv(self.osv_scan(("chrono", "crates.io", [("GHSA-chrono", ["RUSTSEC-2026-0543"])])))
-        self.assertEqual(gate.osv_evidence(self.work)["baseline"], "empty")
-        self.write_osv(self.osv_scan(("chrono", "npm", [("RUSTSEC-2026-0543", [])])))
-        with self.assertRaisesRegex(gate.GateError, "chrono RUSTSEC-2026-0543"):
-            gate.osv_evidence(self.work)
-        self.write_osv(self.osv_scan(("chrono", "crates.io", [("RUSTSEC-2026-0543", [])]),
-                                     ("time", "crates.io", [("RUSTSEC-2020-0071", [])])))
-        with self.assertRaisesRegex(gate.GateError, "no base results: time RUSTSEC-2020-0071$"):
+        with self.assertRaisesRegex(gate.GateError, "no base results: chrono RUSTSEC-2026-0543"):
             gate.osv_evidence(self.work)
 
     def test_osv_empty_baseline_malformed_vulnerabilities_fail(self):
