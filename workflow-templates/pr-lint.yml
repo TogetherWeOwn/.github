@@ -188,6 +188,10 @@ jobs:
               kind = re.match(rf"^({TYPES})", title)
               light = bool(kind) and kind.group(1) in LIGHT
               sections = parse_sections(text)
+              # New org template calls this Testing; existing repo templates
+              # may retain Verification. Accept either without duplicate sections.
+              if "testing" in sections and real_items(sections.get("verification", "")) == 0:
+                  sections["verification"] = sections["testing"]
               for name, minimum, skip_light in SECTIONS:
                   if skip_light and light:
                       continue
