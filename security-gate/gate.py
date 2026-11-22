@@ -2,6 +2,7 @@
 """Trusted, bounded inspection and scanner driver. PR files are data, never imports."""
 
 import argparse
+import datetime
 import hashlib
 import io
 import json
@@ -49,6 +50,13 @@ ignore = [
 unused-ignored-advisory = "allow"
 yanked = "deny"
 '''
+# Central OSV policy. PR scans load no osv-scanner.toml (--config=/dev/null), so the
+# reviewed exceptions live here and mirror DENY_CONFIG: (package, id, ignore-until, reason).
+# An entry lapses at 00:00 UTC on its date, like osv-scanner's ignoreUntil.
+OSV_ACCEPTED = (
+    ("chrono", "RUSTSEC-2026-0543", "2027-02-17",
+     "chrono is unmaintained (informational, no known vulnerability) and is required by the Cloudflare workers-rs worker crate with no maintained alternative; review by 2027-02-17"),
+)
 
 
 class GateError(Exception):
@@ -283,7 +291,7 @@ def run_scan(command, cwd, evidence, name, env=None):
     return process.returncode, json.loads(stdout.read_text())
 
 
-def sarif_clean(data):
+def sarif_clean(data, accepted=lambda result: False):
     require(isinstance(data, dict) and data.get("version") == "2.1.0", "invalid SARIF version")
     runs = data.get("runs")
     require(isinstance(runs, list) and runs, "missing SARIF runs")
@@ -297,7 +305,7 @@ def sarif_clean(data):
                     "unsuccessful SARIF invocation")
         results = run.get("results")
         require(isinstance(results, list), "missing SARIF results")
-        require(not results, "scanner reported findings")
+        require(not [result for result in results if not accepted(result)], "scanner reported findings")
 
 
 def osv_findings(data):
@@ -314,7 +322,21 @@ def osv_findings(data):
     return findings
 
 
-def osv_evidence(work):
+def osv_accepted(package, vulnerability_id, today):
+    return any(package == name and vulnerability_id == vid and today < datetime.date.fromisoformat(until)
+               for name, vid, until, _reason in OSV_ACCEPTED)
+
+
+def osv_sarif_accepted(result, today):
+    # Fail closed: only the reporter's exact message shape for an accepted package/id pair.
+    message = result.get("message") if isinstance(result, dict) else None
+    text = message.get("text") if isinstance(message, dict) else None
+    match = re.fullmatch(r"Package '([^@']+)@[^']*' is vulnerable to '([^']+)'\.", text) if isinstance(text, str) else None
+    return bool(match) and match.group(2) == result.get("ruleId") and osv_accepted(match.group(1), match.group(2), today)
+
+
+def osv_evidence(work, today=None):
+    today = today or datetime.datetime.now(datetime.timezone.utc).date()
     documents = {}
     # Upstream writes no base results when the base branch has no lockfile; its
     # reporter then compares the PR scan against an empty baseline. Accept the
@@ -341,9 +363,10 @@ def osv_evidence(work):
             for package in result["packages"]:
                 require(isinstance(package, dict) and isinstance(package.get("package"), dict) and
                         package["package"].get("name"), f"incomplete OSV {name} package")
-    sarif_clean(documents["sarif"])
+    sarif_clean(documents["sarif"], lambda result: osv_sarif_accepted(result, today))
     if empty_baseline:
-        found = sorted(osv_findings(documents["new"]))
+        found = sorted(finding for finding in osv_findings(documents["new"])
+                       if not osv_accepted(*finding.rsplit(" ", 1), today))
         require(not found, "OSV findings with no base results: " + ", ".join(found[:20]))
         return {"scanner": "osv-evidence", "status": "passed", "baseline": "empty"}
     return {"scanner": "osv-evidence", "status": "passed"}

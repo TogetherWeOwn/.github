@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline behavior regressions; run with python3 -I security-gate/test_gate.py."""
 import copy
+import datetime
 import importlib.util
 import io
 import json
@@ -419,10 +420,49 @@ class RepoCase(unittest.TestCase):
         with self.assertRaisesRegex(gate.GateError, "no base results: openssl RUSTSEC-2099-0001"):
             gate.osv_evidence(self.work)
 
-    def test_osv_empty_baseline_has_no_advisory_exceptions(self):
+    def test_osv_empty_baseline_accepts_only_the_central_exception(self):
+        before, after = datetime.date(2027, 2, 16), datetime.date(2027, 2, 17)
         self.write_osv(self.osv_scan(("chrono", "crates.io", [("RUSTSEC-2026-0543", [])])))
+        self.assertEqual(gate.osv_evidence(self.work, today=before)["baseline"], "empty")
         with self.assertRaisesRegex(gate.GateError, "no base results: chrono RUSTSEC-2026-0543"):
-            gate.osv_evidence(self.work)
+            gate.osv_evidence(self.work, today=after)
+        for package, vid in (("chrono", "RUSTSEC-2026-0544"), ("not-chrono", "RUSTSEC-2026-0543")):
+            with self.subTest(package=package, vid=vid):
+                self.write_osv(self.osv_scan(("chrono", "crates.io", [("RUSTSEC-2026-0543", [])]),
+                                             (package, "crates.io", [(vid, [])])))
+                with self.assertRaisesRegex(gate.GateError, f"no base results: {package} {vid}"):
+                    gate.osv_evidence(self.work, today=before)
+
+    @staticmethod
+    def osv_sarif(*findings):
+        return {"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "osv-scanner"}}, "results": [
+            {"ruleId": rule, "message": {"text": text}} for rule, text in findings]}]}
+
+    def test_osv_diff_sarif_accepts_only_the_central_exception(self):
+        before, after = datetime.date(2027, 2, 16), datetime.date(2027, 2, 17)
+        scan = self.osv_scan(("chrono", "crates.io", [("RUSTSEC-2026-0543", [])]))
+        chrono = ("RUSTSEC-2026-0543", "Package 'chrono@0.4.45' is vulnerable to 'RUSTSEC-2026-0543'.")
+        self.write_osv(scan, old={"results": []})
+        (self.work / "osv-sarif/results.sarif").write_text(json.dumps(self.osv_sarif(chrono)))
+        self.assertEqual(gate.osv_evidence(self.work, today=before)["status"], "passed")
+        with self.assertRaisesRegex(gate.GateError, "scanner reported findings"):
+            gate.osv_evidence(self.work, today=after)
+        for other in (("RUSTSEC-2099-0001", "Package 'openssl@1.0.0' is vulnerable to 'RUSTSEC-2099-0001'."),
+                      ("RUSTSEC-2026-0543", "Package 'other@1.0.0' is vulnerable to 'RUSTSEC-2026-0543'."),
+                      ("RUSTSEC-2099-0001", "Package 'chrono@0.4.45' is vulnerable to 'RUSTSEC-2026-0543'."),
+                      ("RUSTSEC-2026-0543", "chrono RUSTSEC-2026-0543"),
+                      ("RUSTSEC-2026-0543", None)):
+            with self.subTest(other=other):
+                (self.work / "osv-sarif/results.sarif").write_text(json.dumps(self.osv_sarif(chrono, other)))
+                with self.assertRaisesRegex(gate.GateError, "scanner reported findings"):
+                    gate.osv_evidence(self.work, today=before)
+
+    def test_central_osv_exceptions_mirror_cargo_deny(self):
+        import tomllib
+        deny = {entry["id"]: entry["reason"] for entry in tomllib.loads(gate.DENY_CONFIG)["advisories"]["ignore"]}
+        self.assertEqual([(name, vid, until) for name, vid, until, _ in gate.OSV_ACCEPTED],
+                         [("chrono", "RUSTSEC-2026-0543", "2027-02-17")])
+        self.assertTrue(all(deny.get(vid) == reason for _, vid, _, reason in gate.OSV_ACCEPTED))
 
     def test_osv_empty_baseline_malformed_vulnerabilities_fail(self):
         for vulns in ("bad", [{"aliases": []}], [{"id": "X", "aliases": "bad"}]):
