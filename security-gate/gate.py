@@ -336,7 +336,7 @@ def osv_sarif_accepted(result, today):
 
 
 def osv_evidence(work, today=None):
-    today = today or datetime.datetime.now(datetime.timezone.utc).date()
+    today = today or datetime.datetime.now(datetime.UTC).date()
     documents = {}
     # Upstream writes no base results when the base branch has no lockfile; its
     # reporter then compares the PR scan against an empty baseline. Accept the
