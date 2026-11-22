@@ -94,7 +94,9 @@ jobs:
       security-events: write
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
     with:
-      fail-on-vuln: true
+      # The verdict is osv-evidence's: it fails on any diff SARIF finding outside the
+      # central OSV_ACCEPTED list, so the reporter itself does not fail on findings.
+      fail-on-vuln: false
       upload-sarif: true
       checkout-submodules: false
       runs-on: ubuntu-24.04

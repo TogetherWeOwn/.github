@@ -41,9 +41,9 @@ those tests do not scan the repository or contact vulnerability services.
 
 | Scanner | Scope | Evidence / failure policy |
 | --- | --- | --- |
-| OSV-Scanner Action v2.7.0 | Maintained **PR base/head comparison**, new vulnerabilities only | `fail-on-vuln: true`, SARIF upload and mandatory local validation of upstream old/new JSON and clean diff SARIF artifacts; no historic-scan fallback |
+| OSV-Scanner Action v2.7.0 | Maintained **PR base/head comparison**, new vulnerabilities only | Empty `--config=/dev/null` policy (PR `osv-scanner.toml` ignored), SARIF upload and mandatory local validation of upstream old/new JSON and diff SARIF artifacts; `osv-evidence` fails on any diff finding outside the central `OSV_ACCEPTED` list (so upstream runs with `fail-on-vuln: false`); no historic-scan fallback |
 | govulncheck v1.9.0 | Every tracked root or nested `go.mod`, for every configured target; **whole current symbol graph**, not only new findings | `-scan=symbol -format=openvex`; nonzero exit, missing/invalid document or any `affected` statement fails; `not_affected` remains evidence |
-| cargo-deny 0.20.2 | Every tracked root/nested `Cargo.lock` with a sibling tracked `Cargo.toml`; complete workspace, all features, no target filter; **whole current advisory inventory** | `--workspace --locked --all-features check advisories`; central config ignores no advisories and denies yanked crates; SARIF plus exit status |
+| cargo-deny 0.20.2 | Every tracked root/nested `Cargo.lock` with a sibling tracked `Cargo.toml`; complete workspace, all features, no target filter; **whole current advisory inventory** | `--workspace --locked --all-features check advisories`; central config ignores only the reviewed `DENY_CONFIG` advisories and denies yanked crates; SARIF plus exit status |
 | zizmor 1.32.0 | All tracked `.github/workflows/*.yml`/`.yaml` (including nested paths) and `action.yml`/`action.yaml` definitions anywhere; **whole current inventory** | Online with a step-scoped token, auditor persona, strict collection, no PR config/ignore rules; JSON results and exit status must be clean |
 | pinact 5.0.2 | Same full workflow/action inventory | `run --check --verify-comment --format=sarif` with an explicit empty central v3 config; no PR config, excludes or diff filter |
 | Vendored metadata | Every tracked path component named exactly `vendor` or `third_party`, including nested trees | Each tree needs its **own** regular tracked `VENDORED.json`; malformed/missing metadata fails |
@@ -136,7 +136,7 @@ tree removes that tree from the current inventory; deleting only its metadata fa
   repository's first dependency PR): upstream then writes no old results and its
   reporter compares the PR scan against an empty baseline. `osv-evidence` accepts
   that missing file, still requires the clean SARIF, and also fails on any raw
-  finding in the PR scan. No advisory exceptions apply on this path.
+  finding in the PR scan. Only the central `OSV_ACCEPTED` exceptions apply on either path.
 - `security-ok` uses `always()` and accepts skipped conditional jobs **only** when
   successful change detection proved a docs-only path skip, or successful inspection
   proved that scanner's inventory was absent. Both cheap jobs must succeed even for
@@ -161,10 +161,21 @@ its hosted GitHub job has the platform's **360-minute default**, unlike our 5-mi
 scanner limits. We do not fork/reimplement the PR diff or silently substitute the
 deprecated `google/osv-scanner` reusable to conceal this limitation. Our mandatory
 `osv-evidence` job additionally validates its old/new JSON result lists and package
-shapes, plus a complete, finding-free diff SARIF document. Missing artifacts,
+shapes, plus a complete diff SARIF document with no finding outside `OSV_ACCEPTED`. Missing artifacts,
 malformed JSON/SARIF or any upstream job failure fail `security-ok`. Tracked root
 `old-results.json`, `new-results.json` and `results.sarif` paths are reserved and
 rejected during inspection so PR files cannot prepopulate upstream output paths.
+
+### Central advisory exceptions
+
+PR-local ignore files are never loaded. Each accepted advisory is listed centrally,
+with a reason and a review date, in `DENY_CONFIG` (cargo-deny) and in `OSV_ACCEPTED`
+(OSV, matched on exact package and id, lapsing at 00:00 UTC on its date like
+osv-scanner's `ignoreUntil`). Tests pin both lists, so any addition must change them.
+
+| Advisory | Package | Reason | Review / OSV lapse |
+| --- | --- | --- | --- |
+| RUSTSEC-2026-0543 | chrono | Unmaintained (informational, no known vulnerability); required by the Cloudflare workers-rs `worker` crate with no maintained alternative | 2027-02-17 |
 
 ## Maintain and verify
 

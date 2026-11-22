@@ -75,7 +75,7 @@ class WorkflowTests(unittest.TestCase):
     def test_maintained_osv_pr_diff_contract_and_permissions(self):
         job = self.jobs["osv"]
         self.assertEqual(job["uses"], "google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@b1d267aea5211fa648d9d442fa64b90dbdcbdd36")
-        self.assertEqual(job["with"], {"fail-on-vuln": "true", "upload-sarif": "true",
+        self.assertEqual(job["with"], {"fail-on-vuln": "false", "upload-sarif": "true",
                                        "checkout-submodules": "false", "runs-on": "ubuntu-24.04",
                                        "scan-args": "--config=/dev/null\n-r\n./\n"})
         expected = {"actions": "read", "contents": "read", "security-events": "write"}
