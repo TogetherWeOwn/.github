@@ -121,6 +121,15 @@ on:
         required: false
         default: '["ubuntu-latest"]'
         type: string
+      advisory-label:
+        description: >-
+          Also write the advisory size label and comment in this same job,
+          so a caller needs one hosted runner per event instead of two.
+          The caller then drops its separate `pr-size.yml` job. Advisory:
+          a labelling failure never changes the gate's result.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -144,6 +153,23 @@ jobs:
           path: .pr-size-central
           sparse-checkout: .github/scripts/pr_size.py
           persist-credentials: false
+
+      # Advisory writer folded into the required job (one runner per
+      # event). It runs on every pull-request event, so whichever run
+      # survives per-PR concurrency cancellation rewrites the label the
+      # weekly tally reads. Its failure is swallowed in-shell and never
+      # skips or changes the gate step below; forks warn and skip.
+      - name: Label the pull request (advisory)
+        if: github.event_name != 'push' && inputs.advisory-label
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr-number != '' && inputs.pr-number || github.event.pull_request.number }}
+          PR_SIZE_THRESHOLD: "400"
+          PR_SIZE_EXCLUDE_EXTRA: ${{ inputs.exclude-extra }}
+        run: |
+          python3 .pr-size-central/.github/scripts/pr_size.py label || echo "::warning::pr_size advisory label skipped (exit $?)"
 
       # Caller files are never executed; only their Git objects are read.
       - name: Fetch caller objects

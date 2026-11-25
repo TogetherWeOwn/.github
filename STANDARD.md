@@ -548,6 +548,17 @@ exclusion - only the script's exclusions, per repo config, count.
   reuse the context. Protect caller changes independently, and verify that
   skipped or neutral results and missing events cannot satisfy the intended
   gate. Manual dispatch is diagnostic and does not refresh the PR check.
+- **One runner per event** (opt-in): a caller may set
+  `advisory-label: true` on its `pr-size-gate` job and drop its separate
+  `pr-size` labeller job. The gate job then writes the advisory label and
+  comment before gating, so one hosted runner serves both, and the run that
+  survives per-PR concurrency cancellation always rewrites the label the
+  weekly tally reads. The required context stays `pr-size-gate / gate`,
+  permissions are unchanged (`contents: read`, `issues: write`,
+  `pull-requests: write`), and the label step never runs on `push`, swallows
+  its own failure and cannot change the gate result. The advisory
+  `pr-size / label` context disappears; it was never required. Adopt it in
+  the caller's own small PR when repinning to a reviewed commit carrying it.
 - **Split procedure** (the gate's failure comment links here): split an
   over-gate pull request as **stacked pull requests** (independently
   mergeable pieces, each landing on the previous one's branch),

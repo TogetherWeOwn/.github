@@ -209,7 +209,7 @@ class TemplatePermissionContract(unittest.TestCase):
         ):
             attrs = test_pr_size_source.scalars(test_pr_size_source.block(events, 2, event), 4)
             self.assertEqual(attrs, {"types": expected})
-        steps = test_pr_size_source.steps(gate, "gate")
+        steps = test_pr_size_source.gate_core_steps(gate)
         self.assertEqual(len(steps), 4)
         self.assertEqual([test_pr_size_source.scalars(step, 8).get("if") for step in steps],
                          [None, "github.event_name == 'push'", "github.event_name == 'push'",
