@@ -19,6 +19,8 @@ import test_pr_size_source as src
 
 GATE = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "pr-size-gate.yml"
 LABEL_IF = "github.event_name != 'push' && inputs.advisory-label"
+GATE_MINUTES, OPT_IN_MINUTES, ADVISORY_SECONDS = 5, 8, 90 + 5
+JOB_TIMEOUT = f"${{{{ inputs.advisory-label && {OPT_IN_MINUTES} || {GATE_MINUTES} }}}}"
 PR_NUMBER = "${{ inputs.pr-number != '' && inputs.pr-number || github.event.pull_request.number }}"
 
 
@@ -29,6 +31,10 @@ class OneRunnerContract(unittest.TestCase):
         self.assertEqual((flag.get("type"), flag.get("default"), flag.get("required")),
                          ("boolean", "false", "false"))
         job = src.block(src.block(gate, 0, "jobs"), 2, "gate")
+        # The gate keeps its former 5-minute budget: opt-in adds the bounded
+        # advisory (90 s + 5 s kill grace) plus startup margin on top.
+        self.assertEqual(src.scalars(job, 4).get("timeout-minutes"), JOB_TIMEOUT)
+        self.assertGreaterEqual(OPT_IN_MINUTES * 60, GATE_MINUTES * 60 + ADVISORY_SECONDS + 60)
         perms = src.scalars(src.block(job, 4, "permissions"), 6)
         self.assertEqual(perms, {"contents": "read", "issues": "write", "pull-requests": "write"})
         self.assertNotIn("continue-on-error:", gate)
@@ -60,6 +66,12 @@ class OneRunnerContract(unittest.TestCase):
             (" label || echo", " label || false; echo"),               # fallback keeps failure
             (" label || echo", " label || echo x; false; echo"),
             ("timeout --kill-after=5s 90s ", ""),                      # unbounded advisory
+            ("timeout-minutes: ${{ inputs.advisory-label && 8 || 5 }}",
+             "timeout-minutes: 5"),                                    # advisory eats gate budget
+            ("timeout-minutes: ${{ inputs.advisory-label && 8 || 5 }}",
+             "timeout-minutes: ${{ inputs.advisory-label && 7 || 5 }}"),  # margin too small
+            ("timeout-minutes: ${{ inputs.advisory-label && 8 || 5 }}",
+             "timeout-minutes: 8"),                                    # default-off cap widened
             ("        if: github.event_name != 'push' && inputs.advisory-label\n",
              "        if: github.event_name != 'push' && inputs.advisory-label\n        timeout-minutes: 2\n"),
             ("        if: github.event_name != 'push' && inputs.advisory-label\n",

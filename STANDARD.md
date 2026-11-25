@@ -557,7 +557,9 @@ exclusion - only the script's exclusions, per repo config, count.
   permissions are unchanged (`contents: read`, `issues: write`,
   `pull-requests: write`), and the label step never runs on `push`, swallows
   its own failure (including an in-shell 90-second `timeout`, never a step
-  `timeout-minutes`, which would skip the gate) and cannot change the gate result. The advisory
+  `timeout-minutes`, which would skip the gate) and cannot change the gate result. The job
+  limit rises from 5 to 8 minutes only when opted in, so the gate keeps its
+  full five minutes after a hung label. The advisory
   `pr-size / label` context disappears; it was never required. Adopt it in
   the caller's own small PR when repinning to a reviewed commit carrying it.
 - **Split procedure** (the gate's failure comment links here): split an

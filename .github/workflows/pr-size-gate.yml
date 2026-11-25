@@ -138,7 +138,11 @@ jobs:
   gate:
     name: gate
     runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: 5
+    # Job budget: the required gate keeps its own five minutes. Opt-in adds
+    # the bounded advisory step (90 s + 5 s kill grace) plus startup margin
+    # on top, so a hung label can never eat the gate's time. Default off
+    # keeps the original five-minute cap.
+    timeout-minutes: ${{ inputs.advisory-label && 8 || 5 }}
     permissions:
       contents: read
       issues: write
