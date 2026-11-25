@@ -155,13 +155,16 @@ jobs:
           persist-credentials: false
 
       # Advisory writer folded into the required job (one runner per
-      # event). It runs on every pull-request event, so whichever run
-      # survives per-PR concurrency cancellation rewrites the label the
-      # weekly tally reads. Its failure is swallowed in-shell and never
-      # skips or changes the gate step below; forks warn and skip.
+      # event). It runs on every pull-request event, before the gate, so
+      # whichever run survives per-PR concurrency cancellation rewrites the
+      # label the weekly tally reads, even when the gate then fails.
+      # Its time limit is enforced INSIDE the shell (`timeout`), never by a
+      # step `timeout-minutes`: a runner step timeout fails the step before
+      # the `||` fallback runs, which would skip the gate. Any nonzero exit,
+      # including timeout's 124/137, is swallowed, so this step always
+      # succeeds and the gate step below decides the result. Forks warn.
       - name: Label the pull request (advisory)
         if: github.event_name != 'push' && inputs.advisory-label
-        timeout-minutes: 2
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -169,7 +172,7 @@ jobs:
           PR_SIZE_THRESHOLD: "400"
           PR_SIZE_EXCLUDE_EXTRA: ${{ inputs.exclude-extra }}
         run: |
-          python3 .pr-size-central/.github/scripts/pr_size.py label || echo "::warning::pr_size advisory label skipped (exit $?)"
+          timeout --kill-after=5s 90s python3 .pr-size-central/.github/scripts/pr_size.py label || echo "::warning::pr_size advisory label skipped (exit $?)"
 
       # Caller files are never executed; only their Git objects are read.
       - name: Fetch caller objects

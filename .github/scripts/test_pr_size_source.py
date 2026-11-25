@@ -92,6 +92,10 @@ def scalars(text, indent):
 
 ADVISORY_LABEL_STEP = "Label the pull request (advisory)"
 ADVISORY_LABEL_IF = "github.event_name != 'push' && inputs.advisory-label"
+ADVISORY_LABEL_RUN = (
+    "timeout --kill-after=5s 90s python3 .pr-size-central/.github/scripts/pr_size.py label"
+    " || echo \"::warning::pr_size advisory label skipped (exit $?)\""
+)
 
 
 def gate_core_steps(text):
@@ -111,10 +115,11 @@ def gate_core_steps(text):
     step = every[1]
     if scalars(step, 8).get("if") != ADVISORY_LABEL_IF:
         raise AssertionError("advisory label step must be off push and opt-in")
+    if "timeout-minutes" in scalars(step, 8):
+        raise AssertionError("advisory step timeout must be in-shell, not timeout-minutes")
     runs = [line.strip() for line in step.splitlines() if "pr_size.py" in line]
-    if len(runs) != 1 or not runs[0].startswith(
-            "python3 .pr-size-central/.github/scripts/pr_size.py label || "):
-        raise AssertionError("advisory label step must swallow its failure in-shell")
+    if runs != [ADVISORY_LABEL_RUN]:
+        raise AssertionError("advisory label step must bound and swallow its failure in-shell")
     return core
 
 

@@ -556,7 +556,8 @@ exclusion - only the script's exclusions, per repo config, count.
   weekly tally reads. The required context stays `pr-size-gate / gate`,
   permissions are unchanged (`contents: read`, `issues: write`,
   `pull-requests: write`), and the label step never runs on `push`, swallows
-  its own failure and cannot change the gate result. The advisory
+  its own failure (including an in-shell 90-second `timeout`, never a step
+  `timeout-minutes`, which would skip the gate) and cannot change the gate result. The advisory
   `pr-size / label` context disappears; it was never required. Adopt it in
   the caller's own small PR when repinning to a reviewed commit carrying it.
 - **Split procedure** (the gate's failure comment links here): split an
