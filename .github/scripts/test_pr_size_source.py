@@ -90,6 +90,39 @@ def scalars(text, indent):
     return result
 
 
+ADVISORY_LABEL_STEP = "Label the pull request (advisory)"
+ADVISORY_LABEL_IF = "github.event_name != 'push' && inputs.advisory-label"
+ADVISORY_LABEL_RUN = (
+    "timeout --kill-after=5s 90s python3 .pr-size-central/.github/scripts/pr_size.py label"
+    " || echo \"::warning::pr_size advisory label skipped (exit $?)\""
+)
+
+
+def gate_core_steps(text):
+    """Gate steps without the optional one-runner advisory label step.
+
+    The advisory step may appear only once, directly after the central
+    checkout, gated off push and on the `advisory-label` input, and must
+    swallow its own failure in-shell so it never changes the gate result.
+    """
+    every = steps(text, "gate")
+    core = [s for s in every if scalars(s, 8).get("name") != ADVISORY_LABEL_STEP]
+    extra = len(every) - len(core)
+    if extra == 0:
+        return core
+    if extra != 1 or scalars(every[1], 8).get("name") != ADVISORY_LABEL_STEP:
+        raise AssertionError("advisory label step must appear once, right after checkout")
+    step = every[1]
+    if scalars(step, 8).get("if") != ADVISORY_LABEL_IF:
+        raise AssertionError("advisory label step must be off push and opt-in")
+    if "timeout-minutes" in scalars(step, 8):
+        raise AssertionError("advisory step timeout must be in-shell, not timeout-minutes")
+    runs = [line.strip() for line in step.splitlines() if "pr_size.py" in line]
+    if runs != [ADVISORY_LABEL_RUN]:
+        raise AssertionError("advisory label step must bound and swallow its failure in-shell")
+    return core
+
+
 def steps(text, mode):
     job = block(block(text, 0, "jobs"), 2, mode)
     raw = block(job, 4, "steps")
@@ -183,7 +216,7 @@ class CentralSourceContract(unittest.TestCase):
                 inputs = scalars(block(block(text, 0, "on"), 4, "inputs"), 6)
                 allowed = {
                     "label": {"runs-on", "pr-number", "exclude-extra"},
-                    "gate": {"runs-on", "pr-number", "exclude-extra"},
+                    "gate": {"runs-on", "pr-number", "exclude-extra", "advisory-label"},
                     "weekly": {"runs-on"},
                 }[mode]
                 self.assertEqual(set(inputs), allowed)
@@ -193,7 +226,7 @@ class CentralSourceContract(unittest.TestCase):
         self.assertNotIn("if", scalars(job, 4))
         self.assertNotIn("continue-on-error", text)
         self.assertNotRegex(text, r"(?m)^\s+secrets:")
-        _source, checkout, audit, pr = steps(text, "gate")
+        _source, checkout, audit, pr = gate_core_steps(text)
         assert_trusted_source(self, text, "gate")
         self.assertEqual(checkout_options(text, "gate")["persist-credentials"], "false")
         self.assertEqual(scalars(checkout, 8), {
