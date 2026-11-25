@@ -83,12 +83,15 @@ class OneRunnerContract(unittest.TestCase):
                 self.check(mutated)
 
 
-STUB = """import os, sys, time
+STUB = """import os, signal, sys, time
 mode = sys.argv[1]
 action = os.environ["STUB_" + mode.upper()]
 with open(os.environ["STUB_LOG"], "a") as log:
     log.write(mode + "\\n")
 if action == "hang":
+    time.sleep(60)
+if action == "stubborn":  # ignores SIGTERM: only timeout's SIGKILL stops it
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
     time.sleep(60)
 sys.exit(int(action))
 """
@@ -125,16 +128,18 @@ class OneRunnerExecution(unittest.TestCase):
             (scripts / "pr_size.py").write_text(STUB)
             log = Path(work, "calls")
             env = dict(os.environ, STUB_LABEL=label_action, STUB_GATE=gate_action, STUB_LOG=str(log))
-            outcomes = []
+            outcomes, self.stdout = [], []
             for script in (label_script, gate_script):
                 if outcomes and outcomes[-1] != 0:
                     break  # default `if: success()`: the gate step is skipped
                 path = Path(work, f"step{len(outcomes)}.sh")
                 path.write_text(script)
-                outcomes.append(subprocess.run(
+                done = subprocess.run(
                     ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(path)],
                     cwd=work, env=env, capture_output=True, text=True, timeout=30, check=False,
-                ).returncode)
+                )
+                outcomes.append(done.returncode)
+                self.stdout.append(done.stdout)
             calls = log.read_text().split() if log.exists() else []
         return outcomes, calls
 
@@ -155,6 +160,18 @@ class OneRunnerExecution(unittest.TestCase):
         outcomes, calls = self.job("hang", "1")
         self.assertLess(time.monotonic() - start, 20)
         self.assertEqual((outcomes, calls), ([0, 1], ["label", "gate"]))
+        self.assertIn("pr_size advisory label skipped (exit 124)", self.stdout[0])
+
+    def test_sigterm_ignoring_advisory_is_killed_and_gate_still_runs(self):
+        # 2 s timeout + the shipped 5 s kill grace; SIGKILL gives exit 137.
+        import time
+        for gate, verdict in (("0", 0), ("1", 1)):
+            with self.subTest(gate=gate):
+                start = time.monotonic()
+                outcomes, calls = self.job("stubborn", gate)
+                self.assertLess(time.monotonic() - start, 20)
+                self.assertIn("pr_size advisory label skipped (exit 137)", self.stdout[0])
+                self.assertEqual((outcomes, calls), ([0, verdict], ["label", "gate"]))
 
     def test_negative_controls_skip_the_gate(self):
         gate = GATE.read_text(encoding="utf-8")
