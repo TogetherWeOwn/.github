@@ -42,10 +42,13 @@ concurrency:
 jobs:
   pr-standards:
     name: pr-standards
-    # Member PRs use the org Blacksmith label while the free allowance lasts; ci-blacksmith-guard flips
-    # CI_BLACKSMITH_2VCPU to ubuntu-latest at the cap. Fork PRs and unset variables stay on GitHub-hosted.
+    # Only same-repository pull_request events use the org Blacksmith label, and only while
+    # ci-blacksmith-guard holds CI_BLACKSMITH_2VCPU at the approved label (it flips the variable to
+    # ubuntu-latest at the cap). merge_group, fork PRs, other values and an unset variable stay on GitHub-hosted.
     runs-on: >-
-      ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      ${{ github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'
       && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
