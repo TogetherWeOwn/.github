@@ -5,7 +5,8 @@ self-hosted label never starts, so its check never reports and every merge
 in the repos it covers is blocked. These tests fail if any workflow or
 workflow template here names a self-hosted label, or picks its runner from
 a repository/org variable that could hold one (the only exception is the
-guarded CI_BLACKSMITH_2VCPU label with a literal ubuntu-latest fallback). A caller that pins one of
+guarded CI_BLACKSMITH_2VCPU label, on same-repository pull_request events and the approved label only,
+with a literal ubuntu-latest fallback). A caller that pins one of
 this repo's reusables by sha runs that older revision, so the runner lines
 and input defaults of every pinned revision are checked as well. A pin may
 name a commit that is on no branch, so a missing one is fetched by sha.
@@ -60,9 +61,21 @@ def keyed_values(text, key):
 # The one allowed runner variable: CI_BLACKSMITH_2VCPU, written only by t3-handoff/bin/ci-blacksmith-guard
 # (Blacksmith's managed label while the free allowance lasts, else "ubuntu-latest"), with a literal
 # GitHub-hosted fallback when it is unset. Any other variable, or this one without the fallback, still fails.
+APPROVED_BLACKSMITH = "blacksmith-2vcpu-ubuntu-2404"
+GUARD_TERMS = (
+    "github.event_name == 'pull_request'",
+    "github.event.pull_request.head.repo.full_name == github.repository",
+    f"vars.CI_BLACKSMITH_2VCPU == '{APPROVED_BLACKSMITH}'",
+)
+
+
+# The variable must be routed only on same-repository pull_request events (never merge_group,
+# push or forks) and only when it holds the approved label exactly.
 def guarded_blacksmith(block):
     names = set(re.findall(r"vars\.(\w+)", block))
-    return names == {"CI_BLACKSMITH_2VCPU"} and "|| 'ubuntu-latest'" in block and "fromJSON" not in block
+    flat = " ".join(block.split())
+    return (names == {"CI_BLACKSMITH_2VCPU"} and "|| 'ubuntu-latest'" in block and "fromJSON" not in block
+            and "!=" not in flat and all(term in flat for term in GUARD_TERMS))
 
 
 def violations(text):
@@ -115,9 +128,23 @@ class Scanner(unittest.TestCase):
         self.assertTrue(violations(folded))
 
     def test_allows_only_guarded_blacksmith_variable(self):
-        ok = ("    runs-on: >-\n      ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name"
-              " == github.repository)\n      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}\n    timeout-minutes: 5\n")
+        ok = ("    runs-on: >-\n      ${{ github.event_name == 'pull_request'\n"
+              "      && github.event.pull_request.head.repo.full_name == github.repository\n"
+              "      && vars.CI_BLACKSMITH_2VCPU == 'blacksmith-2vcpu-ubuntu-2404'\n"
+              "      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}\n    timeout-minutes: 5\n")
         self.assertEqual(violations(ok), [])
+        # e4b99f66: merge_group and any non-empty value reached the variable.
+        any_event = ("    runs-on: >-\n      ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name"
+                     " == github.repository)\n      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}\n    timeout-minutes: 5\n")
+        self.assertTrue(violations(any_event))
+        no_label = ("    runs-on: ${{ github.event_name == 'pull_request'"
+                    " && github.event.pull_request.head.repo.full_name == github.repository"
+                    " && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}")
+        self.assertTrue(violations(no_label))
+        other_label = ok.replace("blacksmith-2vcpu-ubuntu-2404", "blacksmith-32vcpu-ubuntu-2404")
+        self.assertTrue(violations(other_label))
+        no_fork_guard = ok.replace("      && github.event.pull_request.head.repo.full_name == github.repository\n", "")
+        self.assertTrue(violations(no_fork_guard))
         self.assertTrue(violations("    runs-on: ${{ vars.CI_BLACKSMITH_2VCPU }}"))
         self.assertTrue(violations("    runs-on: ${{ vars.CI_BLACKSMITH_2VCPU || vars.CI_RUNNER || 'ubuntu-latest' }}"))
         self.assertTrue(violations("    runs-on: ${{ vars.CI_OTHER || 'ubuntu-latest' }}"))
