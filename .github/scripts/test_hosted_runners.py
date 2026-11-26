@@ -4,7 +4,8 @@ The org has no self-hosted runners. A required workflow routed to a
 self-hosted label never starts, so its check never reports and every merge
 in the repos it covers is blocked. These tests fail if any workflow or
 workflow template here names a self-hosted label, or picks its runner from
-a repository/org variable that could hold one. A caller that pins one of
+a repository/org variable that could hold one (the only exception is the
+guarded CI_BLACKSMITH_2VCPU label with a literal ubuntu-latest fallback). A caller that pins one of
 this repo's reusables by sha runs that older revision, so the runner lines
 and input defaults of every pinned revision are checked as well. A pin may
 name a commit that is on no branch, so a missing one is fetched by sha.
@@ -56,13 +57,21 @@ def keyed_values(text, key):
         yield i + 1, block
 
 
+# The one allowed runner variable: CI_BLACKSMITH_2VCPU, written only by t3-handoff/bin/ci-blacksmith-guard
+# (Blacksmith's managed label while the free allowance lasts, else "ubuntu-latest"), with a literal
+# GitHub-hosted fallback when it is unset. Any other variable, or this one without the fallback, still fails.
+def guarded_blacksmith(block):
+    names = set(re.findall(r"vars\.(\w+)", block))
+    return names == {"CI_BLACKSMITH_2VCPU"} and "|| 'ubuntu-latest'" in block and "fromJSON" not in block
+
+
 def violations(text):
     found = []
     for n, line in enumerate(text.splitlines(), 1):
         if SELF_HOSTED.search(line):
             found.append((n, "names a self-hosted label", line.strip()))
     for n, block in keyed_values(text, RUNS_ON):
-        if any("vars." in line for line in block):
+        if any("vars." in line for line in block) and not guarded_blacksmith("\n".join(block)):
             found.append((n, "takes its runner from a variable", block[0].strip()))
     return found
 
@@ -104,6 +113,15 @@ class Scanner(unittest.TestCase):
         self.assertTrue(violations("    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}"))
         folded = "    runs-on: >-\n      ${{ fromJSON(vars.CI_RUNNER) }}\n    timeout-minutes: 5\n"
         self.assertTrue(violations(folded))
+
+    def test_allows_only_guarded_blacksmith_variable(self):
+        ok = ("    runs-on: >-\n      ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name"
+              " == github.repository)\n      && vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest' }}\n    timeout-minutes: 5\n")
+        self.assertEqual(violations(ok), [])
+        self.assertTrue(violations("    runs-on: ${{ vars.CI_BLACKSMITH_2VCPU }}"))
+        self.assertTrue(violations("    runs-on: ${{ vars.CI_BLACKSMITH_2VCPU || vars.CI_RUNNER || 'ubuntu-latest' }}"))
+        self.assertTrue(violations("    runs-on: ${{ vars.CI_OTHER || 'ubuntu-latest' }}"))
+        self.assertTrue(violations("    runs-on: ${{ fromJSON(vars.CI_BLACKSMITH_2VCPU || 'ubuntu-latest') }}"))
 
     def test_pinned_revision_checks_routing_only(self):
         old = (
