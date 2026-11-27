@@ -19,7 +19,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.run_id || github.event.pull_request.number || inputs.pr_number || github.event_name }}${{ github.event_name == 'workflow_dispatch' && '-dispatch' || '' }}
+  # Include github.event_name so pull_request_review and workflow_dispatch
+  # runs never cancel or evict a queued required pull_request run.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.run_id || github.event.pull_request.number || inputs.pr_number || github.event_name }}${{ github.event_name == 'workflow_dispatch' && '-dispatch' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
