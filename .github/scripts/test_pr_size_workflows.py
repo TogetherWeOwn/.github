@@ -218,7 +218,7 @@ class TemplatePermissionContract(unittest.TestCase):
         self.assertEqual(test_pr_size_source.scalars(events, 2).get("push"), "")
         concurrency = test_pr_size_source.scalars(test_pr_size_source.block(template, 0, "concurrency"), 2)
         self.assertEqual(concurrency, {
-            "group": "${{ github.workflow }}-${{ github.event_name == 'push' && github.run_id || github.event.pull_request.number || inputs.pr_number || github.event_name }}${{ github.event_name == 'workflow_dispatch' && '-dispatch' || '' }}",
+            "group": "${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.run_id || github.event.pull_request.number || inputs.pr_number || github.event_name }}${{ github.event_name == 'workflow_dispatch' && '-dispatch' || '' }}",
             "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
         })
         caller = template.split("  pr-size-gate:\n", 1)[1].split("\n  pr-size-weekly:", 1)[0]
@@ -262,6 +262,7 @@ class TemplatePermissionContract(unittest.TestCase):
         mutations = (
             ("  pr-size-gate:\n    name: pr-size-gate\n",
              "  pr-size-gate:\n    name: pr-size-gate\n    needs: failing-job\n"),
+            ("${{ github.event_name }}-", ""),
             ("github.event_name == 'push' && github.run_id || ", ""),
             ("${{ github.event_name == 'workflow_dispatch' && '-dispatch' || '' }}", ""),
             ("  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
@@ -339,6 +340,72 @@ class TemplatePermissionContract(unittest.TestCase):
         self.assertEqual(test_pr_size_source.block(caller, 0, "concurrency"),
                          test_pr_size_source.block(template, 0, "concurrency"))
         self.assert_gate_event_and_failure_contract(caller, (WORKFLOWS / "pr-size-gate.yml").read_text())
+
+    def test_concurrency_group_isolates_pull_request_from_review_and_dispatch(self):
+        def eval_expr(expr, ctx):
+            def eval_and(chunk):
+                val = ""
+                for term in chunk.split(" && "):
+                    term = term.strip()
+                    if " == " in term:
+                        lhs, rhs = (p.strip() for p in term.split(" == ", 1))
+                        val = ctx.get(lhs, "") == rhs.strip("'")
+                    elif term.startswith("'") and term.endswith("'"):
+                        val = term[1:-1]
+                    else:
+                        val = ctx.get(term, "")
+                    if not val:
+                        return ""
+                return val
+
+            val = ""
+            for branch in expr.split(" || "):
+                val = eval_and(branch)
+                if val:
+                    return val
+            return val
+
+        def render_group(template_str, ctx):
+            return re.sub(r"\$\{\{\s*(.*?)\s*\}\}", lambda m: str(eval_expr(m.group(1), ctx)), template_str)
+
+        for path, wf_name in (
+            (TEMPLATE, "pr-size"),
+            (WORKFLOWS / "pr-size-caller.yml", "pr-size-caller"),
+        ):
+            text = path.read_text(encoding="utf-8")
+            group_tmpl = test_pr_size_source.scalars(
+                test_pr_size_source.block(text, 0, "concurrency"), 2
+            )["group"]
+            contexts = {
+                "pull_request": {
+                    "github.workflow": wf_name,
+                    "github.event_name": "pull_request",
+                    "github.event.pull_request.number": "42",
+                },
+                "pull_request_review": {
+                    "github.workflow": wf_name,
+                    "github.event_name": "pull_request_review",
+                    "github.event.pull_request.number": "42",
+                },
+                "workflow_dispatch": {
+                    "github.workflow": wf_name,
+                    "github.event_name": "workflow_dispatch",
+                    "inputs.pr_number": "42",
+                },
+                "push": {
+                    "github.workflow": wf_name,
+                    "github.event_name": "push",
+                    "github.run_id": "999",
+                },
+                "schedule": {
+                    "github.workflow": wf_name,
+                    "github.event_name": "schedule",
+                    "github.run_id": "1000",
+                },
+            }
+            groups = {ev: render_group(group_tmpl, ctx) for ev, ctx in contexts.items()}
+            with self.subTest(path=path.name, groups=groups):
+                self.assertEqual(len({g.casefold() for g in groups.values()}), len(contexts))
 
     def test_weekly_reusable_requests_read_only(self):
         # CI-STANDARD promises the weekly tally runs read-only; that is only
